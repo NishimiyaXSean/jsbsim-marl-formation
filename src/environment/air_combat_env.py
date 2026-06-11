@@ -149,6 +149,7 @@ class AirCombatEnv(MultiAgentEnv):
             lat_deg=a["lat_deg"], lon_deg=a["lon_deg"],
             alt_ft=a["alt_ft"], heading_deg=a["heading_deg"],
             speed_kts=a["speed_kts"],
+            trim=False,  # skip trim for RL — JSBSim FCS stabilizes quickly
         )
 
         # Reset evader (with curriculum speed limit)
@@ -158,6 +159,7 @@ class AirCombatEnv(MultiAgentEnv):
             lat_deg=e["lat_deg"], lon_deg=e["lon_deg"],
             alt_ft=e["alt_ft"], heading_deg=e["heading_deg"],
             speed_kts=e_speed,
+            trim=False,
         )
 
         # Store NED positions for state computation
