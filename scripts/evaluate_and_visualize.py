@@ -169,6 +169,53 @@ def run_evaluate(model, action_mode: str, use_mappo: bool, n_episodes: int = 5):
     return all_episodes, env  # env holds Tacview frames
 
 
+def run_pursuit_evaluate(model, n_episodes: int = 5):
+    """Evaluate a SinglePursuitEnv-trained model."""
+    from src.environment.single_pursuit_env import SinglePursuitEnv
+    env = SinglePursuitEnv(curriculum_stage=1, record_tacview=True)
+
+    all_episodes = []
+
+    for ep in range(n_episodes):
+        obs, _ = env.reset()
+        done = False
+        total_r = 0.0
+        ep_traj = {
+            "pursuer_ned": [],
+            "target_ned": [],
+            "times": [],
+        }
+        reason = "timeout"
+        min_dist = 8000.0
+
+        while not done:
+            t = env._step_counter / 60.0
+            ep_traj["pursuer_ned"].append(env.pursuer.position_ned.copy())
+            ep_traj["target_ned"].append(env.target_ac.position_ned.copy())
+            ep_traj["times"].append(t)
+
+            action, _ = model.predict(obs, deterministic=True)
+            obs, rew, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            total_r += rew
+            if "reason" in info:
+                reason = info["reason"]
+            if "min_dist" in info:
+                min_dist = min(min_dist, info["min_dist"])
+
+        ep_traj["pursuer_ned"] = np.array(ep_traj["pursuer_ned"])
+        ep_traj["target_ned"] = np.array(ep_traj["target_ned"])
+        ep_traj["times"] = np.array(ep_traj["times"])
+        ep_traj["total_reward"] = total_r
+        ep_traj["reasons"] = {"reason": reason, "min_dist": min_dist}
+        all_episodes.append(ep_traj)
+
+        print(f"  Episode {ep+1}: {reason:15s}  "
+              f"reward={total_r:+7.1f}  min_dist={min_dist:.0f}m")
+
+    return all_episodes, env
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Plotting
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +304,11 @@ MODEL_REGISTRY = {
         "action_mode": "continuous",
         "mappo": False,
     },
+    "single_pursuit": {
+        "path": None,   # path is set dynamically from latest marl_runs/single_pursuit_*
+        "action_mode": "pursuit",
+        "mappo": False,
+    },
     "sb3_continuous": {
         "path": "marl_runs/sb3_continuous_0611_1810",
         "action_mode": "continuous",
@@ -310,43 +362,91 @@ def main():
 
     # ── Load model ───────────────────────────────────────────────────────
     model = None
+    path = cfg["path"]
+
+    # Dynamically resolve single_pursuit path
+    if path is None and cfg["action_mode"] == "pursuit":
+        import glob as _glob
+        candidates = sorted(_glob.glob("marl_runs/single_pursuit_*"))
+        if not candidates:
+            print("  No single_pursuit model found! Train first: python scripts/train_single_pursuit.py")
+            return
+        path = candidates[-1]  # latest run
+        print(f"  Using latest run: {path}")
+
     if cfg["mappo"]:
-        model = load_mappo_model(cfg["path"])
+        model = load_mappo_model(path)
     else:
-        model = load_sb3_model(cfg["path"], cfg["action_mode"])
+        if cfg["action_mode"] == "pursuit":
+            model_path = os.path.join(path, "final_model.zip")
+            if not os.path.exists(model_path):
+                model_path = os.path.join(path, "best_model.zip")
+            if not os.path.exists(model_path):
+                print(f"  No model found at {path} (tried final_model.zip, best_model.zip)")
+                return
+            from stable_baselines3 import PPO
+            model = PPO.load(model_path)
+        else:
+            model = load_sb3_model(path, cfg["action_mode"])
 
     # ── Run evaluation ───────────────────────────────────────────────────
-    episodes, env = run_evaluate(
-        model, cfg["action_mode"], cfg["mappo"],
-        n_episodes=args.episodes,
-    )
+    if cfg["action_mode"] == "pursuit":
+        episodes, env = run_pursuit_evaluate(model, n_episodes=args.episodes)
+    else:
+        episodes, env = run_evaluate(
+            model, cfg["action_mode"], cfg["mappo"],
+            n_episodes=args.episodes,
+        )
 
     # ── Export Tacview ───────────────────────────────────────────────────
-    if env._tacview_frames:
+    if cfg["action_mode"] == "pursuit":
         tacview_path = os.path.join(output_dir, f"{args.model}_engagement.txt.acmi")
         env.export_tacview(tacview_path)
         print(f"\n  Tacview exported: {tacview_path}")
         print(f"  Open in Tacview: File → Open → {os.path.abspath(tacview_path)}")
 
-    # ── Plot best episode (highest attacker reward) ──────────────────────
-    best_ep = max(range(len(episodes)), key=lambda i: episodes[i]["total_reward"])
-    print(f"\n── Best episode (ep {best_ep+1}, reward={episodes[best_ep]['total_reward']:+7.1f}) ──")
-    plot_path = os.path.join(output_dir, f"{args.model}_trajectory_best.png")
-    plot_trajectory(episodes[best_ep], plot_path)
+        # Plot best episode
+        best_ep = max(range(len(episodes)), key=lambda i: episodes[i]["total_reward"])
+        _plot_pursuit_episode(episodes[best_ep], os.path.join(output_dir, f"{args.model}_trajectory_best.png"))
+    elif hasattr(env, '_tacview_frames') and env._tacview_frames:
+        tacview_path = os.path.join(output_dir, f"{args.model}_engagement.txt.acmi")
+        env.export_tacview(tacview_path)
+        print(f"\n  Tacview exported: {tacview_path}")
+        print(f"  Open in Tacview: File → Open → {os.path.abspath(tacview_path)}")
+
+        # Plot best episode (highest attacker reward)
+        best_ep = max(range(len(episodes)), key=lambda i: episodes[i]["total_reward"])
+        print(f"\n── Best episode (ep {best_ep+1}, reward={episodes[best_ep]['total_reward']:+7.1f}) ──")
+        plot_path = os.path.join(output_dir, f"{args.model}_trajectory_best.png")
+        plot_trajectory(episodes[best_ep], plot_path)
 
     # ── Summary ──────────────────────────────────────────────────────────
-    reasons = [ep["reasons"].get("attacker_0", "timeout") for ep in episodes]
-    n_success = sum(1 for r in reasons if r == "success")
-    rewards = [ep["total_reward"] for ep in episodes]
+    if cfg["action_mode"] == "pursuit":
+        reasons = [ep.get("reasons", {}).get("reason", "timeout") for ep in episodes]
+        n_success = sum(1 for r in reasons if r == "success")
+        rewards = [ep["total_reward"] for ep in episodes]
+        min_dists = [ep.get("reasons", {}).get("min_dist", -1) for ep in episodes]
 
-    print(f"\n── Summary ({args.episodes} episodes) ──")
-    print(f"  Success rate:  {n_success}/{args.episodes} = {100*n_success/args.episodes:.0f}%")
-    print(f"  Avg reward:    {np.mean(rewards):+.1f} ± {np.std(rewards):.1f}")
-    print(f"  Avg duration:  {np.mean([ep['duration_s'] for ep in episodes]):.0f}s")
-    print(f"\nOutputs saved to: {output_dir}/")
-    print(f"  Tacview:  {args.model}_engagement.txt.acmi")
-    print(f"  3D plot:  {args.model}_trajectory_best.png")
-    print(f"  Altitude: {args.model}_trajectory_best_altitude.png")
+        print(f"\n── Summary ({args.episodes} episodes) ──")
+        print(f"  Capture rate:  {n_success}/{args.episodes} = {100*n_success/args.episodes:.0f}%")
+        print(f"  Avg reward:    {np.mean(rewards):+.1f} ± {np.std(rewards):.1f}")
+        print(f"  Avg min dist:  {np.mean(min_dists):.0f} ± {np.std(min_dists):.0f}m")
+        print(f"\nOutputs saved to: {output_dir}/")
+        print(f"  Tacview:  {args.model}_engagement.txt.acmi")
+        print(f"  Plots:    {args.model}_trajectory_best.png")
+    else:
+        reasons = [ep["reasons"].get("attacker_0", "timeout") for ep in episodes]
+        n_success = sum(1 for r in reasons if r == "success")
+        rewards = [ep["total_reward"] for ep in episodes]
+
+        print(f"\n── Summary ({args.episodes} episodes) ──")
+        print(f"  Success rate:  {n_success}/{args.episodes} = {100*n_success/args.episodes:.0f}%")
+        print(f"  Avg reward:    {np.mean(rewards):+.1f} ± {np.std(rewards):.1f}")
+        print(f"  Avg duration:  {np.mean([ep['duration_s'] for ep in episodes]):.0f}s")
+        print(f"\nOutputs saved to: {output_dir}/")
+        print(f"  Tacview:  {args.model}_engagement.txt.acmi")
+        print(f"  3D plot:  {args.model}_trajectory_best.png")
+        print(f"  Altitude: {args.model}_trajectory_best_altitude.png")
 
 
 if __name__ == "__main__":
