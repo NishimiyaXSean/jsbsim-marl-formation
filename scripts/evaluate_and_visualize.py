@@ -252,6 +252,11 @@ def plot_trajectory(episode: dict, output_path: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MODEL_REGISTRY = {
+    "single_agent": {
+        "path": "marl_runs/sb3_run_0611_1610",
+        "action_mode": "continuous",
+        "mappo": False,
+    },
     "sb3_continuous": {
         "path": "marl_runs/sb3_continuous_0611_1810",
         "action_mode": "continuous",

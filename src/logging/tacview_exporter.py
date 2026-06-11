@@ -7,6 +7,8 @@ import math
 from datetime import datetime, timezone
 from typing import List
 
+from src.utils.units import m_to_ft
+
 
 class TacviewExporter:
     """Export accumulated simulation frames to Tacview ACMI format."""
@@ -16,18 +18,14 @@ class TacviewExporter:
         self.base_lat = base_lat
         self.base_lon = base_lon
 
-        # Meters per degree at reference latitude
-        self._m_per_deg_lat = 111320.0
-        self._m_per_deg_lon = self._m_per_deg_lat * math.cos(math.radians(base_lat))
-
     def write(self, frames: List[dict]) -> None:
         """Write all frames to the ACMI file.
 
         Args:
             frames: List of frame dicts with keys:
                 time: float (seconds)
-                attacker: {lon_deg, lat_deg, alt_ft, roll_deg, pitch_deg, yaw_deg}
-                evader:   {lon_deg, lat_deg, alt_ft, roll_deg, pitch_deg, yaw_deg}
+                attacker: {lat_deg, lon_deg, alt_m, roll_deg, pitch_deg, yaw_deg}
+                evader:   {lat_deg, lon_deg, alt_m, roll_deg, pitch_deg, yaw_deg}
         """
         with open(self.filepath, "w", encoding="utf-8") as f:
             # Header
@@ -50,15 +48,21 @@ class TacviewExporter:
                 self._write_object(f, "102", frame["evader"])
 
     def _write_object(self, f, obj_id: str, state: dict) -> None:
-        """Write one object's state for the current frame."""
+        """Write one object's state for the current frame.
+
+        Args:
+            state: dict with keys lat_deg, lon_deg, alt_m, roll_deg, pitch_deg, yaw_deg.
+                   Altitude in meters — converted to feet for Tacview.
+        """
         lon = state["lon_deg"]
         lat = state["lat_deg"]
-        alt_ft = state["alt_ft"]
+        alt_ft = m_to_ft(state["alt_m"])
         roll = state["roll_deg"]
         pitch = state["pitch_deg"]
         yaw = state["yaw_deg"]
 
-        # Convert PyBullet yaw (0=east, CCW) to Tacview yaw (0=north, CW)
-        tacview_yaw = (90.0 - yaw) % 360.0
+        # JSBSim and Tacview share the same heading convention:
+        #   0° = North, 90° = East (clockwise from above).
+        # No conversion needed.
 
-        f.write(f"{obj_id},T={lon:.7f}|{lat:.7f}|{alt_ft:.1f}|{roll:.1f}|{pitch:.1f}|{tacview_yaw:.1f}\n")
+        f.write(f"{obj_id},T={lon:.7f}|{lat:.7f}|{alt_ft:.1f}|{roll:.1f}|{pitch:.1f}|{yaw:.1f}\n")
