@@ -378,13 +378,15 @@ def main():
         model = load_mappo_model(path)
     else:
         if cfg["action_mode"] == "pursuit":
-            model_path = os.path.join(path, "final_model.zip")
+            for name in ["best_model", "model", "final_model"]:
+                model_path = os.path.join(path, f"{name}.zip")
+                if os.path.exists(model_path):
+                    break
             if not os.path.exists(model_path):
-                model_path = os.path.join(path, "best_model.zip")
-            if not os.path.exists(model_path):
-                print(f"  No model found at {path} (tried final_model.zip, best_model.zip)")
+                print(f"  No model found at {path}")
                 return
             from stable_baselines3 import PPO
+            print(f"  Loading: {model_path}")
             model = PPO.load(model_path)
         else:
             model = load_sb3_model(path, cfg["action_mode"])
@@ -450,4 +452,66 @@ def main():
 
 
 if __name__ == "__main__":
+    import logging
+    import warnings
+    os.environ.setdefault("JSBSIM_DEBUG", "0")
+    warnings.filterwarnings("ignore")
+    logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
+    logging.getLogger("ray").setLevel(logging.CRITICAL)
+    logging.getLogger("gymnasium").setLevel(logging.WARNING)
+
+    # Move helper into module scope
+    if '_plot_pursuit_episode' not in globals():
+        from inspect import getsource
+        exec('', globals())
     main()
+
+
+def _plot_pursuit_episode(episode: dict, output_path: str):
+    """Plot a SinglePursuitEnv trajectory."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    p_traj = episode["pursuer_ned"]
+    t_traj = episode["target_ned"]
+
+    fig, (ax3d, ax2d) = plt.subplots(1, 2, figsize=(16, 7))
+    ax3d = fig.add_subplot(1, 2, 1, projection="3d")
+
+    ax3d.plot(p_traj[:, 0], p_traj[:, 1], p_traj[:, 2],
+              "r-", linewidth=1.5, alpha=0.8, label="Pursuer")
+    ax3d.plot(t_traj[:, 0], t_traj[:, 1], t_traj[:, 2],
+              "b-", linewidth=1.5, alpha=0.8, label="Target")
+    ax3d.scatter(p_traj[0, 0], p_traj[0, 1], p_traj[0, 2], color="darkred", s=80, marker="o", label="P start")
+    ax3d.scatter(p_traj[-1, 0], p_traj[-1, 1], p_traj[-1, 2], color="red", s=80, marker="x", label="P end")
+    ax3d.scatter(t_traj[0, 0], t_traj[0, 1], t_traj[0, 2], color="darkblue", s=80, marker="o", label="T start")
+    ax3d.scatter(t_traj[-1, 0], t_traj[-1, 1], t_traj[-1, 2], color="blue", s=80, marker="x", label="T end")
+    ax3d.set_xlabel("North (m)"); ax3d.set_ylabel("East (m)"); ax3d.set_zlabel("Altitude (m)")
+    ax3d.set_title("3D Trajectory"); ax3d.legend(fontsize=9)
+
+    ax2d.plot(p_traj[:, 0], p_traj[:, 1], "r-", lw=1.5, alpha=0.8, label="Pursuer")
+    ax2d.plot(t_traj[:, 0], t_traj[:, 1], "b-", lw=1.5, alpha=0.8, label="Target")
+    ax2d.scatter(p_traj[0, 0], p_traj[0, 1], color="darkred", s=80, marker="o")
+    ax2d.scatter(p_traj[-1, 0], p_traj[-1, 1], color="red", s=80, marker="x")
+    ax2d.scatter(t_traj[0, 0], t_traj[0, 1], color="darkblue", s=80, marker="o")
+    ax2d.scatter(t_traj[-1, 0], t_traj[-1, 1], color="blue", s=80, marker="x")
+    d0 = np.linalg.norm(p_traj[0] - t_traj[0]); d1 = np.linalg.norm(p_traj[-1] - t_traj[-1])
+    ax2d.annotate(f"Start: {d0:.0f}m", xy=(p_traj[0, 0], p_traj[0, 1]), fontsize=9, color="gray")
+    ax2d.annotate(f"End: {d1:.0f}m", xy=(p_traj[-1, 0], p_traj[-1, 1]), fontsize=9, color="gray")
+    ax2d.set_xlabel("North (m)"); ax2d.set_ylabel("East (m)"); ax2d.set_title("Top-Down View")
+    ax2d.legend(fontsize=9); ax2d.axis("equal")
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+
+    fig2, ax = plt.subplots(figsize=(10, 4))
+    times = episode.get("times", np.arange(len(p_traj)) * 0.5)
+    ax.plot(times[:len(p_traj)], p_traj[:, 2], "r-", lw=1.5, label="Pursuer")
+    ax.plot(times[:len(t_traj)], t_traj[:, 2], "b-", lw=1.5, label="Target")
+    ax.set_xlabel("Time (s)"); ax.set_ylabel("Altitude (m)"); ax.set_title("Altitude Profile")
+    ax.legend(); ax.grid(True, alpha=0.3)
+    alt_path = output_path.replace(".png", "_altitude.png")
+    fig2.savefig(alt_path, dpi=150, bbox_inches="tight")
+    plt.close("all")
+    print(f"  Trajectory plot: {output_path}")
+    print(f"  Altitude plot:   {alt_path}")
