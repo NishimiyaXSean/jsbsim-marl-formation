@@ -181,7 +181,7 @@ class AirCombatEnv(MultiAgentEnv):
             lat_deg=a["lat_deg"], lon_deg=a["lon_deg"],
             alt_ft=a["alt_ft"], heading_deg=a["heading_deg"],
             speed_kts=a["speed_kts"],
-            trim=False,  # skip trim for RL — JSBSim FCS stabilizes quickly
+            trim=False,  # RL training: skip trim to avoid FDM state issues across episodes
         )
 
         # Reset evader (with curriculum speed limit)
@@ -235,17 +235,17 @@ class AirCombatEnv(MultiAgentEnv):
     # ── Step ────────────────────────────────────────────────────────────────
 
     def step(self, actions: dict):
-        if not actions:
+        if not actions or not self.agents:
             self.agents = []
             return {}, {}, {"__all__": True}, {"__all__": True}, {}
 
         decision_steps = int(self.DECISION_DT * self.CTRL_FREQ)
         dt = self.PHYSICS_DT
 
-        total_rewards = {a: 0.0 for a in self.agents}
+        total_rewards = {a: 0.0 for a in self.possible_agents}
         terminations = {a: False for a in self.possible_agents}
         truncations = {a: False for a in self.possible_agents}
-        infos = {a: {} for a in self.agents}
+        infos = {a: {} for a in self.possible_agents}
 
         self.macro_step += 1
 
@@ -308,10 +308,26 @@ class AirCombatEnv(MultiAgentEnv):
             self.evader.run()
             self.step_counter += 1
 
-            # Update NED positions (approximate: accumulate velocity * dt)
-            # In a full implementation, use lla_to_ned conversion
-            self.attacker.position_ned = self.attacker.position_ned + self.attacker.velocity_ned * dt
-            self.evader.position_ned = self.evader.position_ned + self.evader.velocity_ned * dt
+            # ── NaN guard: JSBSim can produce NaN after structural crash ──
+            nan_detected = False
+            for agent_id, ac in [("attacker_0", self.attacker), ("evader_0", self.evader)]:
+                if agent_id not in actions or terminations.get(agent_id, False):
+                    continue
+                st = ac.state
+                if any(not np.isfinite(float(st[k])) for k in ["n_z_g", "airspeed_mps", "alt_m"]):
+                    total_rewards[agent_id] -= 5000.0
+                    terminations[agent_id] = True
+                    infos[agent_id]["reason"] = "jsbsim_nan"
+                    nan_detected = True
+            if nan_detected:
+                break
+
+            # Update positions: horizontal from velocity accumulation,
+            # vertical directly from JSBSim altitude (Z = positive UP).
+            self.attacker.position_ned[0:2] += self.attacker.velocity_ned[0:2] * dt
+            self.evader.position_ned[0:2] += self.evader.velocity_ned[0:2] * dt
+            self.attacker.position_ned[2] = self.attacker.state["alt_m"]
+            self.evader.position_ned[2] = self.evader.state["alt_m"]
 
             a_pos = self.attacker.position_ned
             e_pos = self.evader.position_ned
@@ -394,13 +410,13 @@ class AirCombatEnv(MultiAgentEnv):
                     continue
                 death_floor = self.ATTACKER_DEATH_FLOOR if agent_id == "attacker_0" else self.EVADER_DEATH_FLOOR
                 if check_ground_crash(ac.position_ned[2], death_floor):
-                    penalty = 2000.0 if agent_id == "attacker_0" else 5000.0
+                    penalty = 200.0 if agent_id == "attacker_0" else 500.0
                     total_rewards[agent_id] -= penalty
                     terminations[agent_id] = True
                     infos[agent_id]["reason"] = "ground_crash"
                     crash_occurred = True
                 elif check_out_of_bounds(ac.position_ned[2], self.CEILING):
-                    total_rewards[agent_id] -= 2000.0
+                    total_rewards[agent_id] -= 200.0
                     terminations[agent_id] = True
                     infos[agent_id]["reason"] = "out_of_bounds"
                     crash_occurred = True
@@ -457,6 +473,15 @@ class AirCombatEnv(MultiAgentEnv):
         own_ac = self._aircraft_map[agent_id]
         enemy_ac = self.evader if agent_id == "attacker_0" else self.attacker
 
+        # ── NaN guard: return zero obs if aircraft state is corrupted ──
+        for ac in [own_ac, enemy_ac]:
+            st = ac.state
+            if any(not np.isfinite(float(st.get(k, 0.0))) for k in ["n_z_g", "airspeed_mps", "alt_m"]):
+                return {
+                    "obs": np.zeros(19, dtype=np.float32),
+                    "global_state": np.zeros(26, dtype=np.float32),
+                }
+
         local_obs = compute_obs(
             own_ac.position_ned, own_ac.rpy_rad, own_ac.velocity_ned,
             np.zeros(3),  # angular velocity approximation
@@ -469,6 +494,10 @@ class AirCombatEnv(MultiAgentEnv):
             self.evader.position_ned, np.zeros(4),
             self.evader.velocity_ned, np.zeros(3),
         )
+
+        # ── Clip any floating-point drift beyond nominal bounds ──
+        local_obs = np.clip(local_obs, -1.0, 1.0).astype(np.float32)
+        global_obs = np.clip(global_obs, -1.0, 1.0).astype(np.float32)
 
         return {"obs": local_obs, "global_state": global_obs}
 

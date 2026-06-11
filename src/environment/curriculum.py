@@ -15,8 +15,8 @@ class CurriculumConfig:
 
 
 CURRICULUM_STAGES = {
-    1: CurriculumConfig(stage=1, evader_speed_coeff=0.50, evader_g_coeff=0.333, warning_radius=1500.0),
-    2: CurriculumConfig(stage=2, evader_speed_coeff=0.65, evader_g_coeff=0.55, warning_radius=3000.0),
+    1: CurriculumConfig(stage=1, evader_speed_coeff=0.65, evader_g_coeff=0.333, warning_radius=1500.0),
+    2: CurriculumConfig(stage=2, evader_speed_coeff=0.75, evader_g_coeff=0.55, warning_radius=3000.0),
     3: CurriculumConfig(stage=3, evader_speed_coeff=0.85, evader_g_coeff=0.85, warning_radius=10000.0),
 }
 

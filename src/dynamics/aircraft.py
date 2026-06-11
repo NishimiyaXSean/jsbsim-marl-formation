@@ -100,10 +100,16 @@ class Aircraft:
 
         if trim:
             fdm["simulation/do_simple_trim"] = 1
-        # When trim=False, do NOT set do_simple_trim=0 — just leave it at
-        # JSBSim's default, which does NOT perform an automatic trim.
 
-        fdm.run_ic()
+        try:
+            fdm.run_ic()
+        except BaseException:
+            # Trim may fail for some speed/altitude combinations (e.g. low speed
+            # at high altitude).  Fall back: disable trim and initialise anyway.
+            # Use BaseException because _jsbsim.TrimFailureError may not inherit
+            # from Exception in Cython bindings.
+            fdm["simulation/do_simple_trim"] = 0
+            fdm.run_ic()
 
         self._state = {}
 

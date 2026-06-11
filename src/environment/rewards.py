@@ -58,18 +58,18 @@ class RewardConfig:
 
     sideslip_factor: float = 2.0
 
-    kill_reward: float = 5000.0
+    kill_reward: float = 500.0
     cpa_radius: float = 300.0
-    cpa_base: float = 2000.0
-    cpa_extra_max: float = 3000.0
+    cpa_base: float = 200.0
+    cpa_extra_max: float = 300.0
 
     survival_reward: float = 0.5
     escape_weight: float = 2.0
     spoofing_weight: float = 5.0
     spoofing_threshold: float = 0.5
 
-    timeout_attacker_penalty: float = 2000.0
-    timeout_evader_bonus: float = 500.0
+    timeout_attacker_penalty: float = 200.0
+    timeout_evader_bonus: float = 50.0
 
 
 # ─── Attacker reward components ────────────────────────────────────────────
