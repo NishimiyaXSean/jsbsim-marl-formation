@@ -78,7 +78,7 @@ class Aircraft:
         alt_ft: float = 10000.0,
         heading_deg: float = 0.0,
         speed_kts: float = 400.0,
-        trim: bool = True,
+        trim: bool = False,  # default off — RL training doesn't need trim
     ) -> None:
         """Reset aircraft to specified initial conditions.
 
@@ -100,6 +100,8 @@ class Aircraft:
 
         if trim:
             fdm["simulation/do_simple_trim"] = 1
+        # When trim=False, do NOT set do_simple_trim=0 — just leave it at
+        # JSBSim's default, which does NOT perform an automatic trim.
 
         fdm.run_ic()
 
