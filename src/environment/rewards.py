@@ -16,41 +16,42 @@ import numpy as np
 class RewardConfig:
     """Configuration for reward component weights."""
 
-    progress_weight: float = 0.1
-    progress_penalty_weight: float = 0.03
+    progress_weight: float = 0.3
+    progress_penalty_weight: float = 0.08
 
-    ata_weight: float = 4.0
-    ata_lock_bonus: float = 2.0
-    ata_rear_penalty: float = 5.0
+    ata_weight: float = 6.0
+    ata_lock_bonus: float = 3.0
+    ata_rear_penalty: float = 8.0
     ata_lock_threshold: float = 0.866  # cos(30°)
 
-    aa_weight: float = 2.0
+    aa_weight: float = 3.0
     aa_threshold: float = 0.5
 
-    hca_weight: float = 1.0
+    hca_weight: float = 1.5
     hca_threshold: float = 0.0
 
-    collision_weight: float = 8.0
-    collision_penalty_weight: float = 5.0
+    collision_weight: float = 10.0
+    collision_penalty_weight: float = 6.0
     collision_near_weight_extra: float = 5.0
     collision_near_dist: float = 1000.0
 
-    closing_speed_weight: float = 0.08
-    closing_speed_terminal_weight: float = 0.15
+    closing_speed_weight: float = 0.15
+    closing_speed_terminal_weight: float = 0.25
     terminal_radius: float = 400.0
 
-    time_base_penalty: float = 0.5
-    time_max_penalty: float = 2.5
+    time_base_penalty: float = 0.15
+    time_max_penalty: float = 1.0
     episode_len_sec: float = 240.0
 
-    z_advantage_weight: float = 0.001
-    z_disadvantage_weight: float = 0.02
+    z_advantage_weight: float = 0.003
+    z_disadvantage_weight: float = 0.03
     z_advantage_min: float = 50.0
     z_disadvantage_threshold: float = -100.0
 
-    ground_warning_alt: float = 200.0
+    ground_warning_alt: float = 800.0      # warn well above death floor
     ground_warning_base: float = 5.0
-    ground_warning_vz_factor: float = 0.2
+    ground_warning_vz_factor: float = 0.5
+    altitude_bonus: float = 0.0             # disabled — too dominant over tracking signal
 
     stall_speed: float = 150.0
     stall_penalty_weight: float = 0.5
@@ -68,8 +69,8 @@ class RewardConfig:
     spoofing_weight: float = 5.0
     spoofing_threshold: float = 0.5
 
-    timeout_attacker_penalty: float = 200.0
-    timeout_evader_bonus: float = 50.0
+    timeout_attacker_penalty: float = 100.0   # light penalty — motivates engagement
+    timeout_evader_bonus: float = 0.0
 
 
 # ─── Attacker reward components ────────────────────────────────────────────
