@@ -517,21 +517,49 @@ class AirCombatEnv(MultiAgentEnv):
     # ── Tacview ─────────────────────────────────────────────────────────────
 
     def _record_tacview_frame(self, time_sec: float) -> None:
-        """Accumulate a Tacview frame for later export."""
+        """Accumulate a Tacview frame for later export.
+
+        Uses ``position_ned`` + ``ned_to_lla`` to produce real WGS-84
+        coordinates — not the raw JSBSim lat/lon which are just the reference
+        point for *both* aircraft (see scenario.py).
+        """
+        from src.utils.kinematics import ned_to_lla
+
+        a_ned = self.attacker.position_ned
+        e_ned = self.evader.position_ned
+
+        ref_alt = self._ref_lla[2]
+
+        # position_ned: Z = altitude MSL (positive UP).
+        # ned_to_lla expects NED (Z = positive DOWN = below reference).
+        # Therefore down = ref_alt - altitude.
+        a_ned_lla = ned_to_lla(
+            np.array([a_ned[0], a_ned[1], ref_alt - a_ned[2]], dtype=np.float64),
+            np.array([self._ref_lla[0], self._ref_lla[1], ref_alt], dtype=np.float64),
+        )
+        e_ned_lla = ned_to_lla(
+            np.array([e_ned[0], e_ned[1], ref_alt - e_ned[2]], dtype=np.float64),
+            np.array([self._ref_lla[0], self._ref_lla[1], ref_alt], dtype=np.float64),
+        )
+
         a_state = self.attacker.state
         e_state = self.evader.state
         self._tacview_frames.append({
             "time": time_sec,
             "attacker": {
-                "lon_deg": a_state["lon_deg"], "lat_deg": a_state["lat_deg"],
-                "alt_ft": a_state["alt_ft"],
-                "roll_deg": a_state["roll_deg"], "pitch_deg": a_state["pitch_deg"],
+                "lat_deg": float(a_ned_lla[0]),
+                "lon_deg": float(a_ned_lla[1]),
+                "alt_m": float(a_ned_lla[2]),
+                "roll_deg": a_state["roll_deg"],
+                "pitch_deg": a_state["pitch_deg"],
                 "yaw_deg": a_state["yaw_deg"],
             },
             "evader": {
-                "lon_deg": e_state["lon_deg"], "lat_deg": e_state["lat_deg"],
-                "alt_ft": e_state["alt_ft"],
-                "roll_deg": e_state["roll_deg"], "pitch_deg": e_state["pitch_deg"],
+                "lat_deg": float(e_ned_lla[0]),
+                "lon_deg": float(e_ned_lla[1]),
+                "alt_m": float(e_ned_lla[2]),
+                "roll_deg": e_state["roll_deg"],
+                "pitch_deg": e_state["pitch_deg"],
                 "yaw_deg": e_state["yaw_deg"],
             },
         })
