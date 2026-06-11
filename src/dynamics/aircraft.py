@@ -111,6 +111,13 @@ class Aircraft:
             fdm["simulation/do_simple_trim"] = 0
             fdm.run_ic()
 
+        # Engine start: JSBSim's run_ic() does NOT auto-start turbine engines.
+        # Without this, thrust is zero and the aircraft glides powerless.
+        try:
+            fdm["propulsion/engine[0]/set-running"] = 1
+        except KeyError:
+            pass  # piston engines or models without this property
+
         self._state = {}
 
     def set_controls(self, throttle: float, elevator: float, aileron: float, rudder: float) -> None:
