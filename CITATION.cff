@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+title: jsbsim-marl-formation
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Sean
+    family-names: Nishimiya
+    email: 22560063@zju.edu.cn
+repository-code: "https://github.com/NishimiyaXSean/jsbsim-marl-formation"
+abstract: "Multi-agent reinforcement learning for formation cooperative route decision and planning using JSBSim F-16 flight dynamics and MAPPO."
+keywords:
+  - reinforcement-learning
+  - multi-agent
+  - air-combat
+  - jsbsim
+  - f-16
+  - formation-control
+license: MIT
