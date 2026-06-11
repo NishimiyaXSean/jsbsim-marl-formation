@@ -28,8 +28,8 @@ class SingleAgentWrapper(gym.Wrapper):
         return obs["attacker_0"]["obs"], info
 
     def step(self, action):
-        # Evader uses random policy (for now)
-        evader_action = np.zeros(4, dtype=np.float32)
+        # Evader: straight and level flight
+        evader_action = np.array([0.5, 0.0, 0.0, 0.0], dtype=np.float32)
         obs, rewards, terminated, truncated, infos = self.env.step({
             "attacker_0": action,
             "evader_0": evader_action,

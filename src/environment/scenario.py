@@ -21,9 +21,9 @@ class Bounds:
 
 
 STAGE_BOUNDS = {
-    1: Bounds(d_min=600, d_max=1000, z_min=1500, z_max=2000, speed_min_mps=120, speed_max_mps=180),
-    2: Bounds(d_min=1000, d_max=1500, z_min=1800, z_max=2500, speed_min_mps=180, speed_max_mps=260),
-    3: Bounds(d_min=1500, d_max=2500, z_min=2200, z_max=3200, speed_min_mps=260, speed_max_mps=340),
+    1: Bounds(d_min=600, d_max=1000, z_min=2500, z_max=3500, speed_min_mps=150, speed_max_mps=200),
+    2: Bounds(d_min=1000, d_max=1500, z_min=2500, z_max=3500, speed_min_mps=180, speed_max_mps=260),
+    3: Bounds(d_min=1500, d_max=2500, z_min=3000, z_max=4000, speed_min_mps=260, speed_max_mps=340),
 }
 
 
@@ -77,7 +77,7 @@ def generate_spawn(stage: int, rng: Optional[np.random.Generator] = None) -> dic
             "alt_ft": m_to_ft(attacker_z),
             "heading_deg": attacker_heading,
             "speed_kts": mps_to_kts(attacker_speed),
-            "ned": np.array([attacker_x, attacker_y, -attacker_z]),
+            "ned": np.array([attacker_x, attacker_y, attacker_z]),  # Z = positive UP
         },
         "evader": {
             "lat_deg": ref_lat,
@@ -85,7 +85,7 @@ def generate_spawn(stage: int, rng: Optional[np.random.Generator] = None) -> dic
             "alt_ft": m_to_ft(evader_z),
             "heading_deg": evader_heading,
             "speed_kts": mps_to_kts(evader_speed),
-            "ned": np.array([evader_x, evader_y, -evader_z]),
+            "ned": np.array([evader_x, evader_y, evader_z]),  # Z = positive UP
         },
         "ref_lla": (ref_lat, ref_lon, ref_alt_m),
     }

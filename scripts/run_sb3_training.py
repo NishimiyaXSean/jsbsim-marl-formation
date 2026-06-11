@@ -98,8 +98,8 @@ def train():
                 obs_e = self._env._get_obs_dict("evader_0")["obs"]
                 evader_action, _ = self._evader_policy.predict(obs_e, deterministic=False)
             else:
-                # Default: light left turn
-                evader_action = np.array([0.6, 0.0, -0.3, 0.05], dtype=np.float32)
+                # Default: straight and level (half throttle, neutral controls)
+                evader_action = np.array([0.5, 0.0, 0.0, 0.0], dtype=np.float32)
 
             actions = {"attacker_0": action, "evader_0": evader_action}
             obs, rewards, terminated, truncated, infos = self._env.step(actions)
@@ -124,16 +124,23 @@ def train():
         "MlpPolicy",
         env,
         verbose=1,
-        learning_rate=1e-4,
-        n_steps=2048,
+        learning_rate=3e-4,
+        n_steps=1024,
         batch_size=128,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
         ent_coef=0.01,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
         tensorboard_log=log_dir,
         device="cpu",
+        policy_kwargs=dict(
+            net_arch=dict(pi=[128, 128], vf=[128, 128]),
+            activation_fn=torch.nn.ReLU,
+            ortho_init=True,
+        ),
     )
 
     TOTAL_TIMESTEPS = 100_000
