@@ -28,7 +28,9 @@ class Aircraft:
                              If None, uses JSBSIM_DATA_DIR env var, then jsbsim's default.
         """
         self._resolve_data_dir(jsbsim_data_dir)
-        self.fdm = jsbsim.FGFDMExec(str(self._data_root), None)
+        # Pass None (not "None" string) when data_root is None
+        root_arg = str(self._data_root) if self._data_root else None
+        self.fdm = jsbsim.FGFDMExec(root_arg, None)
 
         # Load the F-16 model
         self.fdm.load_model(self.MODEL)
@@ -41,28 +43,32 @@ class Aircraft:
 
     def _resolve_data_dir(self, jsbsim_data_dir: Optional[str]) -> None:
         """Find JSBSim aircraft/engines/systems/ data directory."""
+        self._data_root = None
+
         if jsbsim_data_dir:
             candidate = Path(jsbsim_data_dir)
-        else:
-            candidate = Path(os.environ.get("JSBSIM_DATA_DIR", ""))
-            if not candidate.exists():
-                # Try common locations
-                options = [
-                    Path.cwd() / "data" / "jsbsim",
-                    Path.home() / "jsbsim-data",
-                ]
-                for opt in options:
-                    if (opt / "aircraft").exists():
-                        candidate = opt
-                        break
-                else:
-                    # Fallback: let JSBSim use its internal default
-                    candidate = None
+            if (candidate / "aircraft").exists():
+                self._data_root = candidate
+                return
 
-        if candidate and (candidate / "aircraft").exists():
-            self._data_root = candidate
-        else:
-            self._data_root = None  # JSBSim will use its default search path
+        env_dir = os.environ.get("JSBSIM_DATA_DIR", "")
+        if env_dir:
+            candidate = Path(env_dir)
+            if (candidate / "aircraft").exists():
+                self._data_root = candidate
+                return
+
+        # Search common locations
+        _project_root = Path(__file__).resolve().parent.parent.parent
+        search_paths = [
+            Path.cwd() / "data" / "jsbsim",
+            _project_root / "data" / "jsbsim",
+            Path.home() / "jsbsim-data",
+        ]
+        for opt in search_paths:
+            if (opt / "aircraft").exists():
+                self._data_root = opt
+                return
 
     def reset(
         self,
@@ -125,9 +131,9 @@ class Aircraft:
             "lon_deg": float(fdm["position/long-gc-deg"]),
             "alt_ft": float(fdm["position/h-sl-ft"]),
             "alt_m": ft_to_m(float(fdm["position/h-sl-ft"])),
-            "roll_deg": float(fdm["attitude/roll-deg"]),
-            "pitch_deg": float(fdm["attitude/pitch-deg"]),
-            "yaw_deg": float(fdm["attitude/psi-deg"]),
+            "roll_deg": rad_to_deg(float(fdm["attitude/roll-rad"])),
+            "pitch_deg": rad_to_deg(float(fdm["attitude/pitch-rad"])),
+            "yaw_deg": rad_to_deg(float(fdm["attitude/heading-true-rad"])),
             "airspeed_kts": float(fdm["velocities/vc-kts"]),
             "airspeed_mps": kts_to_mps(float(fdm["velocities/vc-kts"])),
             "mach": float(fdm["velocities/mach"]),
@@ -146,7 +152,7 @@ class Aircraft:
             "q_rps": float(fdm["velocities/q-rad_sec"]),
             "r_rps": float(fdm["velocities/r-rad_sec"]),
             # Engine
-            "engine_rpm": float(fdm["propulsion/engine/set-rpm"]),
+            "thrust_lbs": float(fdm["propulsion/engine[0]/thrust-lbs"]),
         }
 
     @property
