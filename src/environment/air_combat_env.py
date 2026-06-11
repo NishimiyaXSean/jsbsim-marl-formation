@@ -363,6 +363,8 @@ class AirCombatEnv(MultiAgentEnv):
                     + reward_z_advantage(dz, geo["cos_ata"], micro_delta_dist, dt, self.reward_cfg)
                     + reward_energy_loss(vel_norm, a_vel[2], dt, self.reward_cfg)
                     + reward_ground_warning(a_pos[2], a_vel[2], dt, self.reward_cfg)
+                    # Altitude bonus: reward each meter of altitude to create clear survival gradient
+                    + self.reward_cfg.altitude_bonus * max(a_pos[2], 0.0) * dt
                     + reward_tracking(
                         geo["cos_ata"], geo["cos_aa"], geo["cos_hca"],
                         cos_collision, sideslip, current_dist, dz, micro_delta_dist,
@@ -410,15 +412,26 @@ class AirCombatEnv(MultiAgentEnv):
                     continue
                 death_floor = self.ATTACKER_DEATH_FLOOR if agent_id == "attacker_0" else self.EVADER_DEATH_FLOOR
                 if check_ground_crash(ac.position_ned[2], death_floor):
-                    penalty = 200.0 if agent_id == "attacker_0" else 500.0
-                    total_rewards[agent_id] -= penalty
-                    terminations[agent_id] = True
-                    infos[agent_id]["reason"] = "ground_crash"
+                    if agent_id == "attacker_0":
+                        # Attacker crashed — penalty
+                        total_rewards[agent_id] -= 200.0
+                        terminations[agent_id] = True
+                        infos[agent_id]["reason"] = "ground_crash"
+                    else:
+                        # Evader crashed — attacker gets kill credit
+                        total_rewards["attacker_0"] += self.reward_cfg.kill_reward
+                        terminations[agent_id] = True
+                        terminations["attacker_0"] = True
+                        infos["attacker_0"]["reason"] = "success"
                     crash_occurred = True
                 elif check_out_of_bounds(ac.position_ned[2], self.CEILING):
-                    total_rewards[agent_id] -= 200.0
+                    if agent_id == "attacker_0":
+                        total_rewards[agent_id] -= 200.0
+                    else:
+                        total_rewards["attacker_0"] += self.reward_cfg.kill_reward
+                        terminations["attacker_0"] = True
+                        infos["attacker_0"]["reason"] = "success"
                     terminations[agent_id] = True
-                    infos[agent_id]["reason"] = "out_of_bounds"
                     crash_occurred = True
 
             if crash_occurred:
