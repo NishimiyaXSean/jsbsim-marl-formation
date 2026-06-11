@@ -40,6 +40,7 @@ class Aircraft:
 
         # Cached state vector (populated after run())
         self._state = {}
+        self._ned = np.zeros(3)  # NED position tracked separately from JSBSim state cache
 
     def _resolve_data_dir(self, jsbsim_data_dir: Optional[str]) -> None:
         """Find JSBSim aircraft/engines/systems/ data directory."""
@@ -164,17 +165,15 @@ class Aircraft:
 
     @property
     def position_ned(self) -> np.ndarray:
-        """Placeholder NED position — set externally by orchestrator after lla→ned conversion.
+        """NED position [north_m, east_m, down_m] relative to scenario origin.
 
-        Returns (3,) array [north_m, east_m, down_m] relative to scenario origin.
+        Set externally by the orchestrator after each simulation step.
         """
-        if "ned" in self._state:
-            return self._state["ned"]
-        return np.zeros(3)
+        return self._ned
 
     @position_ned.setter
     def position_ned(self, value: np.ndarray) -> None:
-        self._state["ned"] = np.asarray(value, dtype=np.float64)
+        self._ned = np.asarray(value, dtype=np.float64)
 
     @property
     def velocity_ned(self) -> np.ndarray:
