@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data
+data/jsbsim/
+data/checkpoints/
+data/logs/
+data/tacview/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ML
+*.pth
+*.pt
+*.pkl
+ray_results/
+marl_runs/
+
+# OS
+.DS_Store
+Thumbs.db

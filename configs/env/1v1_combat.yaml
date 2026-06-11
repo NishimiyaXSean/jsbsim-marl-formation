@@ -1,0 +1,49 @@
+# 1v1 Air Combat Environment Configuration
+env:
+  name: "air_combat_1v1"
+  num_aircraft: 2
+  ctrl_freq: 60        # Hz
+  decision_dt: 0.5      # seconds between AI decisions
+  episode_len_sec: 240.0
+  cpa_radius: 300.0     # proximity fuze trigger (m)
+
+# Aircraft model
+aircraft:
+  model: "f16"
+  max_g: 9.0
+  min_g: -3.0
+  max_speed_mps: 400.0
+
+# Termination
+termination:
+  attacker_death_floor_m: 10.0
+  evader_death_floor_m: 595.0
+  ceiling_m: 4900.0
+  collision_dist_m: 50.0
+
+# Curriculum
+curriculum:
+  stage_1:
+    d_min: 600.0
+    d_max: 1000.0
+    z_min: 1500.0
+    z_max: 2000.0
+    evader_speed_coeff: 0.50
+    evader_g_coeff: 0.333
+    warning_radius: 1500.0
+  stage_2:
+    d_min: 1000.0
+    d_max: 1500.0
+    z_min: 1800.0
+    z_max: 2500.0
+    evader_speed_coeff: 0.65
+    evader_g_coeff: 0.55
+    warning_radius: 3000.0
+  stage_3:
+    d_min: 1500.0
+    d_max: 2500.0
+    z_min: 2200.0
+    z_max: 3200.0
+    evader_speed_coeff: 0.85
+    evader_g_coeff: 0.85
+    warning_radius: 10000.0

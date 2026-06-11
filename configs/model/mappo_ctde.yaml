@@ -1,0 +1,12 @@
+# MAPPO CTDE Model Configuration
+model:
+  custom_model: "mappo_ctde_model"
+  actor:
+    hidden_dims: [256, 256]
+    activation: "tanh"
+  critic:
+    hidden_dims: [256, 256]
+    activation: "tanh"
+  local_obs_dim: 19
+  global_state_dim: 26
+  action_dim: 4  # [throttle, elevator, aileron, rudder]
