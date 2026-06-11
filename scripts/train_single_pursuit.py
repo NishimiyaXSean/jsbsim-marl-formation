@@ -35,8 +35,8 @@ CURRICULUM_STAGES = [1, 2, 3]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
 
 EVAL_EPISODES = 20
-EVAL_FREQ = 50_000
-TARGET_CAPTURE_RATE = 0.80
+EVAL_FREQ = 25_000
+TARGET_CAPTURE_RATE = 0.70   # lowered from 0.80 for faster progression
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -57,8 +57,8 @@ class CurriculumCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> None:
-        # Check if it's time for evaluation
-        if self.num_timesteps % EVAL_FREQ > 0 and self.num_timesteps < TOTAL_TIMESTEPS:
+        # Don't eval every rollout — only at multiples of EVAL_FREQ
+        if self.num_timesteps % EVAL_FREQ > 2048:
             return
 
         # Evaluate
@@ -179,7 +179,7 @@ def train():
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
             callback=CurriculumCallback(eval_env, log_dir),
-            progress_bar=True,
+            progress_bar=False,
         )
     except KeyboardInterrupt:
         print("\nInterrupted — saving checkpoint...")
@@ -188,6 +188,10 @@ def train():
     final_path = os.path.join(log_dir, "final_model")
     model.save(final_path)
     print(f"\nFinal model saved → {final_path}.zip")
+
+    # Save a simple model.zip for evaluate script
+    model.save(os.path.join(log_dir, "model"))
+    print(f"Simple model saved → {os.path.join(log_dir, 'model')}.zip")
 
     # ── Final evaluation with Tacview ─────────────────────────────────────
     print(f"\n{'='*55}")
