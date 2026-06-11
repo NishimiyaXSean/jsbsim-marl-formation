@@ -108,9 +108,9 @@ class AirCombatEnv(MultiAgentEnv):
         self.MIN_G = -3.0
 
         # Bounds
-        self.ATTACKER_DEATH_FLOOR = 10.0     # altitude (m)
-        self.EVADER_DEATH_FLOOR = 595.0
-        self.CEILING = 4900.0
+        self.ATTACKER_DEATH_FLOOR = 10.0      # altitude (m) — near ground level
+        self.EVADER_DEATH_FLOOR = 10.0         # same for evader (was 595m, which caused false kills)
+        self.CEILING = 12000.0                 # F-16 service ceiling ~50,000 ft
 
         # Action space
         if self.action_mode == "bfm":
@@ -413,16 +413,19 @@ class AirCombatEnv(MultiAgentEnv):
                 death_floor = self.ATTACKER_DEATH_FLOOR if agent_id == "attacker_0" else self.EVADER_DEATH_FLOOR
                 if check_ground_crash(ac.position_ned[2], death_floor):
                     if agent_id == "attacker_0":
-                        # Attacker crashed — penalty
                         total_rewards[agent_id] -= 200.0
                         terminations[agent_id] = True
                         infos[agent_id]["reason"] = "ground_crash"
                     else:
-                        # Evader crashed — attacker gets kill credit
-                        total_rewards["attacker_0"] += self.reward_cfg.kill_reward
+                        # Evader crashed — only credit attacker if in pursuit range
+                        if current_dist < 1000.0 and geo["cos_ata"] > 0.3:
+                            total_rewards["attacker_0"] += self.reward_cfg.kill_reward
+                            terminations["attacker_0"] = True
+                            infos["attacker_0"]["reason"] = "success"
+                        else:
+                            total_rewards["attacker_0"] -= 50.0
                         terminations[agent_id] = True
-                        terminations["attacker_0"] = True
-                        infos["attacker_0"]["reason"] = "success"
+                        infos[agent_id]["reason"] = "ground_crash"
                     crash_occurred = True
                 elif check_out_of_bounds(ac.position_ned[2], self.CEILING):
                     if agent_id == "attacker_0":
