@@ -1,19 +1,29 @@
 """1v1 air combat Gymnasium environment backed by JSBSim F-16 flight dynamics.
 
-Supports:
-- Continuous action space: [throttle, elevator, aileron, rudder] ∈ [-1, 1]^4
+Supports two action modes:
+
+- ``"continuous"``:  [throttle, elevator, aileron, rudder] ∈ [-1, 1]^4
+  (direct control-surface commands — raw JSBSim interface).
+- ``"bfm"``:  Discrete(13) Basic Fighter Maneuvers.
+  Actions go through FlightEnvelope → BFMAutopilot → JSBSim control surfaces.
+  This is the mode described in **Decision 1** of the migration plan.
+
+Also provides:
 - Multi-agent RLlib interface (MultiAgentEnv)
 - Curriculum learning (3 stages)
 - Tacview ACMI export
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
 from src.dynamics.aircraft import Aircraft
+from src.dynamics.bfm_actions import get_bfm_action, NUM_BFM_ACTIONS
+from src.dynamics.autopilot import BFMAutopilot
+from src.dynamics.flight_envelope import FlightEnvelope
 from src.environment.observations import compute_obs, compute_global_state
 from src.environment.rewards import (
     RewardConfig,
@@ -59,8 +69,12 @@ class AirCombatEnv(MultiAgentEnv):
         record_tacview: bool = False,
         reward_config: Optional[RewardConfig] = None,
         jsbsim_data_dir: Optional[str] = None,
+        action_mode: Literal["continuous", "bfm"] = "continuous",
     ):
         super().__init__()
+
+        # Action mode: "continuous" (direct surface) or "bfm" (discrete BFM → autopilot)
+        self.action_mode: str = action_mode
 
         # Agent identities
         self.possible_agents = ["attacker_0", "evader_0"]
@@ -70,6 +84,16 @@ class AirCombatEnv(MultiAgentEnv):
         self.attacker = Aircraft(jsbsim_data_dir)
         self.evader = Aircraft(jsbsim_data_dir)
         self._aircraft_map = {"attacker_0": self.attacker, "evader_0": self.evader}
+
+        # BFM autopilot + flight envelope (one per agent; used only in "bfm" mode)
+        self._autopilots: Dict[str, BFMAutopilot] = {
+            "attacker_0": BFMAutopilot(),
+            "evader_0": BFMAutopilot(),
+        }
+        self._envelopes: Dict[str, FlightEnvelope] = {
+            "attacker_0": FlightEnvelope(),
+            "evader_0": FlightEnvelope(),
+        }
 
         # Simulation params
         self.CTRL_FREQ = 60.0       # control frequency (Hz)
@@ -88,11 +112,19 @@ class AirCombatEnv(MultiAgentEnv):
         self.EVADER_DEATH_FLOOR = 595.0
         self.CEILING = 4900.0
 
-        # Action space: 4-dim continuous
-        self.action_spaces = {
-            agent: gym.spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
-            for agent in self.possible_agents
-        }
+        # Action space
+        if self.action_mode == "bfm":
+            # 13 discrete Basic Fighter Maneuvers
+            self.action_spaces = {
+                agent: gym.spaces.Discrete(NUM_BFM_ACTIONS)
+                for agent in self.possible_agents
+            }
+        else:
+            # 4-dim continuous: [throttle, elevator, aileron, rudder]
+            self.action_spaces = {
+                agent: gym.spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+                for agent in self.possible_agents
+            }
 
         # Observation space: Dict for MAPPO CTDE
         self.observation_spaces = {
@@ -166,6 +198,14 @@ class AirCombatEnv(MultiAgentEnv):
         self.attacker.position_ned = spawn["attacker"]["ned"]
         self.evader.position_ned = spawn["evader"]["ned"]
 
+        # Reset BFM autopilot + envelope state (per-agent smoothing, PID integrators)
+        for agent_id in self.possible_agents:
+            ac = self._aircraft_map[agent_id]
+            self._envelopes[agent_id].reset()
+            self._autopilots[agent_id].reset(
+                initial_speed_mps=ac.state["airspeed_mps"]
+            )
+
         # Initialize counters
         self.step_counter = 0
         self.macro_step = 0
@@ -210,16 +250,58 @@ class AirCombatEnv(MultiAgentEnv):
         self.macro_step += 1
 
         for _ in range(decision_steps):
-            # Apply controls
+            # Apply controls (BFM or continuous)
             for agent_id in self.agents:
                 ac = self._aircraft_map[agent_id]
-                act = actions.get(agent_id, np.zeros(4))
-                ac.set_controls(
-                    throttle=float(act[0]),
-                    elevator=float(act[1]),
-                    aileron=float(act[2]),
-                    rudder=float(act[3]),
-                )
+                is_attacker = (agent_id == "attacker_0")
+
+                if self.action_mode == "bfm":
+                    # ── BFM discrete action pipeline ──────────────────
+                    act_idx = int(actions.get(agent_id, 0))
+
+                    # Curriculum override: evader outside warning radius flies straight
+                    if (agent_id == "evader_0"
+                            and self.prev_dist > self.warning_radius):
+                        act_idx = 0
+
+                    n_x_raw, n_n_raw, mu_raw = get_bfm_action(act_idx)
+
+                    # Flight envelope processing
+                    ac_state = ac.state
+                    roll_rad = float(np.deg2rad(ac_state["roll_deg"]))
+                    # Vertical speed (world-frame, positive = climbing).
+                    # Approximated from body-Z velocity for GPWS; near wings-level
+                    # this is accurate.  Body-Z down → negate.
+                    vz_mps = -ac_state["w_fps"] * 0.3048
+
+                    n_x_env, n_n_env, mu_env = self._envelopes[agent_id].step(
+                        n_x_raw, n_n_raw, mu_raw,
+                        speed_mps=ac_state["airspeed_mps"],
+                        alt_m=ac_state["alt_m"],
+                        vz_mps=vz_mps,
+                        current_roll_rad=roll_rad,
+                        dt=dt,
+                        is_attacker=is_attacker,
+                        g_scale=self.evader_g_coeff if not is_attacker else 1.0,
+                        speed_scale=self.evader_speed_coeff if not is_attacker else 1.0,
+                    )
+
+                    # Autopilot: BFM → control surfaces
+                    thr, elev, ail, rud = self._autopilots[agent_id].step(
+                        n_x_env, n_n_env, mu_env, dt,
+                        n_z_g=ac_state["n_z_g"],
+                        roll_rad=roll_rad,
+                        airspeed_mps=ac_state["airspeed_mps"],
+                        beta_deg=ac_state["beta_deg"],
+                    )
+                else:
+                    # ── Continuous direct control ─────────────────────
+                    act = actions.get(agent_id, np.zeros(4, dtype=np.float32))
+                    thr, elev, ail, rud = (
+                        float(act[0]), float(act[1]), float(act[2]), float(act[3]),
+                    )
+
+                ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 
             # Step both aircraft
             self.attacker.run()
