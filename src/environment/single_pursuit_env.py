@@ -164,6 +164,7 @@ class SinglePursuitEnv(gym.Env):
 
         # --- Pursuer spawn ---
         pursuer_hdg = rng.uniform(0.0, 360.0)
+
         self.pursuer.reset(
             lat_deg=30.0, lon_deg=120.0,
             alt_ft=int(3000 * 3.28084),
@@ -180,21 +181,19 @@ class SinglePursuitEnv(gym.Env):
 
         # --- Target spawn (curriculum-aware) ---
         if self.curriculum_stage == 1:
-            # Stage 1: pursuer directly behind target, same heading.
-            # Simplest possible task — just close distance and fine-tune.
-            # No turning required; the agent learns speed/altitude control first.
+            # Stage 1: target DEAD AHEAD — zero bearing offset, same heading.
+            # At 260 m/s, even 1° offset creates 90m lateral miss after 20s.
+            # Agent just needs throttle forward; steering comes in stage 2.
             target_dist = rng.uniform(800, 1800)
-            # Target is directly ahead of pursuer (±5°)
-            target_bearing = (pursuer_hdg + rng.uniform(-5, 5)) % 360.0
+            target_bearing = pursuer_hdg  # exactly ahead
             target_bearing_rad = np.deg2rad(target_bearing)
 
             target_ned = np.array([
                 pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
                 pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
-                pursuer_ned[2] + rng.uniform(-100, 100),
+                pursuer_ned[2] + rng.uniform(-50, 50),  # small altitude delta
             ])
-            # Target flies same direction as pursuer
-            target_hdg = (pursuer_hdg + rng.uniform(-5, 5)) % 360.0
+            target_hdg = pursuer_hdg  # exactly same direction
         elif self.curriculum_stage == 2:
             # Stage 2: target in front arc (±45°), similar heading (±30°)
             target_dist = rng.uniform(1000, 2500)
@@ -230,16 +229,17 @@ class SinglePursuitEnv(gym.Env):
 
         # Flight controller + target reset — start fast to give speed advantage
         self.fc.reset()
+        # Match target altitude so the pursuer can actually intercept in 3D
         self._target = FlightControlTargets(
             heading_deg=pursuer_hdg,
-            altitude_m=3000.0,
+            altitude_m=float(target_ned[2]),  # match target altitude
             speed_mps=250.0,  # start fast — F-16 can sustain this
         )
 
         self._step_counter = 0
         self._prev_dist = float(np.linalg.norm(pursuer_ned - target_ned))
         self._tacview_frames = []
-        self._target_profile = self._generate_target_profile(rng)
+        self._target_profile = self._generate_target_profile(rng, target_hdg)
 
         if self.record_tacview:
             self._record_tacview_frame(0.0)
@@ -251,13 +251,13 @@ class SinglePursuitEnv(gym.Env):
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
         dt = PHYSICS_DT
 
-        # Parse action: [-1,1] → real deltas
-        d_hdg = float(action[0]) * MAX_D_HEADING_DEG
+        # Parse action: [aileron, d_alt, d_speed]
+        # Aileron: direct control, bypasses FC heading stabiliser
+        raw_ail = float(np.clip(action[0], -1.0, 1.0))
         d_alt = float(action[1]) * MAX_D_ALT_M
         d_spd = float(action[2]) * MAX_D_SPEED_MPS
 
-        # Apply as absolute deltas to the persistent target
-        self._target.heading_deg = (self._target.heading_deg + d_hdg) % 360.0
+        # Update FC targets (altitude + speed only — heading is direct)
         self._target.altitude_m = np.clip(self._target.altitude_m + d_alt, 500.0, 11000.0)
         self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 250.0)
 
@@ -268,8 +268,11 @@ class SinglePursuitEnv(gym.Env):
         min_dist = self._prev_dist
 
         for _ in range(DECISION_STEPS):
-            # --- Control pursuer via FlightController ---
-            thr, elev, ail, rud = self.fc.compute(self.pursuer.state, self._target, dt)
+            # --- FC altitude + speed, direct aileron for heading ---
+            elev = self.fc.alt.compute(self.pursuer.state["alt_m"], self._target.altitude_m, dt)
+            thr = self.fc.spd.compute(self.pursuer.state["airspeed_mps"], self._target.speed_mps, dt)
+            ail = raw_ail * 0.30  # direct aileron: ±0.3 range
+            rud = 0.0
             self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 
             # --- Move target via scripted profile ---
@@ -409,7 +412,7 @@ class SinglePursuitEnv(gym.Env):
 
     # ── Target motion ────────────────────────────────────────────────────────
 
-    def _generate_target_profile(self, rng: np.random.Generator) -> TargetProfile:
+    def _generate_target_profile(self, rng: np.random.Generator, spawn_heading: float = 90.0) -> TargetProfile:
         """Generate stage-dependent target motion."""
         tp = TargetProfile()
         tp.alt_m = 3500.0
@@ -417,19 +420,19 @@ class SinglePursuitEnv(gym.Env):
         if self.curriculum_stage == 1:
             # Straight and level — easiest; slower target for easy catch
             tp.speed_mps = 130.0  # 250 kts — big speed advantage for pursuer
-            tp.heading_deg = rng.uniform(0, 360)
+            tp.heading_deg = spawn_heading  # same direction as spawn
             tp.heading_rate_dps = 0.0
             tp.alt_rate_mps = 0.0
         elif self.curriculum_stage == 2:
             # Gentle weaving, moderate speed
             tp.speed_mps = 160.0
-            tp.heading_deg = rng.uniform(0, 360)
+            tp.heading_deg = spawn_heading
             tp.heading_rate_dps = rng.uniform(5, 15) * rng.choice([-1, 1])
             tp.alt_rate_mps = rng.uniform(-3, 3)
         else:
             # Evasive — random changes, faster
             tp.speed_mps = 180.0
-            tp.heading_deg = rng.uniform(0, 360)
+            tp.heading_deg = spawn_heading
             tp.heading_rate_dps = rng.uniform(-20, 20)
             tp.alt_rate_mps = rng.uniform(-8, 8)
 
@@ -441,14 +444,16 @@ class SinglePursuitEnv(gym.Env):
         tp.heading_deg = (tp.heading_deg + tp.heading_rate_dps * dt) % 360.0
         tp.alt_m = np.clip(tp.alt_m + tp.alt_rate_mps * dt, 500.0, 11000.0)
 
-        # Simple control: point target toward its desired heading
         from src.dynamics.flight_controller import THROTTLE_TRIM, ELEVATOR_TRIM
 
+        # Altitude hold (same as before)
         alt_err = tp.alt_m - self.target_ac.state["alt_m"]
         target_elev = ELEVATOR_TRIM - 0.002 * alt_err
 
-        hdg_err = (tp.heading_deg - self.target_ac.state["yaw_deg"] + 180) % 360 - 180
-        target_ail = np.clip(hdg_err * 0.03, -0.08, 0.08)
+        # Heading: don't correct — let the target fly naturally straight.
+        # Aileron=0 at trim gives wings-level flight.  The heading-correction
+        # P-controller was causing unintended turns due to transient roll.
+        target_ail = 0.0
 
         self.target_ac.set_controls(
             throttle=THROTTLE_TRIM,

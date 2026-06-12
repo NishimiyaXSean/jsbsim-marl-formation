@@ -45,7 +45,7 @@ from src.environment.termination import (
     check_out_of_bounds,
     check_timeout,
 )
-from src.environment.scenario import generate_spawn
+from src.environment.scenario import generate_spawn, generate_pursuit_spawn
 from src.environment.curriculum import get_curriculum, CURRICULUM_STAGES
 from src.utils.geometry import compute_forward_vector, compute_los, compute_tactical_angles, compute_closing_speed
 from src.utils.units import m_to_ft, mps_to_kts, deg_to_rad
@@ -108,9 +108,9 @@ class AirCombatEnv(MultiAgentEnv):
         self.MAX_G = 9.0
         self.MIN_G = -3.0
 
-        # Bounds — generous safety margins for training
-        self.ATTACKER_DEATH_FLOOR = 100.0       # altitude (m) — generous buffer
-        self.EVADER_DEATH_FLOOR = 100.0
+        # Bounds
+        self.ATTACKER_DEATH_FLOOR = 200.0       # altitude (m) — continuous mode safety
+        self.EVADER_DEATH_FLOOR = 200.0
         self.CEILING = 12000.0                  # F-16 service ceiling ~50,000 ft
 
         # Action space
@@ -178,8 +178,11 @@ class AirCombatEnv(MultiAgentEnv):
         self.agents = self.possible_agents[:]
         rng = np.random.default_rng(seed)
 
-        # Generate spawn configuration
-        spawn = generate_spawn(self.curriculum_stage, rng)
+        # Generate spawn configuration — pursuit mode uses front-arc spawn
+        if self.action_mode == "continuous":
+            spawn = generate_pursuit_spawn(self.curriculum_stage, rng)
+        else:
+            spawn = generate_spawn(self.curriculum_stage, rng)
         self._ref_lla = spawn["ref_lla"]
 
         # Reset attacker
@@ -191,9 +194,12 @@ class AirCombatEnv(MultiAgentEnv):
             trim=False,  # RL training: skip trim to avoid FDM state issues across episodes
         )
 
-        # Reset evader (with curriculum speed limit)
+        # Reset evader (curriculum speed limit only in BFM/pursuit modes)
         e = spawn["evader"]
-        e_speed = e["speed_kts"] * self.evader_speed_coeff
+        if self.action_mode in ("bfm", "pursuit"):
+            e_speed = e["speed_kts"] * self.evader_speed_coeff
+        else:
+            e_speed = e["speed_kts"]  # continuous mode: use spawn speed as-is
         self.evader.reset(
             lat_deg=e["lat_deg"], lon_deg=e["lon_deg"],
             alt_ft=e["alt_ft"], heading_deg=e["heading_deg"],
@@ -204,6 +210,19 @@ class AirCombatEnv(MultiAgentEnv):
         # Store NED positions for state computation
         self.attacker.position_ned = spawn["attacker"]["ned"]
         self.evader.position_ned = spawn["evader"]["ned"]
+
+        # ── Warmup: let aircraft stabilise at trim before episode starts ──
+        # run_ic() leaves aircraft in a transient state (low speed, low n_z).
+        # 2 seconds of trim flight brings them to equilibrium (~176 m/s, 1G).
+        for _ in range(int(2.0 * self.CTRL_FREQ)):
+            self.attacker.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
+            self.evader.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
+            self.attacker.run()
+            self.evader.run()
+            self.attacker.position_ned[0:2] += self.attacker.velocity_ned[0:2] * self.PHYSICS_DT
+            self.evader.position_ned[0:2] += self.evader.velocity_ned[0:2] * self.PHYSICS_DT
+            self.attacker.position_ned[2] = self.attacker.state["alt_m"]
+            self.evader.position_ned[2] = self.evader.state["alt_m"]
 
         # Reset BFM autopilot + envelope state (per-agent smoothing, PID integrators)
         for agent_id in self.possible_agents:
@@ -308,11 +327,49 @@ class AirCombatEnv(MultiAgentEnv):
                         beta_deg=ac_state["beta_deg"],
                     )
                 else:
-                    # ── Continuous direct control ─────────────────────
+                    # ── Continuous direct control with trim bias ──────
+                    # Agent outputs [-1,1] → mapped around trim point.
+                    # Zeros = ~176 m/s level flight.
+                    # Elevator authority is ASYMMETRIC — agent can pull up
+                    # but cannot push down (prevents ground strikes).
                     act = actions.get(agent_id, np.zeros(4, dtype=np.float32))
-                    thr, elev, ail, rud = (
-                        float(act[0]), float(act[1]), float(act[2]), float(act[3]),
-                    )
+                    thr  = float(np.clip(0.80 + 0.20 * act[0], 0.0, 1.0))
+                    if act[1] < 0:
+                        elev = float(np.clip(-0.05 + 0.10 * act[1], -1.0, 1.0))  # pull: -0.05→-0.15
+                    else:
+                        elev = float(np.clip(-0.05 + 0.02 * act[1], -1.0, 1.0))  # push: -0.05→-0.03
+                    ail  = float(np.clip(0.00 + 0.10 * act[2], -1.0, 1.0))  # gentle roll only
+                    rud  = float(0.05 * act[3])
+
+                    # ── GPWS + dive suppressor with hysteresis ──────────
+                    # Once triggered, stays active until altitude recovers
+                    # above the trigger point. Prevents on-off cycling.
+                    alt_m = ac.state["alt_m"]
+                    h_dot_mps = ac.state["h_dot_fps"] * 0.3048
+                    # Persistent flags — set on first trigger, cleared on recovery
+                    if not hasattr(self, '_gpws_stage1'):
+                        self._gpws_stage1 = {a: False for a in self.possible_agents}
+                        self._gpws_stage2 = {a: False for a in self.possible_agents}
+
+                    # Stage 2: hard pull-up below 1500m — hold until > 2000m
+                    if alt_m < 1500.0 and h_dot_mps < -5.0:
+                        self._gpws_stage2[agent_id] = True
+                    elif alt_m > 2000.0:
+                        self._gpws_stage2[agent_id] = False
+
+                    # Stage 1: gentle pull-up below 2500m — hold until > 2800m
+                    if alt_m < 2500.0 and h_dot_mps < -5.0:
+                        self._gpws_stage1[agent_id] = True
+                    elif alt_m > 2800.0:
+                        self._gpws_stage1[agent_id] = False
+
+                    if self._gpws_stage2[agent_id]:
+                        elev = -0.40   # hard pull-up
+                        ail  = 0.0     # wings level
+                        thr  = 1.0
+                    elif self._gpws_stage1[agent_id]:
+                        elev = -0.20   # gentle pull-up
+                        thr  = 1.0
 
                 ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 

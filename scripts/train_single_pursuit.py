@@ -25,12 +25,42 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from src.environment.single_pursuit_env import SinglePursuitEnv
+import gymnasium as gym
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Residual wrapper: agent learns correction on top of expert baseline
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ResidualExpertWrapper(gym.Wrapper):
+    """Agent outputs residual correction added to a fixed expert baseline.
+
+    Expert = [0, 0, 1] → straight flight, full throttle.
+    Agent learns residual ∈ [-1,1]³ on top.
+
+    This guarantees the baseline is never lost — unlike bias init
+    which PPO updates can override.
+    """
+    EXPERT = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # [ail, d_alt, d_spd]
+    RESIDUAL_SCALE = 0.3  # agent can adjust ±0.3 around expert
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = env.observation_space
+        self.action_space = gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(3,), dtype=np.float32,
+        )
+
+    def step(self, action):
+        residual = np.asarray(action, dtype=np.float32) * self.RESIDUAL_SCALE
+        combined = np.clip(self.EXPERT + residual, -1.0, 1.0)
+        return self.env.step(combined)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 200_000
+TOTAL_TIMESTEPS = 100_000
 CURRICULUM_STAGES = [1, 2, 3]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
 
@@ -135,11 +165,13 @@ def train():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs("data/tacview", exist_ok=True)
 
-    # Environment
-    env = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    # Environment — agent learns residual correction to expert baseline
+    base_env = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    env = ResidualExpertWrapper(base_env)
     env = Monitor(env, log_dir)
 
-    eval_env = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    eval_base = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    eval_env = ResidualExpertWrapper(eval_base)
 
     # Print setup
     print(f"{'='*55}")
@@ -151,7 +183,7 @@ def train():
     print(f"  Monitor:        tensorboard --logdir {log_dir}")
     print(f"{'='*55}\n")
 
-    # PPO model
+    # PPO model — agent learns small residual corrections
     model = PPO(
         "MlpPolicy", env,
         verbose=1,
@@ -162,13 +194,13 @@ def train():
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.005,
+        ent_coef=0.01,
         vf_coef=0.5,
         max_grad_norm=0.5,
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
-            net_arch=dict(pi=[128, 128], vf=[128, 128]),
+            net_arch=dict(pi=[64, 64], vf=[64, 64]),
             activation_fn=torch.nn.ReLU,
             ortho_init=True,
         ),
@@ -205,6 +237,8 @@ def train():
     min_dists = []
     best_ep_reward = -float("inf")
     best_ep_idx = 0
+    EXPERT = ResidualExpertWrapper.EXPERT
+    RES_SCALE = ResidualExpertWrapper.RESIDUAL_SCALE
 
     for ep in range(EVAL_EPISODES):
         obs, _ = tacview_env.reset()
@@ -212,7 +246,8 @@ def train():
         total_r = 0.0
         ep_min_dist = 8000.0
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
+            residual, _ = model.predict(obs, deterministic=True)
+            action = np.clip(EXPERT + np.asarray(residual) * RES_SCALE, -1.0, 1.0)
             obs, rew, terminated, truncated, info = tacview_env.step(action)
             done = terminated or truncated
             total_r += rew
