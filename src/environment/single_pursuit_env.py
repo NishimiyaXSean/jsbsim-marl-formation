@@ -195,28 +195,29 @@ class SinglePursuitEnv(gym.Env):
             ])
             target_hdg = pursuer_hdg  # exactly same direction
         elif self.curriculum_stage == 2:
-            # Stage 2: target in front arc (±45°), similar heading (±30°)
+            # Stage 2: moderate bearing (±15°), mild heading diff (±20°), weaving target
             target_dist = rng.uniform(1000, 2500)
+            bearing_offset = rng.uniform(-15, 15)
+            target_bearing = (pursuer_hdg + bearing_offset) % 360.0
+            target_bearing_rad = np.deg2rad(target_bearing)
+            target_ned = np.array([
+                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
+                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
+                pursuer_ned[2] + rng.uniform(-150, 150),
+            ])
+            target_hdg = (pursuer_hdg + rng.uniform(-20, 20)) % 360.0
+        else:
+            # Stage 3: wide bearing (±45°), weaving target — combat-adjacent
+            target_dist = rng.uniform(1500, 3000)
             bearing_offset = rng.uniform(-45, 45)
             target_bearing = (pursuer_hdg + bearing_offset) % 360.0
             target_bearing_rad = np.deg2rad(target_bearing)
             target_ned = np.array([
                 pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
                 pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
-                pursuer_ned[2] + rng.uniform(-200, 200),
-            ])
-            target_hdg = (pursuer_hdg + rng.uniform(-30, 30)) % 360.0
-        else:
-            # Stage 3: full random (original behavior)
-            target_hdg = rng.uniform(0.0, 360.0)
-            bearing_offset = rng.uniform(-180, 180)
-            target_bearing_rad = np.deg2rad(pursuer_hdg + bearing_offset)
-            target_dist = rng.uniform(1000, 3000)
-            target_ned = np.array([
-                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
-                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
                 pursuer_ned[2] + rng.uniform(-300, 300),
             ])
+            target_hdg = (pursuer_hdg + rng.uniform(-30, 30)) % 360.0
 
         self.target_ac.reset(
             lat_deg=30.0, lon_deg=120.0,
