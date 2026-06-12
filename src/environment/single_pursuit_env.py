@@ -343,7 +343,7 @@ class SinglePursuitEnv(gym.Env):
             self._prev_dist = current_dist
 
             # --- Termination checks ---
-            if current_dist < 50.0:
+            if current_dist < 200.0:  # generous kill radius for training
                 total_reward += REWARD_SUCCESS
                 terminated = True
                 reason = "success"
