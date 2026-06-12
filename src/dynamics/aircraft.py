@@ -163,6 +163,8 @@ class Aircraft:
             "u_fps": float(fdm["velocities/u-fps"]),
             "v_fps": float(fdm["velocities/v-fps"]),
             "w_fps": float(fdm["velocities/w-fps"]),
+            # World-frame vertical velocity (ft/s, positive = climbing)
+            "h_dot_fps": float(fdm["velocities/h-dot-fps"]),
             # Body-frame angular velocities (rad/s)
             "p_rps": float(fdm["velocities/p-rad_sec"]),
             "q_rps": float(fdm["velocities/q-rad_sec"]),

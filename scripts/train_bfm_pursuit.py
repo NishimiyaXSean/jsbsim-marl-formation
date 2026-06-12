@@ -33,7 +33,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from src.environment.air_combat_env import AirCombatEnv
-from src.dynamics.bfm_actions import NUM_BFM_ACTIONS, get_bfm_action, describe_bfm_action
+from src.dynamics.bfm_actions import NUM_PURSUIT_ACTIONS, describe_pursuit_action
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Training config
@@ -62,7 +62,7 @@ class BFMPursuitWrapper(gym.Wrapper):
         self.observation_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(19,), dtype=np.float32,
         )
-        self.action_space = gym.spaces.Discrete(NUM_BFM_ACTIONS)
+        self.action_space = gym.spaces.Discrete(NUM_PURSUIT_ACTIONS)
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -161,23 +161,24 @@ def train():
     os.makedirs(log_dir, exist_ok=True)
 
     # Training env
-    env = AirCombatEnv(gui=False, record_tacview=False, action_mode="bfm")
+    env = AirCombatEnv(gui=False, record_tacview=False, action_mode="pursuit")
     env.set_curriculum_stage(1)
     env = BFMPursuitWrapper(env)
     env = Monitor(env, log_dir)
 
     # Eval env
-    eval_env_raw = AirCombatEnv(gui=False, record_tacview=False, action_mode="bfm")
+    eval_env_raw = AirCombatEnv(gui=False, record_tacview=False, action_mode="pursuit")
     eval_env_raw.set_curriculum_stage(1)
 
     print(f"{'='*55}")
     print(f"BFM Pursuit Training  |  JSBSim F-16  |  13 BFM Actions")
-    print(f"  Action space:   Discrete({NUM_BFM_ACTIONS})")
+    print(f"  Action space:   Discrete({NUM_PURSUIT_ACTIONS}) [pursuit subset]")
     print(f"  Observation:    Box(19,)")
     print(f"  Total steps:    {TOTAL_TIMESTEPS:,}")
     print(f"  Log dir:        {log_dir}")
     print(f"{'='*55}")
-    print(f"  BFM Actions: {', '.join(f'{i}={describe_bfm_action(i)}' for i in range(NUM_BFM_ACTIONS))}")
+    for i in range(NUM_PURSUIT_ACTIONS):
+        print(f"    {i}: {describe_pursuit_action(i)}")
     print(f"{'='*55}\n")
 
     model = PPO(
@@ -220,7 +221,7 @@ def train():
     print(f"\n{'='*55}")
     print("Final Evaluation (20 episodes, Tacview)")
 
-    tacview_env = AirCombatEnv(gui=False, record_tacview=True, action_mode="bfm")
+    tacview_env = AirCombatEnv(gui=False, record_tacview=True, action_mode="pursuit")
     tacview_env.set_curriculum_stage(eval_env_raw.curriculum_stage)
     os.makedirs("results/bfm_pursuit", exist_ok=True)
 

@@ -140,11 +140,11 @@ class BFMAutopilotConfig:
     """
 
     # ── Nz (elevator) channel ─────────────────────────────────────────
-    nz_kp: float = 0.20
-    nz_ki: float = 0.10
-    nz_kd: float = 0.05
-    nz_integral_min: float = -0.3
-    nz_integral_max: float = 0.3
+    nz_kp: float = 0.15
+    nz_ki: float = 0.05
+    nz_kd: float = 0.03
+    nz_integral_min: float = -0.5
+    nz_integral_max: float = 0.5
 
     # ── Roll (aileron) channel ────────────────────────────────────────
     roll_kp: float = 1.5
@@ -154,11 +154,11 @@ class BFMAutopilotConfig:
     roll_integral_max: float = 0.4
 
     # ── Speed (throttle) channel ──────────────────────────────────────
-    speed_kp: float = 0.008
-    speed_ki: float = 0.002
+    speed_kp: float = 0.01
+    speed_ki: float = 0.005
     speed_kd: float = 0.0
-    speed_integral_min: float = -0.3
-    speed_integral_max: float = 0.3
+    speed_integral_min: float = -0.5
+    speed_integral_max: float = 0.5
     min_target_speed_mps: float = 80.0
     max_target_speed_mps: float = 400.0
 
@@ -265,9 +265,14 @@ class BFMAutopilot:
         # JSBSim convention: n_z_g < 0 means positive-G (pilot pushed into seat).
         # BFM convention:   n_n > 0 means positive-G pull-up.
         # Therefore:        target_n_z_g = -(n_n).
+        # JSBSim F-16:  elevator > 0 → nose DOWN (less pull).
+        #               elevator < 0 → nose UP   (more pull).
+        # Trim: elevator ≈ -0.05 gives 1G level flight at ~176 m/s.
+        # PID corrects around trim: positive error → need MORE pull → MORE negative elevator.
+        ELEVATOR_TRIM = -0.05
         target_n_z_g = -n_n
-        nz_error = n_z_g - target_n_z_g   # + → need more pull (elevator +)
-        elevator = self._nz_pid.step(nz_error, dt)
+        nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
+        elevator = ELEVATOR_TRIM - self._nz_pid.step(nz_error, dt)
 
         # ── Aileron: track bank angle ────────────────────────────────
         # JSBSim convention: positive aileron → roll right (negative roll angle).
@@ -292,7 +297,12 @@ class BFMAutopilot:
         * n_x > 0  →  target speed increases  (open throttle to accelerate)
         * n_x < 0  →  target speed decreases  (close throttle to decelerate)
         * n_x = 0  →  hold current target
+
+        Includes a feed-forward bias of 0.8 (≈mil power trim) so the PID
+        only needs to correct the residual.
         """
+        THROTTLE_BIAS = 0.80  # F-16 trim throttle at ~176 m/s level flight
+
         # Bootstrap target on first call
         if self._target_speed_mps is None:
             self._target_speed_mps = airspeed_mps
@@ -306,4 +316,4 @@ class BFMAutopilot:
         ))
 
         speed_error = self._target_speed_mps - airspeed_mps  # + when need more speed
-        return self._speed_pid.step(speed_error, dt)
+        return float(np.clip(THROTTLE_BIAS + self._speed_pid.step(speed_error, dt), 0.0, 1.0))

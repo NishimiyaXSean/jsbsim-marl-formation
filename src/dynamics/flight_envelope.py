@@ -38,13 +38,12 @@ class EnvelopeConfig:
 
     # GPWS hard-coded pull-up altitudes  (attacker has more freedom to go low;
     # evader gets a higher floor to keep the engagement inside the arena)
-    gpws_trigger_alt_attacker: float = 300.0
+    gpws_trigger_alt_attacker: float = 500.0   # raised from 300 for training safety
     gpws_trigger_alt_evader: float = 800.0
     gpws_vz_threshold: float = -5.0        # must be descending faster than this (m/s)
 
-    # First-order lag for G-onset  (≈ 0.4 s time constant — realistic for F-16
-    # flight-control-system + engine spool-up)
-    tau_g: float = 0.4
+    # First-order lag for G-onset  (reduced from 0.4s for better autopilot tracking)
+    tau_g: float = 0.15
 
     # Roll control
     max_roll_rate: float = np.pi           # 180 deg/s
@@ -201,6 +200,6 @@ class FlightEnvelope:
                    else self.cfg.gpws_trigger_alt_evader)
 
         if alt_m < trigger and vz_mps < self.cfg.gpws_vz_threshold:
-            return self.cfg.max_g * g_scale, 0.0  # PULL UP, wings level
+            return self.cfg.max_g, 0.0  # PULL UP, wings level — always full G for safety
 
         return n_n, mu
