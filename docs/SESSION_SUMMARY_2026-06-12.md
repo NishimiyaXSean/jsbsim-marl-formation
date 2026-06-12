@@ -141,6 +141,16 @@ class ResidualExpertWrapper(gym.Wrapper):
 
 ---
 
+## 已保存模型
+
+| Run | Seed | 最终 Eval | 训练峰值 | 路径 |
+|-----|------|-----------|---------|------|
+| s2_v2 | 0 | 0% (Stage 3) | 40% Stage 3 | `marl_runs/single_pursuit_0612_2103_s0` |
+| s2_v2 | 1 | 10% (Stage 3) | 35% Stage 3 | `marl_runs/single_pursuit_0612_2103_s1` |
+| s2_v2 | 2 | 5% (Stage 3) | 30% Stage 2 | `marl_runs/single_pursuit_0612_2103_s2` |
+
+最终 Tacview 导出: `results/single_pursuit/single_pursuit_engagement.txt.acmi`
+
 ## 下一步建议
 
 1. **碰撞半径调回 100m** — 200m 太宽松，逐步缩小验证泛化能力
