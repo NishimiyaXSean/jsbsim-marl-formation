@@ -32,16 +32,14 @@ import gymnasium as gym
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ResidualExpertWrapper(gym.Wrapper):
-    """Agent outputs residual correction added to a fixed expert baseline.
+    """Agent learns residual on top of an adaptive expert that steers toward target.
 
-    Expert = [0, 0, 1] → straight flight, full throttle.
-    Agent learns residual ∈ [-1,1]³ on top.
+    Expert reads observation to compute: aileron steers toward target bearing,
+    throttle is full.  Agent adds ±0.3 residual corrections.
 
-    This guarantees the baseline is never lost — unlike bias init
-    which PPO updates can override.
+    This guarantees the expert guidance is never lost — RL only fine-tunes.
     """
-    EXPERT = np.array([0.0, 0.0, 1.0], dtype=np.float32)  # [ail, d_alt, d_spd]
-    RESIDUAL_SCALE = 0.3  # agent can adjust ±0.3 around expert
+    RESIDUAL_SCALE = 0.3
 
     def __init__(self, env):
         super().__init__(env)
@@ -49,11 +47,38 @@ class ResidualExpertWrapper(gym.Wrapper):
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32,
         )
+        self._last_obs = np.zeros(19, dtype=np.float32)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._last_obs = np.asarray(obs, dtype=np.float32)
+        return obs, info
 
     def step(self, action):
+        expert = self._compute_expert(self._last_obs)
         residual = np.asarray(action, dtype=np.float32) * self.RESIDUAL_SCALE
-        combined = np.clip(self.EXPERT + residual, -1.0, 1.0)
-        return self.env.step(combined)
+        combined = np.clip(expert + residual, -1.0, 1.0)
+        obs, rew, term, trunc, info = self.env.step(combined)
+        self._last_obs = np.asarray(obs, dtype=np.float32)
+        return obs, rew, term, trunc, info
+
+    def _compute_expert(self, obs: np.ndarray) -> np.ndarray:
+        """Steer gently toward target, full throttle. Avoid aggressive turns."""
+        rel_x = float(obs[0])
+        rel_y = float(obs[1])
+        bearing = np.arctan2(rel_y, max(rel_x, 0.01))  # radians
+        # Gentle proportional steer — aggressive enough to track, not crash
+        ail = float(np.clip(bearing * 0.3, -0.2, 0.2))
+        return np.array([ail, 0.0, 1.0], dtype=np.float32)
+
+    # Delegate curriculum_stage to underlying env
+    @property
+    def curriculum_stage(self):
+        return self.env.curriculum_stage
+
+    @curriculum_stage.setter
+    def curriculum_stage(self, value):
+        self.env.curriculum_stage = value
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -237,7 +262,8 @@ def train():
     min_dists = []
     best_ep_reward = -float("inf")
     best_ep_idx = 0
-    EXPERT = ResidualExpertWrapper.EXPERT
+    # Create a wrapper just for its _compute_expert method
+    expert_wrapper = ResidualExpertWrapper(tacview_env)
     RES_SCALE = ResidualExpertWrapper.RESIDUAL_SCALE
 
     for ep in range(EVAL_EPISODES):
@@ -246,8 +272,9 @@ def train():
         total_r = 0.0
         ep_min_dist = 8000.0
         while not done:
+            expert = expert_wrapper._compute_expert(np.asarray(obs, dtype=np.float32))
             residual, _ = model.predict(obs, deterministic=True)
-            action = np.clip(EXPERT + np.asarray(residual) * RES_SCALE, -1.0, 1.0)
+            action = np.clip(expert + np.asarray(residual) * RES_SCALE, -1.0, 1.0)
             obs, rew, terminated, truncated, info = tacview_env.step(action)
             done = terminated or truncated
             total_r += rew

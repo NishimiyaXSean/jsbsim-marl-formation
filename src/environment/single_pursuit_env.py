@@ -55,7 +55,7 @@ import gymnasium as gym
 import numpy as np
 
 from src.dynamics.aircraft import Aircraft
-from src.dynamics.flight_controller import FlightController, FlightControlTargets
+from src.dynamics.flight_controller import FlightController, FlightControlTargets, ELEVATOR_TRIM
 from src.utils.geometry import compute_forward_vector, compute_los, compute_tactical_angles
 
 
@@ -270,6 +270,14 @@ class SinglePursuitEnv(gym.Env):
         for _ in range(DECISION_STEPS):
             # --- FC altitude + speed, direct aileron for heading ---
             elev = self.fc.alt.compute(self.pursuer.state["alt_m"], self._target.altitude_m, dt)
+            # Bank compensation: when banked, boost elevator to maintain vertical lift
+            import math
+            roll_abs_rad = math.radians(abs(self.pursuer.state["roll_deg"]))
+            cos_roll = max(math.cos(roll_abs_rad), 0.1)
+            bank_factor = 1.0 / cos_roll
+            elev = ELEVATOR_TRIM + (elev - ELEVATOR_TRIM) * bank_factor
+            elev = float(np.clip(elev, -1.0, 1.0))
+
             thr = self.fc.spd.compute(self.pursuer.state["airspeed_mps"], self._target.speed_mps, dt)
             ail = raw_ail * 0.30  # direct aileron: ±0.3 range
             rud = 0.0
