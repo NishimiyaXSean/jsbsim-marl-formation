@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import os
 import sys
@@ -39,7 +40,7 @@ class ResidualExpertWrapper(gym.Wrapper):
 
     This guarantees the expert guidance is never lost — RL only fine-tunes.
     """
-    RESIDUAL_SCALE = 0.3
+    RESIDUAL_SCALE = 0.5  # RL can add ±0.5 on top of expert (±0.2)
 
     def __init__(self, env):
         super().__init__(env)
@@ -63,11 +64,10 @@ class ResidualExpertWrapper(gym.Wrapper):
         return obs, rew, term, trunc, info
 
     def _compute_expert(self, obs: np.ndarray) -> np.ndarray:
-        """Steer gently toward target, full throttle. Avoid aggressive turns."""
+        """Steer toward target, full throttle."""
         rel_x = float(obs[0])
         rel_y = float(obs[1])
-        bearing = np.arctan2(rel_y, max(rel_x, 0.01))  # radians
-        # Gentle proportional steer — aggressive enough to track, not crash
+        bearing = np.arctan2(rel_y, max(rel_x, 0.01))
         ail = float(np.clip(bearing * 0.3, -0.2, 0.2))
         return np.array([ail, 0.0, 1.0], dtype=np.float32)
 
@@ -85,13 +85,13 @@ class ResidualExpertWrapper(gym.Wrapper):
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 100_000
+TOTAL_TIMESTEPS = 200_000
 CURRICULUM_STAGES = [1, 2, 3]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
 
 EVAL_EPISODES = 20
 EVAL_FREQ = 10_000
-TARGET_CAPTURE_RATE = 0.70
+TARGET_CAPTURE_RATE = 0.50
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -184,9 +184,10 @@ class TacviewEvalCallback(BaseCallback):
 #  Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def train():
+def train(seed: int = 0):
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
-    log_dir = os.path.abspath(f"./marl_runs/single_pursuit_{timestamp}")
+    run_name = f"single_pursuit_{timestamp}_s{seed}"
+    log_dir = os.path.abspath(f"./marl_runs/{run_name}")
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs("data/tacview", exist_ok=True)
 
@@ -386,8 +387,21 @@ def _plot_best_episode(env: SinglePursuitEnv, ep_idx: int) -> None:
 
 if __name__ == "__main__":
     import logging
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--steps", type=int, default=TOTAL_TIMESTEPS)
+    args = parser.parse_args()
+
+    # Set seeds for reproducibility
+    import numpy as np
+    import torch
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    TOTAL_TIMESTEPS = args.steps
+
     os.environ.setdefault("JSBSIM_DEBUG", "0")
     warnings.filterwarnings("ignore")
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
     logging.getLogger("gymnasium").setLevel(logging.WARNING)
-    train()
+    train(seed=args.seed)
