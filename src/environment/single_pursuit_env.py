@@ -71,25 +71,26 @@ DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 30 micro-steps per decision
 MAX_EPISODE_TIME = 120.0   # seconds before timeout
 
 # Action scaling (raw [-1,1] → real units)
-MAX_D_HEADING_DEG = 5.0     # per decision (0.5s) — matches ~10°/s achievable turn rate
-MAX_D_ALT_M = 10.0          # per decision — matches ~20 m/s achievable climb/descent
-MAX_D_SPEED_MPS = 5.0       # per decision — gradual speed changes
+# With engine running, F-16 can sustain ~267 m/s at 3000m — plenty of energy.
+MAX_D_HEADING_DEG = 10.0    # per decision (0.5s) — up to 20°/s commanded turn
+MAX_D_ALT_M = 15.0           # per decision — up to 30 m/s climb/descent
+MAX_D_SPEED_MPS = 10.0       # per decision — faster speed changes
 
 # Observation normalisation constants
-MAX_DIST = 8000.0
+MAX_DIST = 10000.0
 MAX_HEIGHT = 5000.0
 MAX_VEL = 400.0
 MAX_ANG_VEL = np.pi
 
 # Reward weights
-REWARD_PROGRESS = 1.0       # was 0.3 — primary pursuit signal
-REWARD_ATA = 3.0            # was 1.5
+REWARD_PROGRESS = 2.0        # primary pursuit signal — closing distance
+REWARD_ATA = 3.0             # pointing at target
 REWARD_ALTITUDE_BONUS = 0.0  # disabled
 REWARD_ENERGY_PENALTY = 0.0  # disabled
 REWARD_GROUND_WARNING = 2.0
-REWARD_SUCCESS = 200.0       # was 100
-REWARD_CRASH = -100.0        # was -50
-REWARD_LOST_TARGET = -100.0
+REWARD_SUCCESS = 500.0       # strong positive reinforcement for capture
+REWARD_CRASH = -200.0        # strong negative for crashing
+REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 
 
 @dataclass
@@ -167,7 +168,7 @@ class SinglePursuitEnv(gym.Env):
             lat_deg=30.0, lon_deg=120.0,
             alt_ft=int(3000 * 3.28084),
             heading_deg=pursuer_hdg,
-            speed_kts=400,
+            speed_kts=400,  # start fast — engine maintains it now
             trim=False,
         )
         pursuer_ned = np.array([
@@ -177,28 +178,62 @@ class SinglePursuitEnv(gym.Env):
         ])
         self.pursuer.position_ned = pursuer_ned
 
-        # --- Target spawn ---
-        target_hdg = rng.uniform(0.0, 360.0)
+        # --- Target spawn (curriculum-aware) ---
+        if self.curriculum_stage == 1:
+            # Stage 1: pursuer directly behind target, same heading.
+            # Simplest possible task — just close distance and fine-tune.
+            # No turning required; the agent learns speed/altitude control first.
+            target_dist = rng.uniform(800, 1800)
+            # Target is directly ahead of pursuer (±5°)
+            target_bearing = (pursuer_hdg + rng.uniform(-5, 5)) % 360.0
+            target_bearing_rad = np.deg2rad(target_bearing)
+
+            target_ned = np.array([
+                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
+                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
+                pursuer_ned[2] + rng.uniform(-100, 100),
+            ])
+            # Target flies same direction as pursuer
+            target_hdg = (pursuer_hdg + rng.uniform(-5, 5)) % 360.0
+        elif self.curriculum_stage == 2:
+            # Stage 2: target in front arc (±45°), similar heading (±30°)
+            target_dist = rng.uniform(1000, 2500)
+            bearing_offset = rng.uniform(-45, 45)
+            target_bearing = (pursuer_hdg + bearing_offset) % 360.0
+            target_bearing_rad = np.deg2rad(target_bearing)
+            target_ned = np.array([
+                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
+                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
+                pursuer_ned[2] + rng.uniform(-200, 200),
+            ])
+            target_hdg = (pursuer_hdg + rng.uniform(-30, 30)) % 360.0
+        else:
+            # Stage 3: full random (original behavior)
+            target_hdg = rng.uniform(0.0, 360.0)
+            bearing_offset = rng.uniform(-180, 180)
+            target_bearing_rad = np.deg2rad(pursuer_hdg + bearing_offset)
+            target_dist = rng.uniform(1000, 3000)
+            target_ned = np.array([
+                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
+                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
+                pursuer_ned[2] + rng.uniform(-300, 300),
+            ])
+
         self.target_ac.reset(
             lat_deg=30.0, lon_deg=120.0,
             alt_ft=int(3000 * 3.28084),
             heading_deg=target_hdg,
-            speed_kts=400,
+            speed_kts=350,  # 180 m/s cruise for target
             trim=False,
         )
-        target_ned = np.array([
-            pursuer_ned[0] + rng.uniform(1000, 3000) * rng.choice([-1, 1]),
-            pursuer_ned[1] + rng.uniform(1000, 3000) * rng.choice([-1, 1]),
-            pursuer_ned[2] + rng.uniform(-300, 300),
-        ])
         self.target_ac.position_ned = target_ned
 
-        # Flight controller + target reset
+        # Flight controller + target reset — start fast to give speed advantage
         self.fc.reset()
         self._target = FlightControlTargets(
             heading_deg=pursuer_hdg,
             altitude_m=3000.0,
-            speed_mps=180.0,
+            speed_mps=250.0,  # start fast — F-16 can sustain this
         )
 
         self._step_counter = 0
@@ -302,7 +337,7 @@ class SinglePursuitEnv(gym.Env):
                 terminated = True
                 reason = "success"
                 break
-            if current_dist > 8000.0:
+            if current_dist > 10000.0:
                 total_reward += REWARD_LOST_TARGET
                 terminated = True
                 reason = "lost_target"
@@ -377,21 +412,23 @@ class SinglePursuitEnv(gym.Env):
     def _generate_target_profile(self, rng: np.random.Generator) -> TargetProfile:
         """Generate stage-dependent target motion."""
         tp = TargetProfile()
-        tp.speed_mps = 180.0
         tp.alt_m = 3500.0
 
         if self.curriculum_stage == 1:
-            # Straight and level — easiest
+            # Straight and level — easiest; slower target for easy catch
+            tp.speed_mps = 130.0  # 250 kts — big speed advantage for pursuer
             tp.heading_deg = rng.uniform(0, 360)
             tp.heading_rate_dps = 0.0
             tp.alt_rate_mps = 0.0
         elif self.curriculum_stage == 2:
-            # Gentle weaving
+            # Gentle weaving, moderate speed
+            tp.speed_mps = 160.0
             tp.heading_deg = rng.uniform(0, 360)
             tp.heading_rate_dps = rng.uniform(5, 15) * rng.choice([-1, 1])
             tp.alt_rate_mps = rng.uniform(-3, 3)
         else:
-            # Evasive — random changes every few seconds
+            # Evasive — random changes, faster
+            tp.speed_mps = 180.0
             tp.heading_deg = rng.uniform(0, 360)
             tp.heading_rate_dps = rng.uniform(-20, 20)
             tp.alt_rate_mps = rng.uniform(-8, 8)

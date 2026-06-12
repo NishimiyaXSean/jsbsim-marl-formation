@@ -30,13 +30,13 @@ from src.environment.single_pursuit_env import SinglePursuitEnv
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 500_000
+TOTAL_TIMESTEPS = 200_000
 CURRICULUM_STAGES = [1, 2, 3]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
 
 EVAL_EPISODES = 20
-EVAL_FREQ = 25_000
-TARGET_CAPTURE_RATE = 0.70   # lowered from 0.80 for faster progression
+EVAL_FREQ = 10_000
+TARGET_CAPTURE_RATE = 0.70
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

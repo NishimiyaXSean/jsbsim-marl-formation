@@ -57,9 +57,9 @@ class AltitudeStabilizer:
     def __init__(self) -> None:
         # Negative kp: positive alt error → need climb → negative elevator (pull)
         self._pid = PIDController(
-            kp=0.006, ki=0.0003, kd=0.001,
-            output_min=-0.20, output_max=0.20,
-            integral_min=-0.10, integral_max=0.10,
+            kp=0.008, ki=0.0005, kd=0.002,
+            output_min=-0.30, output_max=0.30,
+            integral_min=-0.15, integral_max=0.15,
         )
 
     def reset(self) -> None:
@@ -113,18 +113,18 @@ class HeadingStabilizer:
     feed-forward boost to compensate for the reduced vertical lift component.
     """
 
-    ROLL_PER_DEG_HEADING = 1.5      # deg bank per deg heading error (reduced from 2.0)
-    MAX_BANK_DEG = 45.0              # reduced from 70° to prevent altitude bleed
+    ROLL_PER_DEG_HEADING = 2.5      # deg bank per deg heading error (aggressive for pursuit)
+    MAX_BANK_DEG = 70.0              # allow up to 70° bank for fast turns (altitude channel compensates)
 
     def __init__(self) -> None:
         self._roll_pid = PIDController(
-            kp=0.06, ki=0.02, kd=0.02,
-            output_min=-0.12, output_max=0.12,
-            integral_min=-0.05, integral_max=0.05,
+            kp=0.10, ki=0.03, kd=0.03,
+            output_min=-0.50, output_max=0.50,
+            integral_min=-0.10, integral_max=0.10,
         )
         self._rudder_pid = PIDController(
-            kp=0.05, ki=0.01, kd=0.0,
-            output_min=-0.05, output_max=0.05,
+            kp=0.08, ki=0.02, kd=0.0,
+            output_min=-0.10, output_max=0.10,
         )
 
     def reset(self) -> None:
@@ -211,10 +211,15 @@ class FlightController:
         compensate for the reduced vertical lift component.
         """
         # Bank-compensated altitude target: when banked, the vertical
-        # component of lift is cos(bank).  We need more elevator (more
-        # negative) to pull the same vertical G.
-        roll_abs = abs(state["roll_deg"])
-        bank_factor = 1.0 + (roll_abs / 45.0) * 0.6  # up to 1.6× at 45° bank
+        # component of lift is cos(bank).  We need more elevator to pull
+        # higher total G to maintain the same vertical component.
+        import math
+        roll_abs_rad = math.radians(abs(state["roll_deg"]))
+        cos_roll = math.cos(roll_abs_rad)
+        if cos_roll > 0.1:
+            bank_factor = 1.0 / cos_roll  # e.g. 1.0 at 0°, 2.0 at 60°, 2.9 at 70°
+        else:
+            bank_factor = 10.0  # near 90° bank — max compensation
 
         elevator_base = self.alt.compute(state["alt_m"], target.altitude_m, dt)
         # Re-center around trim and apply bank boost
