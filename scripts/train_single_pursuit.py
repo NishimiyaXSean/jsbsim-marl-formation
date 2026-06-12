@@ -91,7 +91,7 @@ STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
 
 EVAL_EPISODES = 20
 EVAL_FREQ = 10_000
-TARGET_CAPTURE_RATE = 0.50
+TARGET_CAPTURE_RATE = 0.40  # lower threshold for smoother progression
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -150,17 +150,12 @@ class CurriculumCallback(BaseCallback):
             self.model.save(best_path)
             print(f"  → New best model saved: {best_path}")
 
-        # Stage advancement
-        new_stage = 1
-        for s in CURRICULUM_STAGES:
-            new_stage = s
-            if capture_rate < TARGET_CAPTURE_RATE:
-                break
-
-        if new_stage != self._current_stage:
-            print(f"  >> Advancing to curriculum stage {new_stage}")
-            self._current_stage = new_stage
-            self._eval_env.curriculum_stage = new_stage
+        # Stage advancement — one stage at a time
+        if (capture_rate >= TARGET_CAPTURE_RATE
+                and self._current_stage < CURRICULUM_STAGES[-1]):
+            self._current_stage += 1
+            print(f"  >> Advancing to curriculum stage {self._current_stage}")
+            self._eval_env.curriculum_stage = self._current_stage
             self._best_capture_rate = -1.0  # reset for new stage
 
 
