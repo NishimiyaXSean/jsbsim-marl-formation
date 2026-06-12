@@ -21,7 +21,7 @@ import numpy as np
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
 from src.dynamics.aircraft import Aircraft
-from src.dynamics.bfm_actions import get_bfm_action, NUM_BFM_ACTIONS
+from src.dynamics.bfm_actions import get_bfm_action, get_pursuit_action, NUM_BFM_ACTIONS, NUM_PURSUIT_ACTIONS
 from src.dynamics.autopilot import BFMAutopilot
 from src.dynamics.flight_envelope import FlightEnvelope
 from src.environment.observations import compute_obs, compute_global_state
@@ -69,11 +69,12 @@ class AirCombatEnv(MultiAgentEnv):
         record_tacview: bool = False,
         reward_config: Optional[RewardConfig] = None,
         jsbsim_data_dir: Optional[str] = None,
-        action_mode: Literal["continuous", "bfm"] = "continuous",
+        action_mode: Literal["continuous", "bfm", "pursuit"] = "continuous",
     ):
         super().__init__()
 
-        # Action mode: "continuous" (direct surface) or "bfm" (discrete BFM → autopilot)
+        # Action mode: "continuous" (direct surface), "bfm" (13 BFM actions),
+        # or "pursuit" (9 safe low-G pursuit actions)
         self.action_mode: str = action_mode
 
         # Agent identities
@@ -107,16 +108,22 @@ class AirCombatEnv(MultiAgentEnv):
         self.MAX_G = 9.0
         self.MIN_G = -3.0
 
-        # Bounds
-        self.ATTACKER_DEATH_FLOOR = 10.0      # altitude (m) — near ground level
-        self.EVADER_DEATH_FLOOR = 10.0         # same for evader (was 595m, which caused false kills)
-        self.CEILING = 12000.0                 # F-16 service ceiling ~50,000 ft
+        # Bounds — generous safety margins for training
+        self.ATTACKER_DEATH_FLOOR = 100.0       # altitude (m) — generous buffer
+        self.EVADER_DEATH_FLOOR = 100.0
+        self.CEILING = 12000.0                  # F-16 service ceiling ~50,000 ft
 
         # Action space
         if self.action_mode == "bfm":
-            # 13 discrete Basic Fighter Maneuvers
+            # 13 discrete Basic Fighter Maneuvers (full combat)
             self.action_spaces = {
                 agent: gym.spaces.Discrete(NUM_BFM_ACTIONS)
+                for agent in self.possible_agents
+            }
+        elif self.action_mode == "pursuit":
+            # 9 safe low-G pursuit actions
+            self.action_spaces = {
+                agent: gym.spaces.Discrete(NUM_PURSUIT_ACTIONS)
                 for agent in self.possible_agents
             }
         else:
@@ -255,8 +262,8 @@ class AirCombatEnv(MultiAgentEnv):
                 ac = self._aircraft_map[agent_id]
                 is_attacker = (agent_id == "attacker_0")
 
-                if self.action_mode == "bfm":
-                    # ── BFM discrete action pipeline ──────────────────
+                if self.action_mode in ("bfm", "pursuit"):
+                    # ── BFM / pursuit discrete action pipeline ────────────
                     act_idx = int(actions.get(agent_id, 0))
 
                     # Curriculum override: evader outside warning radius flies straight
@@ -264,7 +271,10 @@ class AirCombatEnv(MultiAgentEnv):
                             and self.prev_dist > self.warning_radius):
                         act_idx = 0
 
-                    n_x_raw, n_n_raw, mu_raw = get_bfm_action(act_idx)
+                    if self.action_mode == "pursuit":
+                        n_x_raw, n_n_raw, mu_raw = get_pursuit_action(act_idx)
+                    else:
+                        n_x_raw, n_n_raw, mu_raw = get_bfm_action(act_idx)
 
                     # Flight envelope processing
                     ac_state = ac.state
@@ -272,7 +282,10 @@ class AirCombatEnv(MultiAgentEnv):
                     # Vertical speed (world-frame, positive = climbing).
                     # Approximated from body-Z velocity for GPWS; near wings-level
                     # this is accurate.  Body-Z down → negate.
-                    vz_mps = -ac_state["w_fps"] * 0.3048
+                    # World-frame vertical speed (positive = climbing).
+                    # Use h_dot_fps (world-frame) — w_fps is body-frame and
+                    # gives wrong sign during banked turns (GPWS missed descents).
+                    vz_mps = ac_state["h_dot_fps"] * 0.3048
 
                     n_x_env, n_n_env, mu_env = self._envelopes[agent_id].step(
                         n_x_raw, n_n_raw, mu_raw,
