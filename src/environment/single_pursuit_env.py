@@ -238,7 +238,23 @@ class SinglePursuitEnv(gym.Env):
         )
 
         self._step_counter = 0
-        self._prev_dist = float(np.linalg.norm(pursuer_ned - target_ned))
+
+        # ── Warmup: 3s at trim to stabilise engine and aerodynamics ──
+        # Without this, the aircraft starts in a transient state (low n_z,
+        # engine spooling) and loses ~60m altitude before recovering.
+        warmup_steps = int(3.0 * CTRL_FREQ)
+        for _ in range(warmup_steps):
+            self.pursuer.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
+            self.target_ac.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
+            self.pursuer.run()
+            self.target_ac.run()
+            self.pursuer.position_ned[0:2] += self.pursuer.velocity_ned[0:2] * PHYSICS_DT
+            self.target_ac.position_ned[0:2] += self.target_ac.velocity_ned[0:2] * PHYSICS_DT
+            self.pursuer.position_ned[2] = self.pursuer.state["alt_m"]
+            self.target_ac.position_ned[2] = self.target_ac.state["alt_m"]
+
+        self._prev_dist = float(np.linalg.norm(
+            self.pursuer.position_ned - self.target_ac.position_ned))
         self._tacview_frames = []
         self._target_profile = self._generate_target_profile(rng, target_hdg)
 
