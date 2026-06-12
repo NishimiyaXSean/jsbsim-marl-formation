@@ -89,3 +89,66 @@ def generate_spawn(stage: int, rng: Optional[np.random.Generator] = None) -> dic
         },
         "ref_lla": (ref_lat, ref_lon, ref_alt_m),
     }
+
+
+def generate_pursuit_spawn(stage: int, rng: Optional[np.random.Generator] = None) -> dict:
+    """Generate spawn for single-agent pursuit: target in front of pursuer.
+
+    Stage 1: target straight ahead, same direction, slow — just close distance.
+    Stage 2: target with mild heading offset — learn to turn and track.
+
+    Returns same dict schema as ``generate_spawn``.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Pursuer at origin-ish
+    pursuer_z = rng.uniform(2800.0, 3200.0)
+    pursuer_hdg = rng.uniform(0.0, 360.0)
+    pursuer_ned = np.array([rng.uniform(-300, 300), rng.uniform(-300, 300), pursuer_z])
+
+    if stage == 1:
+        # Stage 1: target in front (±30°), same direction, slow
+        bearing_offset = rng.uniform(-30.0, 30.0)
+        dist = rng.uniform(1000.0, 2500.0)
+        target_hdg_offset = rng.uniform(-15.0, 15.0)
+        target_speed = 130.0  # m/s — easy catch
+    else:
+        # Stage 2: wider bearing, more heading variance, faster target
+        bearing_offset = rng.uniform(-45.0, 45.0)
+        dist = rng.uniform(1500.0, 3000.0)
+        target_hdg_offset = rng.uniform(-30.0, 30.0)
+        target_speed = 160.0
+
+    target_bearing = (pursuer_hdg + bearing_offset) % 360.0
+    target_bearing_rad = np.deg2rad(target_bearing)
+    target_hdg = (pursuer_hdg + target_hdg_offset) % 360.0
+    target_z = np.clip(pursuer_z + rng.uniform(-200.0, 200.0), 1500.0, 4000.0)
+
+    target_ned = np.array([
+        pursuer_ned[0] + dist * np.cos(target_bearing_rad),
+        pursuer_ned[1] + dist * np.sin(target_bearing_rad),
+        target_z,
+    ])
+
+    ref_alt_m = (pursuer_z + target_z) / 2.0
+
+    return {
+        "attacker": {
+            "lat_deg": 30.0,
+            "lon_deg": 120.0,
+            "alt_ft": m_to_ft(pursuer_z),
+            "heading_deg": pursuer_hdg,
+            "speed_kts": mps_to_kts(180.0),  # trim-equilibrium speed
+            "ned": pursuer_ned,
+        },
+        "evader": {
+            "lat_deg": 30.0,
+            "lon_deg": 120.0,
+            "alt_ft": m_to_ft(target_z),
+            "heading_deg": target_hdg,
+            "speed_kts": mps_to_kts(180.0),  # same trim speed as attacker
+            "ned": target_ned,
+        },
+        "ref_lla": (30.0, 120.0, ref_alt_m),
+    }
