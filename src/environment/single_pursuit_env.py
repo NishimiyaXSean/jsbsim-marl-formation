@@ -83,8 +83,8 @@ MAX_VEL = 400.0
 MAX_ANG_VEL = np.pi
 
 # Reward weights
-REWARD_PROGRESS = 2.0        # primary pursuit signal — closing distance
-REWARD_ATA = 3.0             # pointing at target
+REWARD_PROGRESS = 5.0        # primary pursuit signal — closing distance
+REWARD_ATA = 5.0             # pointing at target
 REWARD_ALTITUDE_BONUS = 0.0  # disabled
 REWARD_ENERGY_PENALTY = 0.0  # disabled
 REWARD_GROUND_WARNING = 2.0
@@ -343,6 +343,9 @@ class SinglePursuitEnv(gym.Env):
             # Progress: closing distance (positive when closing)
             delta_dist = self._prev_dist - current_dist
             total_reward += REWARD_PROGRESS * delta_dist
+            # Terminal boost: extra closing reward within 500m to encourage aggressive terminal phase
+            if current_dist < 500.0:
+                total_reward += REWARD_PROGRESS * delta_dist * 2.0
 
             # ATA: pointing at target
             total_reward += REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
@@ -352,6 +355,9 @@ class SinglePursuitEnv(gym.Env):
 
             # Energy: penalty for rapid throttle changes
             total_reward -= REWARD_ENERGY_PENALTY * abs(float(thr) - 0.8) * dt
+            # Time pressure: small penalty that grows over time to discourage leisurely pursuit
+            time_ratio = self._step_counter / (CTRL_FREQ * MAX_EPISODE_TIME)
+            total_reward -= 0.5 * time_ratio * dt
 
             # Ground warning
             if a_pos[2] < 800.0:
