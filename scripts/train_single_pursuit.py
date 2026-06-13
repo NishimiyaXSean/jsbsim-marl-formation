@@ -1,7 +1,7 @@
 """Train a single-agent PPO policy for F-16 pursuit using Stable-Baselines3.
 
 The agent controls high-level flight targets (heading, altitude, speed)
-through a stabilised FlightController.  Training follows a 3-stage
+through a stabilised FlightController.  Training follows a 5-stage
 curriculum with increasing target difficulty.
 
 Usage:
@@ -113,13 +113,14 @@ class ResidualExpertWrapper(gym.Wrapper):
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 200_000
-CURRICULUM_STAGES = [1, 2, 3]
-STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)
+TOTAL_TIMESTEPS = 500_000
+CURRICULUM_STAGES = [1.0, 1.5, 2.0, 2.5, 3.0]
+STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)  # 100k per stage
 
-EVAL_EPISODES = 20
-EVAL_FREQ = 10_000
-TARGET_CAPTURE_RATE = 0.40  # lower threshold for smoother progression
+EVAL_EPISODES = 30
+EVAL_FREQ = 15_000
+TARGET_CAPTURE_RATE_STAGE_1_2 = 0.40   # stage 1.0→1.5 and 1.5→2.0
+TARGET_CAPTURE_RATE_STAGE_2_3 = 0.50   # stage 2.0→2.5 and 2.5→3.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -127,14 +128,15 @@ TARGET_CAPTURE_RATE = 0.40  # lower threshold for smoother progression
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class CurriculumCallback(BaseCallback):
-    """Handles stage advancement with automatic evaluation."""
+    """Handles 5-stage curriculum advancement with automatic evaluation."""
 
-    def __init__(self, eval_env: SinglePursuitEnv, log_dir: str, verbose: int = 0):
+    def __init__(self, eval_env, log_dir: str, verbose: int = 0):
         super().__init__(verbose)
         self._eval_env = eval_env
         self._log_dir = log_dir
         self._best_capture_rate = -1.0
-        self._current_stage = 1
+        self._current_stage = 1.0
+        self._eval_metrics: list = []  # per-eval metrics for CSV
 
     def _on_step(self) -> bool:
         return True
@@ -145,11 +147,12 @@ class CurriculumCallback(BaseCallback):
             return
 
         # Evaluate
-        successes, min_dists = 0, []
+        successes, min_dists, intercept_times = 0, [], []
         for _ in range(EVAL_EPISODES):
             obs, _ = self._eval_env.reset()
             done = False
             ep_min_dist = 8000.0
+            ep_intercept_time = 120.0
             while not done:
                 action, _ = self.model.predict(obs, deterministic=True)
                 obs, _, terminated, truncated, info = self._eval_env.step(action)
@@ -158,31 +161,51 @@ class CurriculumCallback(BaseCallback):
                     ep_min_dist = min(ep_min_dist, info["min_dist"])
             if info.get("reason") == "success":
                 successes += 1
+                # Get intercept time from the base env's step counter
+                base_env = self._eval_env._base_env  # ResidualExpertWrapper -> SinglePursuitEnv
+                ep_intercept_time = base_env._step_counter / 60.0  # CTRL_FREQ
             min_dists.append(ep_min_dist)
+            intercept_times.append(ep_intercept_time)
 
         capture_rate = successes / EVAL_EPISODES
         avg_min_dist = np.mean(min_dists)
+        avg_intercept_time = np.mean(intercept_times)
 
         self.logger.record("eval/capture_rate", capture_rate)
         self.logger.record("eval/avg_min_dist", avg_min_dist)
 
         print(f"\n  [Eval @ {self.num_timesteps:,} steps] "
-              f"stage={self._current_stage} "
+              f"stage={self._current_stage:.1f} "
               f"capture_rate={capture_rate:.0%} "
-              f"avg_min_dist={avg_min_dist:.0f}m")
+              f"avg_min_dist={avg_min_dist:.0f}m "
+              f"avg_intercept={avg_intercept_time:.1f}s")
+
+        # Record metrics for CSV
+        self._eval_metrics.append({
+            "timesteps": self.num_timesteps,
+            "stage": self._current_stage,
+            "capture_rate": capture_rate,
+            "avg_min_dist": avg_min_dist,
+            "avg_intercept_time": avg_intercept_time,
+        })
 
         # Save best model
         if capture_rate > self._best_capture_rate:
             self._best_capture_rate = capture_rate
             best_path = os.path.join(self._log_dir, "best_model")
             self.model.save(best_path)
-            print(f"  → New best model saved: {best_path}")
+            print(f"  -> New best model saved: {best_path}")
 
-        # Stage advancement — one stage at a time
-        if (capture_rate >= TARGET_CAPTURE_RATE
-                and self._current_stage < CURRICULUM_STAGES[-1]):
-            self._current_stage += 1
-            print(f"  >> Advancing to curriculum stage {self._current_stage}")
+        # Stage advancement with different thresholds
+        threshold = (TARGET_CAPTURE_RATE_STAGE_1_2
+                     if self._current_stage < 2.0
+                     else TARGET_CAPTURE_RATE_STAGE_2_3)
+        if capture_rate >= threshold and not np.isclose(self._current_stage, CURRICULUM_STAGES[-1]):
+            # Advance to next stage (0.5 increment)
+            current_idx = next(i for i, s in enumerate(CURRICULUM_STAGES)
+                               if np.isclose(s, self._current_stage))
+            self._current_stage = CURRICULUM_STAGES[current_idx + 1]
+            print(f"  >> Advancing to curriculum stage {self._current_stage:.1f}")
             self._eval_env.curriculum_stage = self._current_stage
             self._best_capture_rate = -1.0  # reset for new stage
 
@@ -215,11 +238,11 @@ def train(seed: int = 0):
     os.makedirs("data/tacview", exist_ok=True)
 
     # Environment — agent learns residual correction to expert baseline
-    base_env = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    base_env = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
     env = ResidualExpertWrapper(base_env)
     env = Monitor(env, log_dir)
 
-    eval_base = SinglePursuitEnv(curriculum_stage=1, record_tacview=False)
+    eval_base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
     eval_env = ResidualExpertWrapper(eval_base)
 
     # Print setup
@@ -238,7 +261,7 @@ def train(seed: int = 0):
         verbose=1,
         learning_rate=1e-4,
         n_steps=2048,
-        batch_size=128,
+        batch_size=256,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
@@ -249,7 +272,7 @@ def train(seed: int = 0):
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
-            net_arch=dict(pi=[64, 64], vf=[64, 64]),
+            net_arch=dict(pi=[128, 128], vf=[128, 128]),
             activation_fn=torch.nn.ReLU,
             ortho_init=True,
         ),
@@ -257,9 +280,10 @@ def train(seed: int = 0):
 
     # Train
     try:
+        curriculum_cb = CurriculumCallback(eval_env, log_dir)
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
-            callback=CurriculumCallback(eval_env, log_dir),
+            callback=curriculum_cb,
             progress_bar=False,
         )
     except KeyboardInterrupt:
@@ -273,6 +297,16 @@ def train(seed: int = 0):
     # Save a simple model.zip for evaluate script
     model.save(os.path.join(log_dir, "model"))
     print(f"Simple model saved → {os.path.join(log_dir, 'model')}.zip")
+
+    # Save eval metrics CSV
+    import csv
+    eval_csv_path = os.path.join(log_dir, "eval_metrics.csv")
+    with open(eval_csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["timesteps", "stage", "capture_rate",
+                                                "avg_min_dist", "avg_intercept_time"])
+        writer.writeheader()
+        writer.writerows(curriculum_cb._eval_metrics)
+    print(f"Eval metrics saved → {eval_csv_path}")
 
     # ── Final evaluation with Tacview ─────────────────────────────────────
     print(f"\n{'='*55}")
@@ -425,3 +459,81 @@ if __name__ == "__main__":
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
     logging.getLogger("gymnasium").setLevel(logging.WARNING)
     train(seed=args.seed)
+
+
+def train_with_config(
+    seed: int = 0,
+    log_dir: str = "",
+    learning_rate: float = 1e-4,
+    ent_coef: float = 0.01,
+    net_arch_pi: list | None = None,
+    n_steps: int = 2048,
+    total_timesteps: int = 500_000,
+    batch_size: int = 256,
+    gamma: float = 0.99,
+    clip_range: float = 0.2,
+    vf_coef: float = 0.5,
+    max_grad_norm: float = 0.5,
+) -> str:
+    """Train with explicit hyperparameters, return path to best model.
+
+    Used by the sweep runner to inject hyperparameter values.
+    """
+    import numpy as np
+    import torch
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    if net_arch_pi is None:
+        net_arch_pi = [128, 128]
+
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs("data/tacview", exist_ok=True)
+
+    base_env = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
+    env = ResidualExpertWrapper(base_env)
+    env = Monitor(env, log_dir)
+
+    eval_base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
+    eval_env = ResidualExpertWrapper(eval_base)
+
+    model = PPO(
+        "MlpPolicy", env,
+        verbose=0,
+        learning_rate=learning_rate,
+        n_steps=n_steps,
+        batch_size=batch_size,
+        n_epochs=10,
+        gamma=gamma,
+        gae_lambda=0.95,
+        clip_range=clip_range,
+        ent_coef=ent_coef,
+        vf_coef=vf_coef,
+        max_grad_norm=max_grad_norm,
+        tensorboard_log=log_dir,
+        device="cpu",
+        policy_kwargs=dict(
+            net_arch=dict(pi=net_arch_pi, vf=net_arch_pi),
+            activation_fn=torch.nn.ReLU,
+            ortho_init=True,
+        ),
+    )
+
+    # Use global config values for eval
+    cb = CurriculumCallback(eval_env, log_dir)
+    model.learn(total_timesteps=total_timesteps, callback=cb, progress_bar=False)
+
+    best_path = os.path.join(log_dir, "best_model")
+    model.save(best_path)
+    model.save(os.path.join(log_dir, "model"))
+
+    # Save eval CSV
+    import csv
+    csv_path = os.path.join(log_dir, "eval_metrics.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["timesteps", "stage", "capture_rate",
+                                                "avg_min_dist", "avg_intercept_time"])
+        writer.writeheader()
+        writer.writerows(cb._eval_metrics)
+
+    return best_path + ".zip"
