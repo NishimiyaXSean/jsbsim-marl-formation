@@ -81,15 +81,29 @@ MAX_HEIGHT = 5000.0
 MAX_VEL = 400.0
 MAX_ANG_VEL = np.pi
 
-# Reward weights
-REWARD_PROGRESS = 5.0        # primary pursuit signal — closing distance
-REWARD_ATA = 5.0             # pointing at target
-REWARD_ALTITUDE_BONUS = 0.0  # disabled
-REWARD_ENERGY_PENALTY = 0.0  # disabled
-REWARD_GROUND_WARNING = 2.0
-REWARD_SUCCESS = 500.0       # strong positive reinforcement for capture
-REWARD_CRASH = -200.0        # strong negative for crashing
-REWARD_LOST_TARGET = -200.0  # strong negative for losing target
+# Reward weights — inspired by MARL BFM reward taxonomy (docs/marl_env.py)
+# Categories: Range Rate | Tracking (ATA/AA/Collision/HCA) | Height | Energy | Terminal
+REWARD_RANGE_RATE_CLOSING = 0.3    # per meter closed (was 5.0 — too high)
+REWARD_RANGE_RATE_OPENING = -0.1   # per meter lost (new — penalize losing ground)
+REWARD_ATA = 3.0                   # pointing at target (cos_ata > 0)
+REWARD_ATA_PENALTY = 5.0           # penalty for nose-off (cos_ata < 0)
+REWARD_AA = 2.0                    # behind target bonus (cos_aa > 0)
+REWARD_COLLISION = 5.0             # collision course base weight
+REWARD_HCA = 1.0                   # heading cross angle alignment
+REWARD_HEIGHT_ADV = 0.001          # height advantage per meter above target
+REWARD_HEIGHT_DISADV = 0.01        # penalty per meter below target
+REWARD_ENERGY_LOW_SPEED = 0.5      # penalty per m/s below safe speed
+REWARD_TERMINAL_CLOSING = 0.1      # terminal closing speed bonus (<500m)
+REWARD_TERMINAL_BOOST = 5.0        # extra range-rate weight in terminal phase
+REWARD_MACRO_ATA = 50.0            # macro ATA improvement per decision step
+REWARD_GROUND_WARNING = 2.0        # ground proximity penalty
+REWARD_SUCCESS = 500.0             # capture bonus (dist < 200m)
+REWARD_CRASH = -200.0              # ground crash penalty
+REWARD_LOST_TARGET = -200.0        # lost target penalty
+REWARD_TIMEOUT = -500.0            # timeout penalty (new — was 0)
+
+SAFE_SPEED_MPS = 180.0             # below this, energy penalty applies
+TERMINAL_RADIUS = 500.0            # terminal guidance phase
 
 
 @dataclass
@@ -150,6 +164,7 @@ class SinglePursuitEnv(gym.Env):
         # Episode state
         self._step_counter = 0
         self._prev_dist = 0.0
+        self._last_cos_ata = 0.0  # for macro ATA trend reward
 
     # ── Reset ───────────────────────────────────────────────────────────────
 
@@ -251,6 +266,7 @@ class SinglePursuitEnv(gym.Env):
 
         self._prev_dist = float(np.linalg.norm(
             self.pursuer.position_ned - self.target_ac.position_ned))
+        self._last_cos_ata = self._get_cos_ata()
         self._tacview_frames = []
         self._target_profile = self._generate_target_profile(rng, target_hdg)
 
@@ -323,36 +339,95 @@ class SinglePursuitEnv(gym.Env):
             _, los_dir, _ = compute_los(a_pos, t_pos)
             geo = compute_tactical_angles(a_forward, t_forward, los_dir)
 
-            # --- Micro-step rewards ---
+            # ═══════════════════════════════════════════════════════════════
+            #  Multi-category reward (MARL-inspired, see docs/marl_env.py)
+            # ═══════════════════════════════════════════════════════════════
+
+            # ── Category 1: Range Rate ───────────────────────────────────
+            delta_dist = self._prev_dist - current_dist  # + when closing
+            if delta_dist > 0:
+                total_reward += REWARD_RANGE_RATE_CLOSING * delta_dist
+            else:
+                total_reward += REWARD_RANGE_RATE_OPENING * delta_dist
+
+            # ── Category 2: Tracking Guidance ─────────────────────────────
+            cos_ata = geo["cos_ata"]
+            cos_aa = geo["cos_aa"]
+            cos_hca = geo["cos_hca"]
+
+            # ATA: nose-on-target
+            if cos_ata > 0.0:
+                total_reward += REWARD_ATA * cos_ata * dt
+                if cos_ata > 0.866:  # within 30° cone
+                    total_reward += 2.0 * dt  # high-quality lock bonus
+            else:
+                total_reward += REWARD_ATA_PENALTY * cos_ata * dt
+
+            # AA: behind target (tactical advantage)
+            if cos_aa > 0.5:
+                total_reward += REWARD_AA * cos_aa * dt
+
+            # HCA: heading alignment (same direction)
+            if cos_hca > 0.0:
+                total_reward += REWARD_HCA * cos_hca * dt
+
+            # Collision course: relative velocity pointing at target
+            a_vel_arr = np.asarray(a_vel)
+            t_vel_arr = np.asarray(t_vel)
+            rel_vel = a_vel_arr - t_vel_arr
+            rel_speed = float(np.linalg.norm(rel_vel))
+            if rel_speed > 1e-6:
+                rel_vel_dir = rel_vel / rel_speed
+                cos_collision = float(np.clip(np.dot(rel_vel_dir, los_dir), -1.0, 1.0))
+                if cos_collision > 0.0:
+                    # Weight increases as distance decreases → prioritize terminal approach
+                    dynamic_weight = REWARD_COLLISION + (500.0 / (current_dist + 100.0)) * 3.0
+                    total_reward += cos_collision * dynamic_weight * dt
+                else:
+                    total_reward += cos_collision * 3.0 * dt  # mild penalty for bad approach
+
+            # ── Category 3: Height Advantage ──────────────────────────────
             dz = a_pos[2] - t_pos[2]
+            if dz > 50.0 and cos_ata > 0.5 and delta_dist > 0:
+                # Above target and engaging: tactical energy advantage
+                total_reward += min(dz, 1000.0) * REWARD_HEIGHT_ADV * dt
+            elif dz < -100.0:
+                # Below target: penalty scaled by depth
+                penalty_scale = min(abs(dz) / 300.0, 4.0)
+                total_reward -= abs(dz) * REWARD_HEIGHT_DISADV * penalty_scale * dt
 
-            # Progress: closing distance (positive when closing)
-            delta_dist = self._prev_dist - current_dist
-            total_reward += REWARD_PROGRESS * delta_dist
-            # Terminal boost: extra closing reward within 500m to encourage aggressive terminal phase
-            if current_dist < 500.0:
-                total_reward += REWARD_PROGRESS * delta_dist * 2.0
+            # ── Category 4: Energy Management ─────────────────────────────
+            a_spd = float(self.pursuer.state["airspeed_mps"])
+            vz = float(self.pursuer.state.get("h_dot_fps", 0.0)) * 0.3048  # ft/s → m/s
+            if a_spd < SAFE_SPEED_MPS and vz < 10.0:
+                # Low speed and not actively climbing → dangerous energy state
+                total_reward -= (SAFE_SPEED_MPS - a_spd) * REWARD_ENERGY_LOW_SPEED * dt
 
-            # ATA: pointing at target
-            total_reward += REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
+            # ── Category 5: Terminal Guidance (< TERMINAL_RADIUS) ─────────
+            if current_dist < TERMINAL_RADIUS:
+                # Extra reward for closing fast in final phase
+                closing_speed = float(np.dot(a_vel_arr, los_dir))
+                if closing_speed > 0:
+                    total_reward += min(closing_speed, 300.0) * REWARD_TERMINAL_CLOSING * dt
+                # Boost range-rate weight for aggressive terminal attack
+                if delta_dist > 0:
+                    total_reward += REWARD_TERMINAL_BOOST * delta_dist
 
-            # Altitude: bonus for staying high (energy advantage)
-            total_reward += REWARD_ALTITUDE_BONUS * a_pos[2] * dt
-
-            # Energy: penalty for rapid throttle changes
-            total_reward -= REWARD_ENERGY_PENALTY * abs(float(thr) - 0.8) * dt
-            # Time pressure: small penalty that grows over time to discourage leisurely pursuit
+            # ── Category 6: Time Pressure ─────────────────────────────────
             time_ratio = self._step_counter / (CTRL_FREQ * MAX_EPISODE_TIME)
-            total_reward -= 0.5 * time_ratio * dt
+            total_reward -= (0.5 + time_ratio * 2.0) * dt  # grows from -0.5/s to -2.5/s
 
-            # Ground warning
-            if a_pos[2] < 800.0:
-                total_reward -= REWARD_GROUND_WARNING * dt
+            # ── Category 7: Ground Warning ────────────────────────────────
+            if a_pos[2] < 200.0:
+                depth_ratio = (200.0 - a_pos[2]) / 200.0
+                total_reward -= (depth_ratio ** 2) * 5.0 * dt
+                if vz < -1.0:  # descending into ground
+                    total_reward -= abs(vz) * 0.2 * dt
 
             self._prev_dist = current_dist
 
             # --- Termination checks ---
-            if current_dist < 200.0:  # generous kill radius for training
+            if current_dist < 200.0:
                 total_reward += REWARD_SUCCESS
                 terminated = True
                 reason = "success"
@@ -372,17 +447,32 @@ class SinglePursuitEnv(gym.Env):
                 reason = "out_of_bounds"
                 break
 
+        # --- Macro ATA Trend Reward (per decision step) ---
+        # Reward improvement in pointing accuracy over the decision interval.
+        final_cos_ata = self._get_cos_ata()
+        macro_delta_cos = final_cos_ata - self._last_cos_ata
+        if macro_delta_cos > 0:
+            total_reward += macro_delta_cos * REWARD_MACRO_ATA
+        self._last_cos_ata = final_cos_ata
+
         # --- Timeout ---
         current_time = self._step_counter / CTRL_FREQ
         if not terminated and current_time >= MAX_EPISODE_TIME:
             truncated = True
             reason = "timeout"
+            total_reward += REWARD_TIMEOUT
 
         # --- Tacview ---
         if self.record_tacview:
             self._record_tacview_frame(current_time)
 
         return self._get_obs(), total_reward, terminated, truncated, {"reason": reason, "min_dist": min_dist}
+
+    def _get_cos_ata(self) -> float:
+        """Return current cos(ATA) for macro trend tracking."""
+        a_forward = compute_forward_vector(self.pursuer.rpy_rad)
+        _, los_dir, _ = compute_los(self.pursuer.position_ned, self.target_ac.position_ned)
+        return float(np.clip(np.dot(a_forward, los_dir), -1.0, 1.0))
 
     # ── Observation ──────────────────────────────────────────────────────────
 
