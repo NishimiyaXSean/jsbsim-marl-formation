@@ -455,12 +455,12 @@ class SinglePursuitEnv(gym.Env):
         elif np.isclose(stage, 1.5):
             tp.speed_mps = 145.0
             tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(1.5, 4.5) * rng.choice([-1, 1])
+            tp.heading_rate_dps = rng.uniform(-3, 3)
             tp.alt_rate_mps = rng.uniform(-1.5, 1.5)
         elif np.isclose(stage, 2.0):
             tp.speed_mps = 160.0
             tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(5, 15) * rng.choice([-1, 1])
+            tp.heading_rate_dps = rng.uniform(-10, 10)
             tp.alt_rate_mps = rng.uniform(-3, 3)
         elif np.isclose(stage, 2.5):
             tp.speed_mps = 170.0
