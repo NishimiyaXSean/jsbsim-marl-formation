@@ -1,22 +1,14 @@
-# CLAUDE.md - JSBSim MARL Formation & Pursuit
+# CLAUDE.md - JSBSim MARL Research Core Guidance
 
-## 🔴 CRITICAL OPERATIONAL RULES (MUST OBEY)
-1. **Virtual Environment**: All Python scripts, tests, and commands MUST be executed within the `jsbsim_rl` virtual environment. Always prepend or ensure environment activation (e.g., `conda activate jsbsim_rl`).
-2. **Task Initiation Protocol**: BEFORE starting any code modification, refactoring, or file creation, you MUST invoke the `superpower` skill workflow (specifically `/superpowers:brainstorm`) to outline the design specs, code structure, and potential impact. Do not write code blindly.
+## 🔴 CRITICAL RULES (MUST OBEY)
+1. **Virtual Environment**: All scripts, commands, and tests MUST be executed inside the `jsbsim_rl` virtual environment. Always ensure it is activated before running tasks.
+2. **Task Initiation Protocol**: BEFORE starting any code modification, feature addition, or file refactoring, you MUST invoke the `superpower` skill workflow (`/superpowers:brainstorm`) to establish the design spec, architectural alignment, and TDD plan.
 
-## Technology Stack & Core Architecture
-- **Dynamics**: JSBSim F-16 Flight Dynamics Model (FDM)
-- **RL Framework**: Stable Baselines3 / MAPPO (Gymnasium Multi-Agent Env)
-- **Core Strategy**: Residual RL + Adaptive Guidance Expert (`src/utils/pn_guidance.py`)
-- **Primary Script**: `scripts/train_single_pursuit.py` (3-stage curriculum training)
+## 🎓 ULTIMATE GOAL: ACADEMIC PAPER SUBMISSION
+- **Core Research Objective**: Build a scalable framework for a high-quality academic paper on **"Multi-agent reinforcement learning for formation cooperative route decision and planning"**.
+- **Physics Engine**: Migrate fully from PyBullet to **JSBSim 6-DOF** F-16 flight dynamics model (FDM) to achieve extreme aerodynamic fidelity.
+- **Algorithm & Scaling**: Transition from discrete BFM pursuit baselines to continuous multi-agent algorithms (MAPPO/PPO), advancing from 1v1 single pursuit to NvM (e.g., 2v2) collaborative formation training.
 
-## Project Structure
-- `src/`: `dynamics/` (aircraft/autopilot), `environment/` (single_pursuit_env), `utils/` (pn_guidance)
-- `scripts/`: `train_single_pursuit.py` (Main), `verify_pursuit.py` (Validation)
-- `configs/`: Hydra YAML configurations
-- `docs/superpowers/specs/`: Design specifications
-
-## Useful Commands (Run in `jsbsim_rl`)
-- **Main Training**: `python scripts/train_single_pursuit.py`
-- **Verify Env**: `python scripts/verify_installation.py` or `python scripts/verify_pursuit.py`
-- **Code Style**: Use explicit type hints, follow PEP 8. Maintain G-smoothing and GPWS constraints in world frame (`h_dot_fps`).
+## Basic Commands (Run in `jsbsim_rl`)
+- Verify installation: `python scripts/verify_installation.py`
+- Main single pursuit training: `python scripts/train_single_pursuit.py`
