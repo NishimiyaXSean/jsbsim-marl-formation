@@ -1,0 +1,31 @@
+# 依赖和编译产物
+node_modules/
+.git/
+build/
+dist/
+out/
+bin/
+obj/
+
+# 运行日志和临时文件
+*.log
+.logs/
+tmp/
+.cache/
+
+# 虚拟环境 (Python 必加)
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# 媒体文件和大型数据集（非常消耗Token，必须排除）
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.zip
+*.tar.gz
+data/
+datasets/
