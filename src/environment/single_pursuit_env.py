@@ -119,7 +119,7 @@ class SinglePursuitEnv(gym.Env):
 
     def __init__(
         self,
-        curriculum_stage: int = 1,
+        curriculum_stage: float = 1.0,
         jsbsim_data_dir: Optional[str] = None,
         record_tacview: bool = False,
     ):
@@ -179,45 +179,43 @@ class SinglePursuitEnv(gym.Env):
         ])
         self.pursuer.position_ned = pursuer_ned
 
-        # --- Target spawn (curriculum-aware) ---
-        if self.curriculum_stage == 1:
-            # Stage 1: target DEAD AHEAD — zero bearing offset, same heading.
-            # At 260 m/s, even 1° offset creates 90m lateral miss after 20s.
-            # Agent just needs throttle forward; steering comes in stage 2.
-            target_dist = rng.uniform(800, 1800)
-            target_bearing = pursuer_hdg  # exactly ahead
-            target_bearing_rad = np.deg2rad(target_bearing)
+        # --- Target spawn (5-stage float curriculum) ---
+        stage = self.curriculum_stage
 
-            target_ned = np.array([
-                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
-                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
-                pursuer_ned[2] + rng.uniform(-50, 50),  # small altitude delta
-            ])
-            target_hdg = pursuer_hdg  # exactly same direction
-        elif self.curriculum_stage == 2:
-            # Stage 2: moderate bearing (±15°), mild heading diff (±20°), weaving target
+        if np.isclose(stage, 1.0):
+            target_dist = rng.uniform(800, 1800)
+            bearing_offset = 0.0
+            target_alt_offset = rng.uniform(-50, 50)
+            heading_diff = 0.0
+        elif np.isclose(stage, 1.5):
+            target_dist = rng.uniform(900, 2000)
+            bearing_offset = rng.uniform(-7, 7)
+            target_alt_offset = rng.uniform(-75, 75)
+            heading_diff = rng.uniform(-10, 10)
+        elif np.isclose(stage, 2.0):
             target_dist = rng.uniform(1000, 2500)
             bearing_offset = rng.uniform(-15, 15)
-            target_bearing = (pursuer_hdg + bearing_offset) % 360.0
-            target_bearing_rad = np.deg2rad(target_bearing)
-            target_ned = np.array([
-                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
-                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
-                pursuer_ned[2] + rng.uniform(-150, 150),
-            ])
-            target_hdg = (pursuer_hdg + rng.uniform(-20, 20)) % 360.0
-        else:
-            # Stage 3: wide bearing (±45°), weaving target — combat-adjacent
+            target_alt_offset = rng.uniform(-150, 150)
+            heading_diff = rng.uniform(-20, 20)
+        elif np.isclose(stage, 2.5):
+            target_dist = rng.uniform(1200, 2700)
+            bearing_offset = rng.uniform(-30, 30)
+            target_alt_offset = rng.uniform(-225, 225)
+            heading_diff = rng.uniform(-25, 25)
+        else:  # stage 3.0
             target_dist = rng.uniform(1500, 3000)
             bearing_offset = rng.uniform(-45, 45)
-            target_bearing = (pursuer_hdg + bearing_offset) % 360.0
-            target_bearing_rad = np.deg2rad(target_bearing)
-            target_ned = np.array([
-                pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
-                pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
-                pursuer_ned[2] + rng.uniform(-300, 300),
-            ])
-            target_hdg = (pursuer_hdg + rng.uniform(-30, 30)) % 360.0
+            target_alt_offset = rng.uniform(-300, 300)
+            heading_diff = rng.uniform(-30, 30)
+
+        target_bearing = (pursuer_hdg + bearing_offset) % 360.0
+        target_bearing_rad = np.deg2rad(target_bearing)
+        target_ned = np.array([
+            pursuer_ned[0] + target_dist * np.cos(target_bearing_rad),
+            pursuer_ned[1] + target_dist * np.sin(target_bearing_rad),
+            pursuer_ned[2] + target_alt_offset,
+        ])
+        target_hdg = (pursuer_hdg + heading_diff) % 360.0
 
         self.target_ac.reset(
             lat_deg=30.0, lon_deg=120.0,
@@ -447,21 +445,29 @@ class SinglePursuitEnv(gym.Env):
         """Generate stage-dependent target motion."""
         tp = TargetProfile()
         tp.alt_m = 3500.0
+        stage = self.curriculum_stage
 
-        if self.curriculum_stage == 1:
-            # Straight and level — easiest; slower target for easy catch
-            tp.speed_mps = 130.0  # 250 kts — big speed advantage for pursuer
-            tp.heading_deg = spawn_heading  # same direction as spawn
+        if np.isclose(stage, 1.0):
+            tp.speed_mps = 130.0
+            tp.heading_deg = spawn_heading
             tp.heading_rate_dps = 0.0
             tp.alt_rate_mps = 0.0
-        elif self.curriculum_stage == 2:
-            # Gentle weaving, moderate speed
+        elif np.isclose(stage, 1.5):
+            tp.speed_mps = 145.0
+            tp.heading_deg = spawn_heading
+            tp.heading_rate_dps = rng.uniform(1.5, 4.5) * rng.choice([-1, 1])
+            tp.alt_rate_mps = rng.uniform(-1.5, 1.5)
+        elif np.isclose(stage, 2.0):
             tp.speed_mps = 160.0
             tp.heading_deg = spawn_heading
             tp.heading_rate_dps = rng.uniform(5, 15) * rng.choice([-1, 1])
             tp.alt_rate_mps = rng.uniform(-3, 3)
-        else:
-            # Evasive — random changes, faster
+        elif np.isclose(stage, 2.5):
+            tp.speed_mps = 170.0
+            tp.heading_deg = spawn_heading
+            tp.heading_rate_dps = rng.uniform(-15, 15)
+            tp.alt_rate_mps = rng.uniform(-5, 5)
+        else:  # stage 3.0
             tp.speed_mps = 180.0
             tp.heading_deg = spawn_heading
             tp.heading_rate_dps = rng.uniform(-20, 20)
