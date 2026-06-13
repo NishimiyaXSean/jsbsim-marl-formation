@@ -202,8 +202,13 @@ class CurriculumCallback(BaseCallback):
                      else TARGET_CAPTURE_RATE_STAGE_2_3)
         if capture_rate >= threshold and not np.isclose(self._current_stage, CURRICULUM_STAGES[-1]):
             # Advance to next stage (0.5 increment)
-            current_idx = next(i for i, s in enumerate(CURRICULUM_STAGES)
-                               if np.isclose(s, self._current_stage))
+            current_idx = next((i for i, s in enumerate(CURRICULUM_STAGES)
+                                if np.isclose(s, self._current_stage)), None)
+            if current_idx is None:
+                print(f"  !! WARNING: stage={self._current_stage} not in CURRICULUM_STAGES, resetting to 1.0")
+                self._current_stage = 1.0
+                self._eval_env.curriculum_stage = 1.0
+                return
             self._current_stage = CURRICULUM_STAGES[current_idx + 1]
             print(f"  >> Advancing to curriculum stage {self._current_stage:.1f}")
             self._eval_env.curriculum_stage = self._current_stage
