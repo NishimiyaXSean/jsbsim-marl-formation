@@ -118,27 +118,26 @@ class HeadingStabilizer:
     # The agent must learn energy management for tight turns.
     # F-16 at 200 m/s, 70° bank: max turn rate ≈ 7.7°/s (physics limit).
     # The agent learns energy management — slowing to 130 m/s gives 11.9°/s.
-    ROLL_PER_DEG_HEADING = 2.0      # deg bank per deg heading error
-    HEADING_I_GAIN = 0.15           # heading integral: eliminates steady-state error
+    ROLL_PER_DEG_HEADING = 2.5      # deg bank per deg heading error
     MAX_BANK_DEG = 70.0
 
     def __init__(self) -> None:
-        # Roll PID: BFM-ported gains (degree-equivalent), wide proportional band.
+        # Roll PID with BFM-ported smooth gains + moderate output range.
+        # P-only outer heading loop — steady-state error provides natural
+        # exploration that helps RL escape local optima.
         self._roll_pid = PIDController(
-            kp=0.026, ki=0.005, kd=0.002,
-            output_min=-1.0, output_max=1.0,
-            integral_min=-0.15, integral_max=0.15,
+            kp=0.10, ki=0.03, kd=0.03,
+            output_min=-0.50, output_max=0.50,
+            integral_min=-0.10, integral_max=0.10,
         )
         self._rudder_pid = PIDController(
             kp=0.08, ki=0.02, kd=0.0,
             output_min=-0.10, output_max=0.10,
         )
-        self._heading_integral = 0.0
 
     def reset(self) -> None:
         self._roll_pid.reset()
         self._rudder_pid.reset()
-        self._heading_integral = 0.0
 
     def compute(
         self,
@@ -152,21 +151,19 @@ class HeadingStabilizer:
         # Heading error wrapped to [-180, 180]
         hdg_err = (target_heading_deg - heading_deg + 180.0) % 360.0 - 180.0
 
-        # Heading integral: builds up while error persists, drives steady-state to zero.
-        # Clamped to prevent windup during prolonged turns.
-        self._heading_integral += hdg_err * dt
-        self._heading_integral = float(np.clip(self._heading_integral, -30.0, 30.0))
+        # Desired bank proportional to heading error
+        desired_roll_deg = float(np.clip(
+            hdg_err * self.ROLL_PER_DEG_HEADING,
+            -self.MAX_BANK_DEG, self.MAX_BANK_DEG,
+        ))
 
-        # Desired bank = P * error + I * integral(error)
-        desired_roll_deg = (hdg_err * self.ROLL_PER_DEG_HEADING
-                            + self._heading_integral * self.HEADING_I_GAIN)
-        desired_roll_deg = float(np.clip(desired_roll_deg, -self.MAX_BANK_DEG, self.MAX_BANK_DEG))
-
-        # Bank error → aileron
+        # Bank error → aileron (positive error = need right roll → positive aileron)
         roll_err = desired_roll_deg - roll_deg
         roll_err = (roll_err + 180.0) % 360.0 - 180.0
 
         aileron = self._roll_pid.step(roll_err, dt)
+
+        # Rudder kills sideslip
         rudder = -self._rudder_pid.step(sideslip_deg, dt)
 
         return aileron, rudder
