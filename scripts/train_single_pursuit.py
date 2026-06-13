@@ -26,6 +26,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from src.environment.single_pursuit_env import SinglePursuitEnv
+from src.utils.pn_guidance import compute_pn_heading
 import gymnasium as gym
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -33,52 +34,79 @@ import gymnasium as gym
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ResidualExpertWrapper(gym.Wrapper):
-    """Agent learns residual on top of an adaptive expert that steers toward target.
+    """Agent learns residual on top of a PN guidance expert.
 
-    Expert reads observation to compute: aileron steers toward target bearing,
-    throttle is full.  Agent adds ±0.3 residual corrections.
+    Expert reads world-frame positions/velocities directly from the underlying
+    SinglePursuitEnv and uses proportional navigation to compute desired heading.
+    A P-controller on heading error produces aileron commands.
+    Agent adds ±0.5 residual corrections (scaled by RESIDUAL_SCALE).
 
     This guarantees the expert guidance is never lost — RL only fine-tunes.
     """
-    RESIDUAL_SCALE = 0.5  # RL can add ±0.5 on top of expert (±0.2)
+    RESIDUAL_SCALE = 0.5  # RL can add ±0.5 on top of expert
 
     def __init__(self, env):
         super().__init__(env)
+        # Store reference to base SinglePursuitEnv before Monitor wraps us.
+        # When Monitor wraps ResidualExpertWrapper, self.env points to Monitor,
+        # not SinglePursuitEnv.  _base_env bypasses that indirection.
+        self._base_env = env
         self.observation_space = env.observation_space
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32,
         )
-        self._last_obs = np.zeros(19, dtype=np.float32)
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
-        self._last_obs = np.asarray(obs, dtype=np.float32)
         return obs, info
 
     def step(self, action):
-        expert = self._compute_expert(self._last_obs)
+        expert = self._compute_expert()
         residual = np.asarray(action, dtype=np.float32) * self.RESIDUAL_SCALE
         combined = np.clip(expert + residual, -1.0, 1.0)
         obs, rew, term, trunc, info = self.env.step(combined)
-        self._last_obs = np.asarray(obs, dtype=np.float32)
         return obs, rew, term, trunc, info
 
-    def _compute_expert(self, obs: np.ndarray) -> np.ndarray:
-        """Steer toward target, full throttle."""
-        rel_x = float(obs[0])
-        rel_y = float(obs[1])
-        bearing = np.arctan2(rel_y, max(rel_x, 0.01))
-        ail = float(np.clip(bearing * 0.3, -0.2, 0.2))
+    def _compute_expert(self) -> np.ndarray:
+        """Compute PN guidance aileron command, full throttle."""
+        pursuer = self._base_env.pursuer
+        target = self._base_env.target_ac
+
+        # Read world-frame positions and velocities directly from the aircraft
+        pursuer_ned = pursuer.position_ned.copy()
+        pursuer_vel = pursuer.velocity_ned.copy()
+        target_ned = target.position_ned.copy()
+        target_vel = target.velocity_ned.copy()
+        current_heading_deg = float(pursuer.state["yaw_deg"])
+
+        # Compute desired heading via proportional navigation
+        desired_heading = compute_pn_heading(
+            pursuer_ned,
+            pursuer_vel,
+            target_ned,
+            target_vel,
+            current_heading_deg,
+            dt=0.5,
+            nav_constant=3.0,
+            max_turn_rate_dps=15.0,
+        )
+
+        # Heading error wrapped to [-180, 180]
+        heading_error = (desired_heading - current_heading_deg + 180) % 360 - 180
+
+        # P-controller: proportional to heading error, clipped to [-0.3, 0.3]
+        ail = float(np.clip(heading_error * 0.05, -0.3, 0.3))
+
         return np.array([ail, 0.0, 1.0], dtype=np.float32)
 
     # Delegate curriculum_stage to underlying env
     @property
     def curriculum_stage(self):
-        return self.env.curriculum_stage
+        return self._base_env.curriculum_stage
 
     @curriculum_stage.setter
     def curriculum_stage(self, value):
-        self.env.curriculum_stage = value
+        self._base_env.curriculum_stage = value
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -268,7 +296,7 @@ def train(seed: int = 0):
         total_r = 0.0
         ep_min_dist = 8000.0
         while not done:
-            expert = expert_wrapper._compute_expert(np.asarray(obs, dtype=np.float32))
+            expert = expert_wrapper._compute_expert()
             residual, _ = model.predict(obs, deterministic=True)
             action = np.clip(expert + np.asarray(residual) * RES_SCALE, -1.0, 1.0)
             obs, rew, terminated, truncated, info = tacview_env.step(action)
