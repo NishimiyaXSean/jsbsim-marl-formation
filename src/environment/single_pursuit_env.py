@@ -226,13 +226,12 @@ class SinglePursuitEnv(gym.Env):
         )
         self.target_ac.position_ned = target_ned
 
-        # Flight controller + target reset — start fast to give speed advantage
+        # Flight controller + target reset
         self.fc.reset()
-        # Match target altitude so the pursuer can actually intercept in 3D
         self._target = FlightControlTargets(
             heading_deg=pursuer_hdg,
-            altitude_m=float(target_ned[2]),  # match target altitude
-            speed_mps=250.0,  # start fast — F-16 can sustain this
+            altitude_m=float(target_ned[2]),
+            speed_mps=180.0,  # cruise speed — agent can adjust ±10 m/s per decision
         )
 
         self._step_counter = 0
