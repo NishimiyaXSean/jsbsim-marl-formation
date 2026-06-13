@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import sys
 from pathlib import Path
@@ -32,6 +33,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa
+
+
+def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple:
+    """Wilson score confidence interval for a binomial proportion."""
+    from math import sqrt
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    p = successes / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    margin = z * sqrt((p * (1 - p) + z * z / (4 * n)) / n) / denom
+    return p, center - margin, center + margin
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -169,10 +182,10 @@ def run_evaluate(model, action_mode: str, use_mappo: bool, n_episodes: int = 5):
     return all_episodes, env  # env holds Tacview frames
 
 
-def run_pursuit_evaluate(model, n_episodes: int = 5):
+def run_pursuit_evaluate(model, n_episodes: int = 5, stage: float = 1.0):
     """Evaluate a SinglePursuitEnv-trained model."""
     from src.environment.single_pursuit_env import SinglePursuitEnv
-    env = SinglePursuitEnv(curriculum_stage=1, record_tacview=True)
+    env = SinglePursuitEnv(curriculum_stage=stage, record_tacview=True)
 
     all_episodes = []
 
@@ -327,6 +340,109 @@ MODEL_REGISTRY = {
 }
 
 
+def run_multi_seed_evaluation(model_dirs, stage=1.0, n_episodes=30):
+    """Evaluate models from multiple seeds and aggregate with Wilson CI."""
+    from src.environment.single_pursuit_env import SinglePursuitEnv
+    from scripts.train_single_pursuit import ResidualExpertWrapper
+    from stable_baselines3 import PPO
+
+    per_seed = []
+    for seed_idx, model_dir in enumerate(model_dirs):
+        # Find model file
+        model_path = None
+        for name in ["best_model", "model", "final_model"]:
+            candidate = os.path.join(model_dir, f"{name}.zip")
+            if os.path.exists(candidate):
+                model_path = candidate
+                break
+        if model_path is None:
+            print(f"  WARNING: No model found in {model_dir}, skipping")
+            continue
+
+        model = PPO.load(model_path)
+        env = SinglePursuitEnv(curriculum_stage=stage, record_tacview=False)
+        wrapper = ResidualExpertWrapper(env)
+
+        successes = 0
+        min_dists = []
+        intercept_times = []
+
+        for _ in range(n_episodes):
+            obs, _ = wrapper.reset()
+            done = False
+            ep_min_dist = 8000.0
+            while not done:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, _, terminated, truncated, info = wrapper.step(action)
+                done = terminated or truncated
+                if "min_dist" in info:
+                    ep_min_dist = min(ep_min_dist, info["min_dist"])
+            if info.get("reason") == "success":
+                successes += 1
+                intercept_times.append(env._step_counter / 60.0)
+            else:
+                intercept_times.append(120.0)
+            min_dists.append(ep_min_dist)
+
+        p, lo, hi = wilson_ci(successes, n_episodes)
+        per_seed.append({
+            "model_dir": model_dir,
+            "capture_rate": p,
+            "ci_low": lo,
+            "ci_high": hi,
+            "successes": successes,
+            "n_episodes": n_episodes,
+            "avg_min_dist": float(np.mean(min_dists)),
+            "std_min_dist": float(np.std(min_dists)),
+            "avg_intercept_time": float(np.mean(intercept_times)),
+        })
+        print(f"  {os.path.basename(model_dir)}: capture_rate={p:.2%} "
+              f"[{lo:.2%}, {hi:.2%}]  min_dist={np.mean(min_dists):.0f}m")
+
+    # Aggregate
+    cr_list = [r["capture_rate"] for r in per_seed]
+    if not per_seed:
+        return None
+    agg = {
+        "mean_capture_rate": float(np.mean(cr_list)),
+        "std_capture_rate": float(np.std(cr_list)),
+        "mean_min_dist": float(np.mean([r["avg_min_dist"] for r in per_seed])),
+        "mean_intercept_time": float(np.mean([r["avg_intercept_time"] for r in per_seed])),
+        "total_episodes": sum(r["n_episodes"] for r in per_seed),
+        "total_successes": sum(r["successes"] for r in per_seed),
+    }
+    agg_p, agg_lo, agg_hi = wilson_ci(agg["total_successes"], agg["total_episodes"])
+    agg["pooled_capture_rate"] = agg_p
+    agg["pooled_ci_low"] = agg_lo
+    agg["pooled_ci_high"] = agg_hi
+
+    return {"per_seed": per_seed, "aggregate": agg}
+
+
+def print_multi_seed_summary(results):
+    """Print a formatted summary table for multi-seed results."""
+    agg = results["aggregate"]
+    print(f"\n{'='*70}")
+    print(f"Multi-Seed Evaluation Summary")
+    print(f"{'='*70}")
+    print(f"  Seeds evaluated:       {len(results['per_seed'])}")
+    print(f"  Total episodes:        {agg['total_episodes']}")
+    print(f"  Pooled capture rate:   {agg['pooled_capture_rate']:.2%} "
+          f"[{agg['pooled_ci_low']:.2%}, {agg['pooled_ci_high']:.2%}]")
+    print(f"  Mean capture rate:     {agg['mean_capture_rate']:.2%} "
+          f"+/- {agg['std_capture_rate']:.2%}")
+    print(f"  Mean min distance:     {agg['mean_min_dist']:.0f}m")
+    print(f"  Mean intercept time:   {agg['mean_intercept_time']:.1f}s")
+    print(f"\n  Per-seed details:")
+    print(f"  {'Seed':<25s} {'Capture Rate':>12s} {'95% CI':>20s} {'Min Dist':>10s}")
+    print(f"  {'-'*25} {'-'*12} {'-'*20} {'-'*10}")
+    for r in results["per_seed"]:
+        dir_name = os.path.basename(r["model_dir"])
+        print(f"  {dir_name:<25s} {r['capture_rate']:>11.2%}  "
+              f"[{r['ci_low']:.2%}, {r['ci_high']:.2%}]  "
+              f"{r['avg_min_dist']:>7.0f}m")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate and visualize air combat agent")
     parser.add_argument(
@@ -345,6 +461,22 @@ def main():
         default=None,
         help="Output directory (default: results/<model_name>_<timestamp>)",
     )
+    parser.add_argument(
+        "--multi-seed", action="store_true",
+        help="Aggregate across multiple model directories (seeds) for statistical summary",
+    )
+    parser.add_argument(
+        "--stage", type=float, default=1.0,
+        help="Curriculum stage to evaluate on (default: 1.0)",
+    )
+    parser.add_argument(
+        "--model-dirs", nargs="+", default=None,
+        help="One or more model directories (used with --multi-seed)",
+    )
+    parser.add_argument(
+        "--csv", type=str, default=None,
+        help="Export results to CSV file",
+    )
     args = parser.parse_args()
 
     cfg = MODEL_REGISTRY[args.model]
@@ -359,6 +491,40 @@ def main():
     print(f"  Episodes:  {args.episodes}")
     print(f"  Output:    {output_dir}")
     print(f"{'='*55}\n")
+
+    # --- Multi-seed mode ---
+    if args.multi_seed:
+        if not args.model_dirs:
+            import glob as _glob
+            candidates = sorted(_glob.glob("marl_runs/single_pursuit_*"))
+            if not candidates:
+                print("No model directories found in marl_runs/")
+                return
+            model_dirs = candidates
+        else:
+            model_dirs = args.model_dirs
+
+        results = run_multi_seed_evaluation(model_dirs, stage=args.stage,
+                                            n_episodes=args.episodes)
+        if results:
+            print_multi_seed_summary(results)
+
+            # CSV export
+            csv_path = args.csv or os.path.join(output_dir, f"multi_seed_eval_stage{args.stage:.1f}.csv")
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["model_dir", "capture_rate", "ci_low", "ci_high",
+                                 "avg_min_dist", "std_min_dist", "avg_intercept_time"])
+                for r in results["per_seed"]:
+                    writer.writerow([
+                        r["model_dir"],
+                        f"{r['capture_rate']:.4f}",
+                        f"{r['ci_low']:.4f}", f"{r['ci_high']:.4f}",
+                        f"{r['avg_min_dist']:.1f}", f"{r['std_min_dist']:.1f}",
+                        f"{r['avg_intercept_time']:.1f}",
+                    ])
+            print(f"\nCSV exported: {csv_path}")
+        return
 
     # ── Load model ───────────────────────────────────────────────────────
     model = None
@@ -393,7 +559,8 @@ def main():
 
     # ── Run evaluation ───────────────────────────────────────────────────
     if cfg["action_mode"] == "pursuit":
-        episodes, env = run_pursuit_evaluate(model, n_episodes=args.episodes)
+        episodes, env = run_pursuit_evaluate(model, n_episodes=args.episodes,
+                                              stage=args.stage)
     else:
         episodes, env = run_evaluate(
             model, cfg["action_mode"], cfg["mappo"],
