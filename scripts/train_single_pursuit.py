@@ -286,9 +286,8 @@ def train(seed: int = 0):
     min_dists = []
     best_ep_reward = -float("inf")
     best_ep_idx = 0
-    # Create a wrapper just for its _compute_expert method
+    # Wrap env so RL actions are treated as residuals on top of PN expert
     expert_wrapper = ResidualExpertWrapper(tacview_env)
-    RES_SCALE = ResidualExpertWrapper.RESIDUAL_SCALE
 
     for ep in range(EVAL_EPISODES):
         obs, _ = tacview_env.reset()
@@ -296,10 +295,8 @@ def train(seed: int = 0):
         total_r = 0.0
         ep_min_dist = 8000.0
         while not done:
-            expert = expert_wrapper._compute_expert()
-            residual, _ = model.predict(obs, deterministic=True)
-            action = np.clip(expert + np.asarray(residual) * RES_SCALE, -1.0, 1.0)
-            obs, rew, terminated, truncated, info = tacview_env.step(action)
+            action, _ = model.predict(obs, deterministic=True)
+            obs, rew, terminated, truncated, info = expert_wrapper.step(action)
             done = terminated or truncated
             total_r += rew
             if "min_dist" in info:
