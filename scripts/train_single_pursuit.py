@@ -233,18 +233,18 @@ def train(seed: int = 0):
     print(f"  Monitor:        tensorboard --logdir {log_dir}")
     print(f"{'='*55}\n")
 
-    # PPO model — agent learns small residual corrections
+    # PPO model — agent controls d_heading, d_alt, d_speed via FC
     model = PPO(
         "MlpPolicy", env,
         verbose=1,
-        learning_rate=1e-4,
+        learning_rate=3e-4,
         n_steps=2048,
         batch_size=256,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=0.0,   # continuous control — no entropy bonus needed
         vf_coef=0.5,
         max_grad_norm=0.5,
         tensorboard_log=log_dir,
@@ -253,6 +253,7 @@ def train(seed: int = 0):
             net_arch=dict(pi=[128, 128], vf=[128, 128]),
             activation_fn=torch.nn.ReLU,
             ortho_init=True,
+            log_std_init=0.0,    # σ=1.0 — full exploration; ent_coef=0 lets it decay naturally
         ),
     )
 
@@ -443,7 +444,7 @@ def train_with_config(
     seed: int = 0,
     log_dir: str = "",
     learning_rate: float = 1e-4,
-    ent_coef: float = 0.01,
+    ent_coef: float = 0.0,  # continuous control — no entropy bonus
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
     total_timesteps: int = 500_000,
@@ -494,6 +495,7 @@ def train_with_config(
             net_arch=dict(pi=net_arch_pi, vf=net_arch_pi),
             activation_fn=torch.nn.ReLU,
             ortho_init=True,
+            log_std_init=0.0,
         ),
     )
 

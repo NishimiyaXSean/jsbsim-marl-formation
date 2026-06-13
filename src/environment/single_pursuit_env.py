@@ -71,10 +71,9 @@ DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 30 micro-steps per decision
 MAX_EPISODE_TIME = 120.0   # seconds before timeout
 
 # Action scaling (raw [-1,1] → real units)
-# With engine running, F-16 can sustain ~267 m/s at 3000m — plenty of energy.
-MAX_D_HEADING_DEG = 10.0    # per decision (0.5s) — up to 20°/s commanded turn
+MAX_D_HEADING_DEG = 30.0    # per decision (0.5s) — up to 60°/s commanded turn
 MAX_D_ALT_M = 15.0           # per decision — up to 30 m/s climb/descent
-MAX_D_SPEED_MPS = 10.0       # per decision — faster speed changes
+MAX_D_SPEED_MPS = 10.0       # per decision — ±20 m/s/s acceleration
 
 # Observation normalisation constants
 MAX_DIST = 10000.0
@@ -265,13 +264,14 @@ class SinglePursuitEnv(gym.Env):
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
         dt = PHYSICS_DT
 
-        # Parse action: [aileron, d_alt, d_speed]
-        # Aileron: direct control, bypasses FC heading stabiliser
-        raw_ail = float(np.clip(action[0], -1.0, 1.0))
+        # Parse action: [d_heading, d_alt, d_speed] — the agent sets high-level
+        # flight targets; FlightController handles the low-level aerodynamics.
+        d_hdg = float(action[0]) * MAX_D_HEADING_DEG
         d_alt = float(action[1]) * MAX_D_ALT_M
         d_spd = float(action[2]) * MAX_D_SPEED_MPS
 
-        # Update FC targets (altitude + speed only — heading is direct)
+        # Update persistent flight targets
+        self._target.heading_deg = (self._target.heading_deg + d_hdg) % 360.0
         self._target.altitude_m = np.clip(self._target.altitude_m + d_alt, 500.0, 11000.0)
         self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 250.0)
 
@@ -282,19 +282,8 @@ class SinglePursuitEnv(gym.Env):
         min_dist = self._prev_dist
 
         for _ in range(DECISION_STEPS):
-            # --- FC altitude + speed, direct aileron for heading ---
-            elev = self.fc.alt.compute(self.pursuer.state["alt_m"], self._target.altitude_m, dt)
-            # Bank compensation: when banked, boost elevator to maintain vertical lift
-            import math
-            roll_abs_rad = math.radians(abs(self.pursuer.state["roll_deg"]))
-            cos_roll = max(math.cos(roll_abs_rad), 0.1)
-            bank_factor = 1.0 / cos_roll
-            elev = ELEVATOR_TRIM + (elev - ELEVATOR_TRIM) * bank_factor
-            elev = float(np.clip(elev, -1.0, 1.0))
-
-            thr = self.fc.spd.compute(self.pursuer.state["airspeed_mps"], self._target.speed_mps, dt)
-            ail = raw_ail * 0.30  # direct aileron: ±0.3 range
-            rud = 0.0
+            # FlightController handles all 3 axes (heading + altitude + speed)
+            thr, elev, ail, rud = self.fc.compute(self.pursuer.state, self._target, dt)
             self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 
             # --- Move target via scripted profile ---
