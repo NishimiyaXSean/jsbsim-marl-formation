@@ -43,13 +43,10 @@ class ResidualExpertWrapper(gym.Wrapper):
 
     This guarantees the expert guidance is never lost — RL only fine-tunes.
     """
-    RESIDUAL_SCALE = 0.5  # RL can add ±0.5 on top of expert
+    RESIDUAL_SCALE = 1.0  # Agent has full ±1.0 authority (no expert baseline)
 
     def __init__(self, env):
         super().__init__(env)
-        # Store reference to base SinglePursuitEnv before Monitor wraps us.
-        # When Monitor wraps ResidualExpertWrapper, self.env points to Monitor,
-        # not SinglePursuitEnv.  _base_env bypasses that indirection.
         self._base_env = env
         self.observation_space = env.observation_space
         self.action_space = gym.spaces.Box(
@@ -61,43 +58,19 @@ class ResidualExpertWrapper(gym.Wrapper):
         return obs, info
 
     def step(self, action):
-        expert = self._compute_expert()
-        residual = np.asarray(action, dtype=np.float32) * self.RESIDUAL_SCALE
-        combined = np.clip(expert + residual, -1.0, 1.0)
+        # Agent controls all three channels directly (no expert overlay).
+        # This gives full authority over aileron, altitude delta, and speed delta.
+        combined = np.asarray(action, dtype=np.float32)
         obs, rew, term, trunc, info = self.env.step(combined)
         return obs, rew, term, trunc, info
 
     def _compute_expert(self) -> np.ndarray:
-        """Compute PN guidance aileron command, full throttle."""
-        pursuer = self._base_env.pursuer
-        target = self._base_env.target_ac
+        """Neutral expert — agent has full control.
 
-        # Read world-frame positions and velocities directly from the aircraft
-        pursuer_ned = pursuer.position_ned.copy()
-        pursuer_vel = pursuer.velocity_ned.copy()
-        target_ned = target.position_ned.copy()
-        target_vel = target.velocity_ned.copy()
-        current_heading_deg = float(pursuer.state["yaw_deg"])
-
-        # Compute desired heading via proportional navigation
-        desired_heading = compute_pn_heading(
-            pursuer_ned,
-            pursuer_vel,
-            target_ned,
-            target_vel,
-            current_heading_deg,
-            dt=0.5,
-            nav_constant=3.0,
-            max_turn_rate_dps=15.0,
-        )
-
-        # Heading error wrapped to [-180, 180]
-        heading_error = (desired_heading - current_heading_deg + 180) % 360 - 180
-
-        # P-controller: proportional to heading error, clipped to [-0.3, 0.3]
-        ail = float(np.clip(heading_error * 0.05, -0.3, 0.3))
-
-        return np.array([ail, 0.0, 1.0], dtype=np.float32)
+        Kept as a hook for future expert re-integration (e.g. curriculum-based
+        PN guidance blending).
+        """
+        return np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
     # Delegate curriculum_stage to underlying env
     @property
