@@ -134,9 +134,9 @@ def run_one(ablation_config: dict, seed: int, total_steps: int, output_dir: str)
     finally:
         train_mod.CURRICULUM_STAGES = original_stages
 
-    # Save model
+    # Save final model (don't overwrite best_model saved by CurriculumCallback)
     model.save(os.path.join(log_dir, "model"))
-    model.save(os.path.join(log_dir, "best_model"))
+    model.save(os.path.join(log_dir, "final_model"))
 
     # Save eval metrics CSV
     csv_path = os.path.join(log_dir, "eval_metrics.csv")
