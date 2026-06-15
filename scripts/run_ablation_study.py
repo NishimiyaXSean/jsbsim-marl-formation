@@ -33,11 +33,9 @@ from src.environment.ablation_wrappers import (
     LeadPursuitRewardWrapper,
 )
 from scripts.train_single_pursuit import (
-    CurriculumCallback,
-    CURRICULUM_STAGES,
+    AutoCurriculumCallback,
     EVAL_EPISODES,
     EVAL_FREQ,
-    TARGET_CAPTURE_RATE_STAGE_1_2,
     ResidualExpertWrapper,
 )
 
@@ -51,8 +49,6 @@ ABLATIONS = [
     {"name": "cubic_action",      "label": "CA",   "wrappers": [CubicActionWrapper]},
     {"name": "cubic+lead",        "label": "CARW", "wrappers": [CubicActionWrapper, LeadPursuitRewardWrapper]},
 ]
-
-STAGES_FOR_ABLATION = [1.0, 1.5]  # Only Stage 1.0 and 1.5
 
 # PPO hyperparameters -- identical across all variants
 PPO_CONFIG = dict(
@@ -78,7 +74,7 @@ PPO_CONFIG = dict(
 
 def build_env(ablation_config: dict, record_tacview: bool = False):
     """Build the full env chain: SinglePursuitEnv -> wrappers... -> ResidualExpertWrapper."""
-    base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=record_tacview)
+    base = SinglePursuitEnv(difficulty_level=0.0, record_tacview=record_tacview)
     for wrapper_cls in ablation_config.get("wrappers", []):
         base = wrapper_cls(base)
     wrapped = ResidualExpertWrapper(base)
@@ -121,30 +117,25 @@ def run_one(ablation_config: dict, seed: int, total_steps: int, output_dir: str)
     # PPO model
     model = PPO("MlpPolicy", train_env, verbose=1, tensorboard_log=log_dir, **PPO_CONFIG)
 
-    # Curriculum callback
-    curriculum_cb = CurriculumCallback(eval_env, log_dir)
-    # Override CURRICULUM_STAGES for ablation (2-stage only)
-    import scripts.train_single_pursuit as train_mod
-    original_stages = train_mod.CURRICULUM_STAGES
-    train_mod.CURRICULUM_STAGES = STAGES_FOR_ABLATION
+    # Auto-curriculum callback (continuous difficulty, sliding-window win rate)
+    auto_cb = AutoCurriculumCallback(eval_env, log_dir)
     try:
-        model.learn(total_timesteps=total_steps, callback=curriculum_cb, progress_bar=False)
+        model.learn(total_timesteps=total_steps, callback=auto_cb, progress_bar=False)
     except KeyboardInterrupt:
         print("\n  Interrupted -- saving checkpoint...")
-    finally:
-        train_mod.CURRICULUM_STAGES = original_stages
 
-    # Save final model (don't overwrite best_model saved by CurriculumCallback)
+    # Save final model (don't overwrite best_model saved by callback)
     model.save(os.path.join(log_dir, "model"))
     model.save(os.path.join(log_dir, "final_model"))
 
     # Save eval metrics CSV
     csv_path = os.path.join(log_dir, "eval_metrics.csv")
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["timesteps", "stage", "capture_rate",
-                                               "avg_min_dist", "avg_intercept_time"])
+        writer = csv.DictWriter(f, fieldnames=["timesteps", "difficulty", "capture_rate",
+                                               "win_rate_100ep", "avg_min_dist",
+                                               "avg_intercept_time"])
         writer.writeheader()
-        writer.writerows(curriculum_cb._eval_metrics)
+        writer.writerows(auto_cb._eval_metrics)
 
     print(f"  Done -> {csv_path}")
     return csv_path
@@ -167,38 +158,24 @@ def summarize(output_dir: str):
             if not metrics:
                 continue
 
-            # Peak Stage 1 capture rate
-            stage1_rates = [float(r["capture_rate"]) for r in metrics
-                           if float(r["stage"]) == 1.0]
-            peak_s1 = max(stage1_rates) if stage1_rates else 0.0
-
-            # Stage 1.5 transfer: use best Stage 1.5 capture rate
-            stage15_metrics = [r for r in metrics if float(r["stage"]) == 1.5]
-            s15_rate = 0.0
-            s15_avg_dist = 0.0
-            s15_total_evals = len(stage15_metrics)
-            if stage15_metrics:
-                s15_rates = [float(r["capture_rate"]) for r in stage15_metrics]
-                s15_rate = max(s15_rates)
-                s15_dists = [float(r["avg_min_dist"]) for r in stage15_metrics]
-                s15_avg_dist = np.mean(s15_dists)
-
-            # Time-to-advance (first timestep where stage >= 1.5)
-            advance_step = int(float(metrics[0]["timesteps"]))
-            for r in metrics:
-                if float(r["stage"]) >= 1.5:
-                    advance_step = int(float(r["timesteps"]))
-                    break
+            # Best capture rate and final difficulty
+            all_rates = [float(r["capture_rate"]) for r in metrics]
+            best_rate = max(all_rates) if all_rates else 0.0
+            all_dists = [float(r["avg_min_dist"]) for r in metrics]
+            avg_dist = np.mean(all_dists) if all_dists else 0.0
+            final_diff = float(metrics[-1]["difficulty"]) if metrics else 0.0
+            best_diff_idx = np.argmax(all_rates) if all_rates else 0
+            best_diff = float(metrics[best_diff_idx]["difficulty"])
 
             rows.append({
                 "label": label,
                 "name": name,
                 "seed": seed,
-                "peak_stage1": peak_s1,
-                "stage15_best": s15_rate,
-                "stage15_avg_dist": s15_avg_dist,
-                "stage15_evals": s15_total_evals,
-                "advance_step": advance_step,
+                "best_capture_rate": best_rate,
+                "avg_min_dist": avg_dist,
+                "best_at_difficulty": best_diff,
+                "final_difficulty": final_diff,
+                "total_evals": len(metrics),
             })
 
     if not rows:
@@ -207,22 +184,22 @@ def summarize(output_dir: str):
 
     # Save detailed CSV
     summary_path = os.path.join(output_dir, "summary.csv")
-    fieldnames = ["label", "name", "seed", "peak_stage1", "stage15_best",
-                  "stage15_avg_dist", "stage15_evals", "advance_step"]
+    fieldnames = ["label", "name", "seed", "best_capture_rate", "avg_min_dist",
+                  "best_at_difficulty", "final_difficulty", "total_evals"]
     with open(summary_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     print(f"\n  Summary CSV -> {summary_path}")
 
-    # Print ranked table by Stage 1.5 capture rate
+    # Print ranked table
     print(f"\n{'='*80}")
-    print("ABLATION RESULTS -- Ranked by Stage 1.5 capture rate")
+    print("AUTO-CURRICULUM ABLATION RESULTS — Ranked by best capture rate")
     print(f"{'='*80}")
-    print(f"{'Rank':<6} {'Var':<6} {'Name':<16} {'Seeds':<8} {'Peak S1':<10} {'Best S1.5':<12} {'95% CI':<20} {'Adv@':<10}")
+    print(f"{'Rank':<6} {'Var':<6} {'Name':<16} {'Seeds':<8} {'Best Cap':<10} "
+          f"{'Avg Dist':<10} {'Best@Diff':<10} {'Final Diff':<12}")
     print("-" * 80)
 
-    # Aggregate per variant
     variants = {}
     for r in rows:
         v = r["label"]
@@ -230,25 +207,22 @@ def summarize(output_dir: str):
             variants[v] = {"name": r["name"], "rows": []}
         variants[v]["rows"].append(r)
 
-    # Sort by mean Stage 1.5 best
     ranked = sorted(variants.items(),
-                    key=lambda kv: np.mean([r["stage15_best"] for r in kv[1]["rows"]]),
+                    key=lambda kv: np.mean([r["best_capture_rate"] for r in kv[1]["rows"]]),
                     reverse=True)
 
     for rank, (label, vdata) in enumerate(ranked, 1):
         vrows = vdata["rows"]
         name = vdata["name"]
         n_seeds = len(vrows)
-        peak_s1 = np.mean([r["peak_stage1"] for r in vrows])
-        best_s15 = np.mean([r["stage15_best"] for r in vrows])
-        total_successes = sum(int(r["stage15_best"] * EVAL_EPISODES) for r in vrows)
-        p, lo, hi = wilson_ci(total_successes, n_seeds * EVAL_EPISODES)
-        avg_adv = np.mean([r["advance_step"] for r in vrows])
+        best_cap = np.mean([r["best_capture_rate"] for r in vrows])
+        avg_d = np.mean([r["avg_min_dist"] for r in vrows])
+        best_diff = np.mean([r["best_at_difficulty"] for r in vrows])
+        final_diff = np.mean([r["final_difficulty"] for r in vrows])
 
         print(f"{rank:<6} {label:<6} {name:<16} {n_seeds:<8} "
-              f"{peak_s1:<10.1%} {best_s15:<12.1%} "
-              f"[{lo:.1%}, {hi:.1%}]  "
-              f"{avg_adv:>8.0f}")
+              f"{best_cap:<10.1%} {avg_d:<10.0f} "
+              f"{best_diff:<10.2f} {final_diff:<12.2f}")
 
     print("-" * 80)
     print(f"  Winner: {ranked[0][0]} ({ranked[0][1]['name']})")
@@ -272,12 +246,13 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 60)
-    print("ABLATION STUDY: Single-Pursuit Training Optimizations")
+    print("AUTO-CURRICULUM ABLATION STUDY")
     print(f"  Variants:    {len(ABLATIONS)}")
     print(f"  Seeds:       {args.seeds}")
     print(f"  Total runs:  {len(ABLATIONS) * len(args.seeds)}")
     print(f"  Steps/run:   {args.steps:,}")
-    print(f"  Stages:      {STAGES_FOR_ABLATION}")
+    print(f"  Curriculum:  Auto (sliding-window 100ep, spring mechanism)")
+    print(f"  Difficulty:  [0.0, 1.0] continuous")
     print(f"  Output:      {output_dir}")
     print("=" * 60)
 
