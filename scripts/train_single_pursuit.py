@@ -83,11 +83,11 @@ class ResidualExpertWrapper(gym.Wrapper):
 
     @property
     def difficulty_level(self):
-        return self._base_env.difficulty_level
+        return self.unwrapped.difficulty_level
 
     @difficulty_level.setter
     def difficulty_level(self, value):
-        self._base_env.difficulty_level = value
+        self.unwrapped.difficulty_level = value
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -118,12 +118,13 @@ class AutoCurriculumCallback(BaseCallback):
     centred on the flow zone (30%–80% win rate).
 
     Adjustment rules (applied after each eval, with a minimum step
-    interval between changes):
+    interval between changes).  Retreat is deliberately gentle to give
+    the agent room to learn against real physics without oscillating:
         win_rate ≥ 80%  →  difficulty += 0.05   (aggressive push)
         50% ≤ wr < 80%  →  difficulty += 0.02   (gentle push)
-        30% ≤ wr < 50%  →  no change            (flow — maintain)
-        10% ≤ wr < 30%  →  difficulty -= 0.03   (gentle retreat)
-        wr < 10%        →  difficulty -= 0.05   (aggressive retreat)
+        25% ≤ wr < 50%  →  no change            (wider flow zone)
+        10% ≤ wr < 25%  →  difficulty -= 0.01   (gentle nudge back)
+        wr < 10%        →  difficulty -= 0.02   (moderate retreat)
     """
 
     MIN_STEPS_PER_LEVEL = 20_000  # minimum steps between difficulty changes
@@ -218,8 +219,11 @@ class AutoCurriculumCallback(BaseCallback):
         # ── Reward components: average per episode ──────────────────────
         r_avg = {k: r_component_sums.get(k, 0.0) / n_ep for k in r_component_keys}
 
+        # Physical telemetry: verify the difficulty actually reached the env
+        physical_diff = self._eval_env.unwrapped.difficulty_level
+
         print(f"\n  [Eval @ {self.num_timesteps:,} steps] "
-              f"diff={self._difficulty:.2f} "
+              f"diff={self._difficulty:.2f}(phys={physical_diff:.2f}) "
               f"capture_rate={capture_rate:.0%} "
               f"win_rate(100ep)={win_rate:.0%} "
               f"avg_min_dist={avg_min_dist:.0f}m "
@@ -244,6 +248,7 @@ class AutoCurriculumCallback(BaseCallback):
         self.logger.record("eval/capture_rate", capture_rate)
         self.logger.record("eval/avg_min_dist", avg_min_dist)
         self.logger.record("curriculum/difficulty", self._difficulty)
+        self.logger.record("curriculum/difficulty_physical", physical_diff)
         self.logger.record("curriculum/win_rate_100ep", win_rate)
         for k in r_component_keys:
             self.logger.record(f"reward/{k}", r_avg[k])
@@ -251,6 +256,7 @@ class AutoCurriculumCallback(BaseCallback):
         self._eval_metrics.append({
             "timesteps": self.num_timesteps,
             "difficulty": self._difficulty,
+            "difficulty_physical": physical_diff,
             "capture_rate": capture_rate,
             "win_rate_100ep": win_rate,
             "avg_min_dist": avg_min_dist,
@@ -270,7 +276,10 @@ class AutoCurriculumCallback(BaseCallback):
             print(f"  -> New best model saved: {best_path}  "
                   f"(capture_rate={capture_rate:.0%})")
 
-        # ── Difficulty adjustment (spring mechanism) ───────────────────
+        # ── Difficulty adjustment (softened spring mechanism) ──────────
+        # Retreat thresholds are deliberately forgiving: the agent needs
+        # room to struggle against real physics without bouncing between
+        # floor and ceiling in a锯齿 oscillation.
         steps_since_change = self.num_timesteps - self._last_difficulty_change
         if steps_since_change >= self.MIN_STEPS_PER_LEVEL:
             old = self._difficulty
@@ -278,12 +287,12 @@ class AutoCurriculumCallback(BaseCallback):
                 self._difficulty = min(1.0, self._difficulty + 0.05)
             elif win_rate >= 0.50:
                 self._difficulty = min(1.0, self._difficulty + 0.02)
-            elif win_rate >= 0.30:
-                pass  # flow zone — maintain
+            elif win_rate >= 0.25:   # wider flow zone: 25-50% is OK
+                pass
             elif win_rate >= 0.10:
-                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.03)
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.01)  # gentle
             else:
-                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.05)
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.02)  # moderate
 
             if abs(self._difficulty - old) > 1e-6:
                 self._last_difficulty_change = self.num_timesteps
