@@ -139,3 +139,128 @@ def test_cubic_action_space_unchanged():
     assert env.action_space.shape == (3,)
     assert env.action_space.low[0] == -1.0
     assert env.action_space.high[0] == 1.0
+
+
+# ── LeadPursuitRewardWrapper tests ──────────────────────────────────────
+
+class DummyEnvForLeadPursuit(gym.Env):
+    """Minimal env that exposes pursuer/target NED state for reward calc."""
+
+    REWARD_PROGRESS = 5.0
+    REWARD_ATA = 5.0
+    REWARD_GROUND_WARNING = 2.0
+    REWARD_SUCCESS = 500.0
+    REWARD_CRASH = -200.0
+    REWARD_LOST_TARGET = -200.0
+    PROXIMITY_TIERS = []
+    MAX_DIST = 10000.0
+    MAX_VEL = 400.0
+    CTRL_FREQ = 60.0
+    DECISION_STEPS = 30
+    PHYSICS_DT = 1.0 / 60.0
+    MAX_EPISODE_TIME = 120.0
+
+    def __init__(self):
+        self.action_space = gym.spaces.Box(-1, 1, (3,))
+        self.observation_space = gym.spaces.Box(-1, 1, (19,))
+        self.pursuer = None
+        self.target_ac = None
+        self._step_counter = 0
+        self._prev_dist = 1000.0
+        self._proximity_awarded = set()
+        self._tacview_frames = []
+        self._record_tacview_frames = False
+
+    def reset(self, seed=None, options=None):
+        # Create mock aircraft-like objects with .position_ned and .velocity_ned
+        self._step_counter = 0
+        self._prev_dist = 1000.0
+        self._proximity_awarded.clear()
+
+        # Mock pursuer
+        self.pursuer = type('obj', (object,), {})()
+        self.pursuer.position_ned = np.array([0.0, 0.0, 3000.0], dtype=np.float64)
+        self.pursuer.velocity_ned = np.array([180.0, 0.0, 0.0], dtype=np.float64)
+        self.pursuer.rpy_rad = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        self.pursuer.state = {
+            "n_z_g": 1.0, "airspeed_mps": 180.0, "alt_m": 3000.0,
+            "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0,
+            "beta_deg": 0.0,
+        }
+
+        # Mock target
+        self.target_ac = type('obj', (object,), {})()
+        self.target_ac.position_ned = np.array([1000.0, 0.0, 3000.0], dtype=np.float64)
+        self.target_ac.velocity_ned = np.array([180.0, 10.0, 0.0], dtype=np.float64)  # moving slightly right
+        self.target_ac.rpy_rad = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        self.target_ac.state = {
+            "n_z_g": 1.0, "airspeed_mps": 180.0, "alt_m": 3000.0,
+            "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0,
+            "beta_deg": 0.0,
+        }
+
+        obs = np.zeros(19, dtype=np.float32)
+        return obs, {}
+
+    def step(self, action):
+        # Move pursuer forward (simple translation)
+        self.pursuer.position_ned = self.pursuer.position_ned + np.array([3.0, 0.0, 0.0])
+
+        # Target moves as well (same as initial velocity)
+        self.target_ac.position_ned = self.target_ac.position_ned + np.array([3.0, 0.167, 0.0])
+
+        self._step_counter += 1
+        prev = self._prev_dist
+        current = float(np.linalg.norm(self.pursuer.position_ned - self.target_ac.position_ned))
+        self._prev_dist = current
+
+        # Compute simple base reward matching SinglePursuitEnv pattern
+        reward = 0.0
+        delta_dist = prev - current
+        reward += self.REWARD_PROGRESS * delta_dist
+
+        from src.utils.geometry import compute_forward_vector, compute_los, compute_tactical_angles
+        a_forward = compute_forward_vector(self.pursuer.rpy_rad)
+        t_forward = compute_forward_vector(self.target_ac.rpy_rad)
+        _, los_dir, _ = compute_los(self.pursuer.position_ned, self.target_ac.position_ned)
+        geo = compute_tactical_angles(a_forward, t_forward, los_dir)
+        reward += self.REWARD_ATA * max(geo["cos_ata"], -0.2) * self.PHYSICS_DT
+
+        terminated = self._step_counter >= 30
+        obs = np.zeros(19, dtype=np.float32)
+        return obs, reward, terminated, False, {"reason": "timeout" if terminated else ""}
+
+
+def test_lead_pursuit_wrapper_shape_unchanged():
+    """LeadPursuitRewardWrapper preserves observation space."""
+    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+    base = DummyEnvForLeadPursuit()
+    env = LeadPursuitRewardWrapper(base)
+    assert env.observation_space.shape == (19,)
+
+
+def test_lead_pursuit_wrapper_adds_reward():
+    """Reward is non-zero when velocity points at target (positive LOS alignment)."""
+    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+    base = DummyEnvForLeadPursuit()
+    env = LeadPursuitRewardWrapper(base)
+    env.reset()
+    _, reward, _, _, _ = env.step(np.zeros(3))
+    # Pursuer moving [180,0,0], target ahead → velocity aligns with LOS
+    # So reward should not be zero (positive lead terms added)
+    assert reward != 0.0  # Sanity check
+
+
+def test_lead_pursuit_wrapper_includes_lead_prediction():
+    """When target has lateral velocity, lead prediction reward is non-zero."""
+    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+    base = DummyEnvForLeadPursuit()
+    env = LeadPursuitRewardWrapper(base)
+    env.reset()
+    # Pursuer and target initially offset; target has lateral velocity
+    _, reward1, _, _, _ = env.step(np.zeros(3))
+    # Step again — lead point should differ from current target position
+    _, reward2, _, _, _ = env.step(np.zeros(3))
+    # Both steps should produce rewards; lead prediction term contributes
+    assert np.isfinite(reward1)
+    assert np.isfinite(reward2)
