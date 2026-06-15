@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import gymnasium as gym
 
-from src.environment.ablation_wrappers import CubicActionWrapper, FrameStackWrapper
+from src.environment.ablation_wrappers import CubicActionWrapper, FrameStackWrapper, LeadPursuitRewardWrapper
 
 
 # ── FrameStackWrapper tests ─────────────────────────────────────────────
@@ -233,34 +233,42 @@ class DummyEnvForLeadPursuit(gym.Env):
 
 def test_lead_pursuit_wrapper_shape_unchanged():
     """LeadPursuitRewardWrapper preserves observation space."""
-    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
     base = DummyEnvForLeadPursuit()
     env = LeadPursuitRewardWrapper(base)
     assert env.observation_space.shape == (19,)
 
 
 def test_lead_pursuit_wrapper_adds_reward():
-    """Reward is non-zero when velocity points at target (positive LOS alignment)."""
-    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+    """Wrapped reward exceeds base reward when velocity points at target."""
     base = DummyEnvForLeadPursuit()
     env = LeadPursuitRewardWrapper(base)
+    base.reset()
+    base.pursuer.velocity_ned = np.array([180.0, 0.0, 0.0], dtype=np.float64)
     env.reset()
-    _, reward, _, _, _ = env.step(np.zeros(3))
-    # Pursuer moving [180,0,0], target ahead → velocity aligns with LOS
-    # So reward should not be zero (positive lead terms added)
-    assert reward != 0.0  # Sanity check
+    env.unwrapped.pursuer.velocity_ned = np.array([180.0, 0.0, 0.0], dtype=np.float64)
+    _, base_reward, _, _, _ = base.step(np.zeros(3))
+    base.reset()
+    base.pursuer.velocity_ned = np.array([180.0, 0.0, 0.0], dtype=np.float64)
+    env.reset()
+    env.unwrapped.pursuer.velocity_ned = np.array([180.0, 0.0, 0.0], dtype=np.float64)
+    _, wrapped_reward, _, _, _ = env.step(np.zeros(3))
+    # Pursuer moving [180,0,0], target directly ahead → velocity aligns with LOS
+    # Lead pursuit terms should be positive (vel_align=~1.0, lead_pred=~1.0)
+    assert wrapped_reward > base_reward, f"wrapped={wrapped_reward} <= base={base_reward}"
 
 
-def test_lead_pursuit_wrapper_includes_lead_prediction():
-    """When target has lateral velocity, lead prediction reward is non-zero."""
-    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+def test_lead_pursuit_wrapper_lead_prediction_contributes():
+    """Lead prediction term varies as target moves laterally."""
     base = DummyEnvForLeadPursuit()
     env = LeadPursuitRewardWrapper(base)
+    base.reset()
     env.reset()
-    # Pursuer and target initially offset; target has lateral velocity
-    _, reward1, _, _, _ = env.step(np.zeros(3))
-    # Step again — lead point should differ from current target position
-    _, reward2, _, _, _ = env.step(np.zeros(3))
-    # Both steps should produce rewards; lead prediction term contributes
-    assert np.isfinite(reward1)
-    assert np.isfinite(reward2)
+    # First step: both moving east
+    _, r1, _, _, _ = env.step(np.zeros(3))
+    # Second step: target drifts further right, changing lead point
+    _, r2, _, _, _ = env.step(np.zeros(3))
+    # Lead point should differ between steps → different lead prediction reward
+    assert np.isfinite(r1) and np.isfinite(r2)
+    # The base reward is identical both steps (same delta_dist, same ATA)
+    # so any difference comes from the wrapper
+    assert abs(r2 - r1) > 1e-6, f"Lead prediction not varying: r1={r1:.6f}, r2={r2:.6f}"
