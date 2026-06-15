@@ -159,7 +159,8 @@ class AutoCurriculumCallback(BaseCallback):
         successes, min_dists, intercept_times = 0, [], []
         # Termination counters
         term_counts = {"success": 0, "timeout": 0, "lost_target": 0,
-                       "ground_crash": 0, "out_of_bounds": 0, "jsbsim_nan": 0}
+                       "ground_crash": 0, "out_of_bounds": 0, "jsbsim_nan": 0,
+                       "stall": 0}
         # Reward component accumulators (averaged over eval episodes)
         r_component_sums: dict = {}
         r_component_keys = ["r_progress", "r_terminal_boost", "r_ata",
@@ -227,6 +228,7 @@ class AutoCurriculumCallback(BaseCallback):
               f"timeout={term_counts['timeout']} "
               f"lost={term_counts['lost_target']} "
               f"crash={term_counts['ground_crash']} "
+              f"stall={term_counts['stall']} "
               f"oob={term_counts['out_of_bounds']}")
         # Reward decomposition
         print(f"    Rewards: progress={r_avg['r_progress']:+.1f} "

@@ -31,6 +31,7 @@ Actions
     d_heading →  [-1, 1] maps to [-6°, +6°] heading change per decision (0.1 s = 60°/s)
     d_alt     →  [-1, 1] maps to [-3 m, +3 m] altitude change per decision (0.1 s = 30 m/s)
     d_speed   →  [-1, 1] maps to [-2, +2] m/s speed change per decision (0.1 s = 20 m/s²)
+    Speed range: [100, 270] m/s — pursuer has ≥20% advantage over target max 160 m/s
 
 The FlightController adds these deltas to the persistent target state
 (which the agent never sees directly — only through the observation).
@@ -100,6 +101,12 @@ REWARD_CRASH = -200.0        # strong negative for crashing
 REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
 STEP_PENALTY = 0.3           # per-decision survival penalty — makes stalling painful
+ANTI_STALL_WINDOW = 50       # steps (5 s at 10 Hz) — sliding window for Vc check
+ANTI_STALL_MIN_VC = 2.0      # m/s — closure rate below this triggers stall detection
+ANTI_STALL_MIN_DIST = 300.0  # m — only trigger when still far from target
+ANTI_STALL_PENALTY = 100.0   # penalty when stall truncation fires
+VELOCITY_SHAPING_WEIGHT = 3.0  # reward multiplier for high speed when well-aligned
+VELOCITY_SHAPING_ATA_THRESH = 0.95  # cos(ATA) threshold for velocity shaping
 
 # Staged proximity bonuses — stepping stones to guide the agent closer.
 # Awarded once per episode when the agent first crosses each threshold.
@@ -186,6 +193,8 @@ class SinglePursuitEnv(gym.Env):
         self._prev_rpy = np.zeros(3, dtype=np.float64)  # for pursuer angular velocity
         self._prev_target_rpy = np.zeros(3, dtype=np.float64)  # for target angular velocity
         self._prev_airspeed = 180.0  # m/s — for Specific Excess Power calculation
+        from collections import deque
+        self._closure_rates: deque = deque(maxlen=ANTI_STALL_WINDOW)
 
     # ── Difficulty property ─────────────────────────────────────────────────
 
@@ -262,7 +271,7 @@ class SinglePursuitEnv(gym.Env):
             lat_deg=30.0, lon_deg=120.0,
             alt_ft=int(3000 * 3.28084),
             heading_deg=target_hdg,
-            speed_kts=350,  # 180 m/s cruise for target
+            speed_kts=310,  # 160 m/s — pursuer has 270/160=69% speed advantage
             trim=False,
         )
         self.target_ac.position_ned = target_ned
@@ -299,6 +308,7 @@ class SinglePursuitEnv(gym.Env):
         self._prev_rpy = self.pursuer.rpy_rad.copy()
         self._prev_target_rpy = self.target_ac.rpy_rad.copy()
         self._prev_airspeed = float(self.pursuer.state["airspeed_mps"])
+        self._closure_rates.clear()
         self._target_profile = self._generate_target_profile(rng, target_hdg,
                                                             spawn_alt_m=float(target_ned[2]))
 
@@ -321,7 +331,7 @@ class SinglePursuitEnv(gym.Env):
         # Update persistent flight targets
         self._target.heading_deg = (self._target.heading_deg + d_hdg) % 360.0
         self._target.altitude_m = np.clip(self._target.altitude_m + d_alt, 500.0, 11000.0)
-        self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 250.0)
+        self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 270.0)
 
         total_reward = 0.0
 
@@ -353,6 +363,7 @@ class SinglePursuitEnv(gym.Env):
         truncated = False
         reason = "timeout"
         min_dist = self._prev_dist
+        start_dist = self._prev_dist  # for closure-rate computation
 
         for _ in range(DECISION_STEPS):
             # FlightController handles all 3 axes (heading + altitude + speed)
@@ -414,6 +425,15 @@ class SinglePursuitEnv(gym.Env):
             total_reward += ata_r
             _r_ata += ata_r
 
+            # ── Dynamic Velocity Shaping ──────────────────────────────────
+            # When well-aligned, reward high speed.  This prevents the agent
+            # from "hanging" at low speed just to keep the nose on target.
+            if geo["cos_ata"] > VELOCITY_SHAPING_ATA_THRESH:
+                aspd = float(self.pursuer.state["airspeed_mps"])
+                vel_bonus = (aspd / MAX_VEL) * VELOCITY_SHAPING_WEIGHT * dt
+                total_reward += vel_bonus
+                _r_ata += vel_bonus  # tracked under ATA for simplicity
+
             # Time pressure
             time_ratio = self._step_counter / (CTRL_FREQ * MAX_EPISODE_TIME)
             tp = -0.5 * time_ratio * dt
@@ -456,9 +476,24 @@ class SinglePursuitEnv(gym.Env):
                 reason = "out_of_bounds"
                 break
 
+        # ── Anti-Stall Truncation ─────────────────────────────────────────
+        # Monitor closure rate over a 5 s sliding window.  If the agent is
+        # barely closing (< 2 m/s) while still far (> 300 m) for 5+ seconds,
+        # truncate early — no more "comfortable 120 s drifting."
+        if not terminated:
+            end_dist = self._prev_dist
+            closure_rate = (start_dist - end_dist) / DECISION_DT  # m/s, + = closing
+            self._closure_rates.append(closure_rate)
+            if (len(self._closure_rates) >= ANTI_STALL_WINDOW
+                    and end_dist > ANTI_STALL_MIN_DIST
+                    and all(v < ANTI_STALL_MIN_VC for v in self._closure_rates)):
+                truncated = True
+                reason = "stall"
+                total_reward -= ANTI_STALL_PENALTY
+
         # --- Timeout ---
         current_time = self._step_counter / CTRL_FREQ
-        if not terminated and current_time >= MAX_EPISODE_TIME:
+        if not terminated and not truncated and current_time >= MAX_EPISODE_TIME:
             truncated = True
             reason = "timeout"
 
@@ -569,7 +604,7 @@ class SinglePursuitEnv(gym.Env):
         d = self._difficulty
         tp = TargetProfile()
         tp.alt_m = spawn_alt_m
-        tp.speed_mps = 130.0 + d * 50.0                        # 130 → 180 m/s
+        tp.speed_mps = 130.0 + d * 30.0                        # 130 → 160 m/s
         tp.heading_deg = spawn_heading
         tp.heading_rate_dps = rng.uniform(-12.0 * d, 12.0 * d)  # 0 → ±12 °/s
         tp.alt_rate_mps = rng.uniform(-4.0 * d, 4.0 * d)        # 0 → ±4 m/s
