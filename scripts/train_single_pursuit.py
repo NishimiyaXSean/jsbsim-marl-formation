@@ -114,7 +114,8 @@ class CurriculumCallback(BaseCallback):
         super().__init__(verbose)
         self._eval_env = eval_env
         self._log_dir = log_dir
-        self._best_capture_rate = -1.0
+        self._best_capture_rate = -1.0          # global best across all stages
+        self._stage_best_capture_rate = -1.0     # best within current stage
         self._current_stage = 1.0
         self._stage_start_step = 0
         self._eval_metrics: list = []  # per-eval metrics for CSV
@@ -170,23 +171,34 @@ class CurriculumCallback(BaseCallback):
             "avg_intercept_time": avg_intercept_time,
         })
 
-        # Save best model
-        if capture_rate > self._best_capture_rate:
+        # ── Per-stage best model ───────────────────────────────────────────
+        # Save best model for the CURRENT stage (only when capture_rate > 0).
+        # This preserves Stage 1.0's 87% model even after advancing to 1.5.
+        if capture_rate > 0 and capture_rate > self._stage_best_capture_rate:
+            self._stage_best_capture_rate = capture_rate
+            stage_label = f"best_stage_{self._current_stage:.1f}".replace(".", "_")
+            stage_path = os.path.join(self._log_dir, stage_label)
+            self.model.save(stage_path)
+            print(f"  -> New stage-best ({self._current_stage:.1f}) saved: "
+                  f"{stage_path}  (capture_rate={capture_rate:.0%})")
+
+        # ── Global best model (across all stages) ──────────────────────────
+        if capture_rate > 0 and capture_rate > self._best_capture_rate:
             self._best_capture_rate = capture_rate
             best_path = os.path.join(self._log_dir, "best_model")
             self.model.save(best_path)
-            print(f"  -> New best model saved: {best_path}")
+            print(f"  -> New global-best saved: {best_path}  "
+                  f"(stage={self._current_stage:.1f}, capture_rate={capture_rate:.0%})")
 
-        # Stage advancement: uses best-ever capture rate in the current stage
-        # to decide readiness.  This way, if the agent peaked early (e.g. 87%
-        # at 2K steps) it can still advance once MIN_STEPS_PER_STAGE is met,
-        # even if exploration caused temporary degradation.
+        # ── Stage advancement ──────────────────────────────────────────────
+        # Uses stage-best capture rate to decide readiness — if the agent
+        # peaked early it can still advance once MIN_STEPS_PER_STAGE is met.
         steps_in_stage = self.num_timesteps - self._stage_start_step
         threshold = (TARGET_CAPTURE_RATE_STAGE_1_2
                      if self._current_stage < 2.0
                      else TARGET_CAPTURE_RATE_STAGE_2_3)
         met_steps = steps_in_stage >= self.MIN_STEPS_PER_STAGE
-        met_threshold = self._best_capture_rate >= threshold
+        met_threshold = self._stage_best_capture_rate >= threshold
         is_last = np.isclose(self._current_stage, CURRICULUM_STAGES[-1])
 
         if met_steps and met_threshold and not is_last:
@@ -201,9 +213,9 @@ class CurriculumCallback(BaseCallback):
             self._current_stage = CURRICULUM_STAGES[current_idx + 1]
             self._stage_start_step = self.num_timesteps
             print(f"  >> Advancing to curriculum stage {self._current_stage:.1f} "
-                  f"(best capture rate was {self._best_capture_rate:.0%})")
+                  f"(stage-best capture rate was {self._stage_best_capture_rate:.0%})")
             self._eval_env.curriculum_stage = self._current_stage
-            self._best_capture_rate = -1.0  # reset for new stage
+            self._stage_best_capture_rate = -1.0  # reset for new stage
 
 
 class TacviewEvalCallback(BaseCallback):
