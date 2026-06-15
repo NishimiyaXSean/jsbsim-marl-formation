@@ -79,3 +79,62 @@ class CubicActionWrapper(gym.Wrapper):
         action = np.asarray(action, dtype=np.float32)
         mapped = np.sign(action) * np.power(np.abs(action), 3.0)
         return self.env.step(mapped)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Lead Pursuit Reward Wrapper — guide toward predicted intercept point
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LeadPursuitRewardWrapper(gym.Wrapper):
+    """Add lead pursuit reward terms on top of the base environment reward.
+
+    Two new components:
+    1. Velocity alignment — cos(pursuer_vel_dir, LOS_dir) × 2.0 × dt
+       Rewards the aircraft actually MOVING toward the target (not just
+       pointing at it — accounts for AoA/sideslip).
+
+    2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 3.0 × dt
+       Rewards pointing at where the target WILL be (1 second ahead),
+       not where it currently is. This is the core of lead pursuit.
+    """
+
+    VEL_ALIGN_WEIGHT = 2.0
+    LEAD_PREDICT_WEIGHT = 3.0
+    LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        # Only add lead pursuit bonus during normal flight (not on termination)
+        if terminated or truncated:
+            return obs, reward, terminated, truncated, info
+
+        # Access underlying SinglePursuitEnv state via unwrapped chain
+        env = self.env
+
+        pursuer_pos = env.pursuer.position_ned
+        pursuer_vel = env.pursuer.velocity_ned
+        pursuer_rpy = env.pursuer.rpy_rad
+        target_pos = env.target_ac.position_ned
+        target_vel = env.target_ac.velocity_ned
+
+        from src.utils.geometry import compute_forward_vector, compute_los
+
+        dt = env.PHYSICS_DT
+
+        # 1. Velocity alignment: is the aircraft MOVING toward the target?
+        _, los_dir, _ = compute_los(pursuer_pos, target_pos)
+        vel_norm = float(np.linalg.norm(pursuer_vel))
+        if vel_norm > 1.0:
+            vel_dir = pursuer_vel / vel_norm
+            cos_vel_los = float(np.clip(np.dot(vel_dir, los_dir), -0.5, 1.0))
+            reward += cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
+
+        # 2. Lead prediction: point at future target position
+        future_pos = target_pos + target_vel * self.LEAD_TIME_SEC
+        _, future_los_dir, _ = compute_los(pursuer_pos, future_pos)
+        pursuer_forward = compute_forward_vector(pursuer_rpy)
+        cos_lead = float(np.clip(np.dot(pursuer_forward, future_los_dir), -0.5, 1.0))
+        reward += cos_lead * self.LEAD_PREDICT_WEIGHT * dt
+
+        return obs, reward, terminated, truncated, info
