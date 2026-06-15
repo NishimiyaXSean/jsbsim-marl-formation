@@ -109,7 +109,6 @@ class CurriculumCallback(BaseCallback):
     """
 
     MIN_STEPS_PER_STAGE = 40_000   # must train at least this many steps per stage
-    MIN_CONSECUTIVE_EVALS = 2      # require N consecutive evals above threshold to advance
 
     def __init__(self, eval_env, log_dir: str, verbose: int = 0):
         super().__init__(verbose)
@@ -118,7 +117,6 @@ class CurriculumCallback(BaseCallback):
         self._best_capture_rate = -1.0
         self._current_stage = 1.0
         self._stage_start_step = 0
-        self._consecutive_above = 0  # counter for sustained performance
         self._eval_metrics: list = []  # per-eval metrics for CSV
 
     def _on_step(self) -> bool:
@@ -144,8 +142,8 @@ class CurriculumCallback(BaseCallback):
                     ep_min_dist = min(ep_min_dist, info["min_dist"])
             if info.get("reason") == "success":
                 successes += 1
-                # Get intercept time from the base env's step counter
-                base_env = self._eval_env._base_env  # ResidualExpertWrapper -> SinglePursuitEnv
+                # Get intercept time from the unwrapped SinglePursuitEnv
+                base_env = self._eval_env.unwrapped
                 ep_intercept_time = base_env._step_counter / 60.0  # CTRL_FREQ
             min_dists.append(ep_min_dist)
             intercept_times.append(ep_intercept_time)
@@ -179,24 +177,19 @@ class CurriculumCallback(BaseCallback):
             self.model.save(best_path)
             print(f"  -> New best model saved: {best_path}")
 
-        # Stage advancement: requires sustained performance (consecutive evals
-        # above threshold) AND minimum step count per stage.  This prevents a
-        # single lucky eval from triggering premature advancement.
+        # Stage advancement: uses best-ever capture rate in the current stage
+        # to decide readiness.  This way, if the agent peaked early (e.g. 87%
+        # at 2K steps) it can still advance once MIN_STEPS_PER_STAGE is met,
+        # even if exploration caused temporary degradation.
         steps_in_stage = self.num_timesteps - self._stage_start_step
         threshold = (TARGET_CAPTURE_RATE_STAGE_1_2
                      if self._current_stage < 2.0
                      else TARGET_CAPTURE_RATE_STAGE_2_3)
-
-        if capture_rate >= threshold:
-            self._consecutive_above += 1
-        else:
-            self._consecutive_above = 0
-
         met_steps = steps_in_stage >= self.MIN_STEPS_PER_STAGE
-        met_consecutive = self._consecutive_above >= self.MIN_CONSECUTIVE_EVALS
+        met_threshold = self._best_capture_rate >= threshold
         is_last = np.isclose(self._current_stage, CURRICULUM_STAGES[-1])
 
-        if met_steps and met_consecutive and not is_last:
+        if met_steps and met_threshold and not is_last:
             # Advance to next stage (0.5 increment)
             current_idx = next((i for i, s in enumerate(CURRICULUM_STAGES)
                                 if np.isclose(s, self._current_stage)), None)
@@ -204,12 +197,11 @@ class CurriculumCallback(BaseCallback):
                 print(f"  !! WARNING: stage={self._current_stage} not in CURRICULUM_STAGES, resetting to 1.0")
                 self._current_stage = 1.0
                 self._eval_env.curriculum_stage = 1.0
-                self._consecutive_above = 0
                 return
             self._current_stage = CURRICULUM_STAGES[current_idx + 1]
             self._stage_start_step = self.num_timesteps
-            self._consecutive_above = 0  # reset for new stage
-            print(f"  >> Advancing to curriculum stage {self._current_stage:.1f}")
+            print(f"  >> Advancing to curriculum stage {self._current_stage:.1f} "
+                  f"(best capture rate was {self._best_capture_rate:.0%})")
             self._eval_env.curriculum_stage = self._current_stage
             self._best_capture_rate = -1.0  # reset for new stage
 
