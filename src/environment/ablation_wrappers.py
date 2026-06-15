@@ -60,22 +60,48 @@ class FrameStackWrapper(gym.Wrapper):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Cubic Action Wrapper — nonlinear action mapping for origin precision
+#  Blended Action Wrapper — linear-cubic mix to eliminate the origin dead-zone
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BlendedActionWrapper(gym.Wrapper):
+    """Linear-cubic blended action mapping: α·a + (1-α)·a³.
+
+    Pure cubic (a³) creates a dead-zone near zero where tiny policy outputs
+    produce essentially no physical effect.  This kills the exploration gradient
+    and encourages the policy to collapse to a fixed trim command.
+
+    The blend guarantees a linear floor (α·a) so that even small network
+    outputs produce perceptible physical changes, while the cubic component
+    still provides precision near the origin.
+
+        a=0.0 → 0.000    a=0.1 → 0.0208   a=0.5 → 0.2188
+        a=1.0 → 1.000    a=-0.3 → -0.078
+
+    Args:
+        env:  Gym environment to wrap.
+        alpha: Linear blend coefficient (default 0.2).
+               alpha=0.0 → pure cubic,  alpha=1.0 → pure linear.
+    """
+
+    def __init__(self, env: gym.Env, alpha: float = 0.2):
+        super().__init__(env)
+        self.alpha = alpha
+
+    def step(self, action):
+        action = np.asarray(action, dtype=np.float32)
+        cubic = np.sign(action) * np.power(np.abs(action), 3.0)
+        mapped = self.alpha * action + (1.0 - self.alpha) * cubic
+        return self.env.step(mapped)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Cubic Action Wrapper — deprecated, use BlendedActionWrapper for new work
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class CubicActionWrapper(gym.Wrapper):
-    """Map raw policy output a ∈ [-1,1] through a cubic function: a³.
+    """Pure cubic mapping a³ — deprecated in favour of BlendedActionWrapper.
 
-    This gives the policy fine-grained control near the origin while preserving
-    full authority at the extremes:
-
-        a=0.0 → 0.000  (dead zone for small jitter)
-        a=0.1 → 0.001  (~1000 steps to max, extremely precise)
-        a=0.5 → 0.125  (~8 steps to max)
-        a=1.0 → 1.000  (full authority preserved)
-
-    The mapping applies to all action dimensions uniformly. Exploration noise
-    from PPO's log_std also passes through this mapping.
+    Kept for backward compatibility with saved models and past experiments.
     """
 
     def step(self, action):

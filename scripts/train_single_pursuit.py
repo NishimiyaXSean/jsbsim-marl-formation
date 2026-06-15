@@ -127,12 +127,13 @@ class AutoCurriculumCallback(BaseCallback):
     """
 
     MIN_STEPS_PER_LEVEL = 20_000  # minimum steps between difficulty changes
+    MIN_DIFFICULTY = 0.15         # curriculum floor — no trivial straight-line targets
 
     def __init__(self, eval_env, log_dir: str, verbose: int = 0):
         super().__init__(verbose)
         self._eval_env = eval_env
         self._log_dir = log_dir
-        self._difficulty = 0.0
+        self._difficulty = self.MIN_DIFFICULTY
         self._best_capture_rate = -1.0
         self._last_difficulty_change = 0
         self._eval_metrics: list = []
@@ -280,9 +281,9 @@ class AutoCurriculumCallback(BaseCallback):
             elif win_rate >= 0.30:
                 pass  # flow zone — maintain
             elif win_rate >= 0.10:
-                self._difficulty = max(0.0, self._difficulty - 0.03)
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.03)
             else:
-                self._difficulty = max(0.0, self._difficulty - 0.05)
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.05)
 
             if abs(self._difficulty - old) > 1e-6:
                 self._last_difficulty_change = self.num_timesteps
