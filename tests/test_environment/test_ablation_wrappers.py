@@ -76,3 +76,71 @@ def test_frame_stack_preserves_info():
     env.reset()
     _, _, _, _, info = env.step(np.zeros(2))
     assert info["step"] == 1
+
+
+# ── CubicActionWrapper tests ────────────────────────────────────────────
+
+class DummyEnvForCubicAction(gym.Env):
+    """Captures the action received by the base env."""
+    def __init__(self):
+        self.action_space = gym.spaces.Box(-1.0, 1.0, (3,))
+        self.observation_space = gym.spaces.Box(-1.0, 1.0, (4,))
+        self.last_action = None
+
+    def reset(self, seed=None, options=None):
+        self.last_action = None
+        return np.zeros(4, dtype=np.float32), {}
+
+    def step(self, action):
+        self.last_action = np.asarray(action, dtype=np.float32).copy()
+        return np.zeros(4, dtype=np.float32), 0.0, False, False, {}
+
+
+def test_cubic_action_zero_passes_zero():
+    """a=0 maps to 0 through cubic."""
+    from src.environment.ablation_wrappers import CubicActionWrapper
+    base = DummyEnvForCubicAction()
+    env = CubicActionWrapper(base)
+    env.reset()
+    env.step(np.array([0.0, 0.0, 0.0], dtype=np.float32))
+    np.testing.assert_array_almost_equal(base.last_action, [0.0, 0.0, 0.0])
+
+
+def test_cubic_action_half_maps_to_eighth():
+    """a=0.5 maps to 0.125 through cubic."""
+    from src.environment.ablation_wrappers import CubicActionWrapper
+    base = DummyEnvForCubicAction()
+    env = CubicActionWrapper(base)
+    env.reset()
+    env.step(np.array([0.5, 0.5, 0.5], dtype=np.float32))
+    np.testing.assert_array_almost_equal(base.last_action, [0.125, 0.125, 0.125])
+
+
+def test_cubic_action_one_passes_one():
+    """a=1.0 maps to 1.0 through cubic."""
+    from src.environment.ablation_wrappers import CubicActionWrapper
+    base = DummyEnvForCubicAction()
+    env = CubicActionWrapper(base)
+    env.reset()
+    env.step(np.array([1.0, 1.0, 1.0], dtype=np.float32))
+    np.testing.assert_array_almost_equal(base.last_action, [1.0, 1.0, 1.0])
+
+
+def test_cubic_action_negative_preserves_sign():
+    """a=-0.5 maps to -0.125 through cubic — sign preserved."""
+    from src.environment.ablation_wrappers import CubicActionWrapper
+    base = DummyEnvForCubicAction()
+    env = CubicActionWrapper(base)
+    env.reset()
+    env.step(np.array([-0.5, -1.0, 0.0], dtype=np.float32))
+    np.testing.assert_array_almost_equal(base.last_action, [-0.125, -1.0, 0.0])
+
+
+def test_cubic_action_space_unchanged():
+    """CubicActionWrapper preserves the action space definition."""
+    from src.environment.ablation_wrappers import CubicActionWrapper
+    base = DummyEnvForCubicAction()
+    env = CubicActionWrapper(base)
+    assert env.action_space.shape == (3,)
+    assert env.action_space.low[0] == -1.0
+    assert env.action_space.high[0] == 1.0
