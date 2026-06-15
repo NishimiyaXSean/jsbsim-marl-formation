@@ -101,8 +101,10 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
        not where it currently is. This is the core of lead pursuit.
     """
 
-    VEL_ALIGN_WEIGHT = 2.0
-    LEAD_PREDICT_WEIGHT = 3.0
+    VEL_ALIGN_WEIGHT = 15.0      # velocity alignment — moving toward target
+    LEAD_PREDICT_WEIGHT = 25.0   # lead prediction — pointing at future position
+    LOS_RATE_WEIGHT = 20.0       # LOS-rate damping — maintaining collision course
+    LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
 
     def step(self, action):
@@ -127,16 +129,44 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         # 1. Velocity alignment: is the aircraft MOVING toward the target?
         _, los_dir, _ = compute_los(pursuer_pos, target_pos)
         vel_norm = float(np.linalg.norm(pursuer_vel))
+        r_vel_align = 0.0
         if vel_norm > 1.0:
             vel_dir = pursuer_vel / vel_norm
             cos_vel_los = float(np.clip(np.dot(vel_dir, los_dir), -0.5, 1.0))
-            reward += cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
+            r_vel_align = cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
+            reward += r_vel_align
 
         # 2. Lead prediction: point at future target position
         future_pos = target_pos + target_vel * self.LEAD_TIME_SEC
         _, future_los_dir, _ = compute_los(pursuer_pos, future_pos)
         pursuer_forward = compute_forward_vector(pursuer_rpy)
         cos_lead = float(np.clip(np.dot(pursuer_forward, future_los_dir), -0.5, 1.0))
-        reward += cos_lead * self.LEAD_PREDICT_WEIGHT * dt
+        r_lead_pred = cos_lead * self.LEAD_PREDICT_WEIGHT * dt
+        reward += r_lead_pred
+
+        # 3. LOS-rate damping — the core guidance metric
+        # λ̇ = |v_rel_perp| / dist  (rad/s)
+        # λ̇ ≈ 0  →  pursuer is on a perfect collision course
+        # Reward decays exponentially with |λ̇|, creating a strong gradient
+        # toward the collision-course manifold.
+        los_vec = target_pos - pursuer_pos
+        los_dist = float(np.linalg.norm(los_vec))
+        if los_dist > 10.0:
+            los_dir = los_vec / los_dist
+            rel_vel = target_vel - pursuer_vel
+            # Component of relative velocity perpendicular to LOS
+            rel_vel_parallel = float(np.dot(rel_vel, los_dir)) * los_dir
+            rel_vel_perp = rel_vel - rel_vel_parallel
+            los_rate_mag = float(np.linalg.norm(rel_vel_perp)) / los_dist
+            # Exponential reward: max at λ̇=0, decays to zero for large λ̇
+            r_los_rate = np.exp(-los_rate_mag * self.LOS_RATE_SCALE) * self.LOS_RATE_WEIGHT * dt
+            reward += r_los_rate
+        else:
+            r_los_rate = 0.0
+
+        # Append lead pursuit components to info for diagnostics
+        info["r_lead_vel_align"] = r_vel_align
+        info["r_lead_pred"] = r_lead_pred
+        info["r_los_rate"] = r_los_rate
 
         return obs, reward, terminated, truncated, info
