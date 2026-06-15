@@ -11,14 +11,15 @@ Target difficulty increases across 3 curriculum stages:
 
 Observations
 ------------
-19-dim local observation (same as the original ``compute_obs``):
+22-dim local observation:
     0-2:   target relative position in body frame (3)
     3-5:   own velocity in body frame (3)
     6-8:   own attitude rpy (3)
-    9-11:  own angular velocity in body frame (3)   [placeholder — always zero]
+    9-11:  own angular velocity [roll, pitch, yaw] (3)   [finite-diff over decision interval]
     12:    own height (1)
     13-15: target velocity in body frame (3)
-    16-18: tactical geometry cos(ATA), cos(AA), cos(HCA) (3)
+    16-18: target angular velocity [roll, pitch, yaw] (3) [finite-diff over decision interval]
+    19-21: tactical geometry cos(ATA), cos(AA), cos(HCA) (3)
 
 Actions
 -------
@@ -146,7 +147,7 @@ class SinglePursuitEnv(gym.Env):
 
         # Observation / action spaces
         self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(19,), dtype=np.float32,
+            low=-1.0, high=1.0, shape=(22,), dtype=np.float32,
         )
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32,
@@ -159,6 +160,8 @@ class SinglePursuitEnv(gym.Env):
         self._step_counter = 0
         self._prev_dist = 0.0
         self._proximity_awarded: set = set()  # tiers already awarded this episode
+        self._prev_rpy = np.zeros(3, dtype=np.float64)  # for pursuer angular velocity
+        self._prev_target_rpy = np.zeros(3, dtype=np.float64)  # for target angular velocity
 
     # ── Reset ───────────────────────────────────────────────────────────────
 
@@ -263,6 +266,8 @@ class SinglePursuitEnv(gym.Env):
             self.pursuer.position_ned - self.target_ac.position_ned))
         self._proximity_awarded.clear()
         self._tacview_frames = []
+        self._prev_rpy = self.pursuer.rpy_rad.copy()
+        self._prev_target_rpy = self.target_ac.rpy_rad.copy()
         self._target_profile = self._generate_target_profile(rng, target_hdg,
                                                             spawn_alt_m=float(target_ned[2]))
 
@@ -427,13 +432,32 @@ class SinglePursuitEnv(gym.Env):
         own_vel_body = world_to_body(a_vel)
         tgt_vel_body = world_to_body(t_vel)
 
+        # Pursuer angular velocity: finite-difference from previous rpy (yaw unwrapped)
+        current_rpy = a_rpy.copy()
+        d_roll = current_rpy[0] - self._prev_rpy[0]
+        d_pitch = current_rpy[1] - self._prev_rpy[1]
+        d_yaw = current_rpy[2] - self._prev_rpy[2]
+        d_yaw = (d_yaw + np.pi) % (2 * np.pi) - np.pi  # unwrap
+        ang_vel = np.array([d_roll, d_pitch, d_yaw]) / DECISION_DT
+        self._prev_rpy = current_rpy
+
+        # Target angular velocity: finite-difference from previous target rpy
+        current_tgt_rpy = t_rpy.copy()
+        d_tgt_roll = current_tgt_rpy[0] - self._prev_target_rpy[0]
+        d_tgt_pitch = current_tgt_rpy[1] - self._prev_target_rpy[1]
+        d_tgt_yaw = current_tgt_rpy[2] - self._prev_target_rpy[2]
+        d_tgt_yaw = (d_tgt_yaw + np.pi) % (2 * np.pi) - np.pi  # unwrap
+        tgt_ang_vel = np.array([d_tgt_roll, d_tgt_pitch, d_tgt_yaw]) / DECISION_DT
+        self._prev_target_rpy = current_tgt_rpy
+
         obs = np.concatenate([
             rel_pos_body / MAX_DIST,
             own_vel_body / MAX_VEL,
             a_rpy / np.pi,
-            np.zeros(3),                        # angular velocity placeholder
+            ang_vel / MAX_ANG_VEL,
             [a_pos[2] / MAX_HEIGHT],
             tgt_vel_body / MAX_VEL,
+            tgt_ang_vel / MAX_ANG_VEL,
             [geo["cos_ata"], geo["cos_aa"], geo["cos_hca"]],
         ]).astype(np.float32)
 
