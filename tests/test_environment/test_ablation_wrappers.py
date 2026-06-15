@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import gymnasium as gym
 
-from src.environment.ablation_wrappers import FrameStackWrapper
+from src.environment.ablation_wrappers import CubicActionWrapper, FrameStackWrapper
 
 
 # ── FrameStackWrapper tests ─────────────────────────────────────────────
@@ -98,7 +98,6 @@ class DummyEnvForCubicAction(gym.Env):
 
 def test_cubic_action_zero_passes_zero():
     """a=0 maps to 0 through cubic."""
-    from src.environment.ablation_wrappers import CubicActionWrapper
     base = DummyEnvForCubicAction()
     env = CubicActionWrapper(base)
     env.reset()
@@ -108,7 +107,6 @@ def test_cubic_action_zero_passes_zero():
 
 def test_cubic_action_half_maps_to_eighth():
     """a=0.5 maps to 0.125 through cubic."""
-    from src.environment.ablation_wrappers import CubicActionWrapper
     base = DummyEnvForCubicAction()
     env = CubicActionWrapper(base)
     env.reset()
@@ -118,7 +116,6 @@ def test_cubic_action_half_maps_to_eighth():
 
 def test_cubic_action_one_passes_one():
     """a=1.0 maps to 1.0 through cubic."""
-    from src.environment.ablation_wrappers import CubicActionWrapper
     base = DummyEnvForCubicAction()
     env = CubicActionWrapper(base)
     env.reset()
@@ -128,7 +125,6 @@ def test_cubic_action_one_passes_one():
 
 def test_cubic_action_negative_preserves_sign():
     """a=-0.5 maps to -0.125 through cubic — sign preserved."""
-    from src.environment.ablation_wrappers import CubicActionWrapper
     base = DummyEnvForCubicAction()
     env = CubicActionWrapper(base)
     env.reset()
@@ -138,7 +134,6 @@ def test_cubic_action_negative_preserves_sign():
 
 def test_cubic_action_space_unchanged():
     """CubicActionWrapper preserves the action space definition."""
-    from src.environment.ablation_wrappers import CubicActionWrapper
     base = DummyEnvForCubicAction()
     env = CubicActionWrapper(base)
     assert env.action_space.shape == (3,)
