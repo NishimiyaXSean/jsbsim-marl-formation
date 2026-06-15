@@ -30,7 +30,6 @@ from stable_baselines3.common.monitor import Monitor
 from src.environment.single_pursuit_env import SinglePursuitEnv
 from src.environment.ablation_wrappers import (
     CubicActionWrapper,
-    FrameStackWrapper,
     LeadPursuitRewardWrapper,
 )
 from scripts.train_single_pursuit import (
@@ -47,10 +46,9 @@ from scripts.train_single_pursuit import (
 # ==============================================================================
 
 ABLATIONS = [
-    {"name": "baseline",          "label": "BL",  "wrappers": []},
-    {"name": "lead_pursuit",      "label": "RW",  "wrappers": [LeadPursuitRewardWrapper]},
-    {"name": "frame_stack",       "label": "FS",  "wrappers": [FrameStackWrapper]},
-    {"name": "cubic_action",      "label": "CA",  "wrappers": [CubicActionWrapper]},
+    {"name": "baseline",          "label": "BL",   "wrappers": []},
+    {"name": "lead_pursuit",      "label": "RW",   "wrappers": [LeadPursuitRewardWrapper]},
+    {"name": "cubic_action",      "label": "CA",   "wrappers": [CubicActionWrapper]},
     {"name": "cubic+lead",        "label": "CARW", "wrappers": [CubicActionWrapper, LeadPursuitRewardWrapper]},
 ]
 
@@ -265,7 +263,7 @@ def main():
     parser.add_argument("--skip-training", action="store_true",
                        help="Skip training, just regenerate summary from existing CSVs")
     parser.add_argument("--ablation", type=str, nargs="+",
-                       choices=["BL", "RW", "FS", "CA", "CARW"],
+                       choices=["BL", "RW", "CA", "CARW"],
                        help="Run only specific ablations (e.g. --ablation BL CARW)")
     args = parser.parse_args()
 
