@@ -3,6 +3,8 @@ import numpy as np
 import pytest
 import gymnasium as gym
 
+from src.environment.ablation_wrappers import FrameStackWrapper
+
 
 # ── FrameStackWrapper tests ─────────────────────────────────────────────
 
@@ -29,7 +31,6 @@ class DummyEnvForFrameStack(gym.Env):
 
 def test_frame_stack_output_shape():
     """FrameStackWrapper outputs (obs_dim * N,) stacked observations."""
-    from src.environment.ablation_wrappers import FrameStackWrapper
     base = DummyEnvForFrameStack()
     env = FrameStackWrapper(base, n_frames=4)
     assert env.observation_space.shape == (12,)
@@ -38,7 +39,6 @@ def test_frame_stack_output_shape():
 
 def test_frame_stack_reset_fills_buffer():
     """On reset, all N frames equal the initial observation."""
-    from src.environment.ablation_wrappers import FrameStackWrapper
     base = DummyEnvForFrameStack()
     env = FrameStackWrapper(base, n_frames=4)
     obs, _ = env.reset()
@@ -50,11 +50,10 @@ def test_frame_stack_reset_fills_buffer():
 
 def test_frame_stack_step_returns_stacked():
     """After step, observation is concatenation of last N frames."""
-    from src.environment.ablation_wrappers import FrameStackWrapper
     base = DummyEnvForFrameStack()
     env = FrameStackWrapper(base, n_frames=4)
-    obs0, _ = env.reset()
-    # obs0 = [0,0,0, 0,0,0, 0,0,0, 0,0,0]
+    _, _ = env.reset()
+    # first stacked obs = [0,0,0, 0,0,0, 0,0,0, 0,0,0]
     obs1, _, _, _, _ = env.step(np.zeros(2))
     # obs1 should be [0,0,0, 0,0,0, 0,0,0, 1,1,1] — 3 frames of 0s + 1 frame of 1s
     expected = np.array([0,0,0, 0,0,0, 0,0,0, 1,1,1], dtype=np.float32)
@@ -63,7 +62,6 @@ def test_frame_stack_step_returns_stacked():
 
 def test_frame_stack_3_frames():
     """n_frames=3 produces correct output shape."""
-    from src.environment.ablation_wrappers import FrameStackWrapper
     base = DummyEnvForFrameStack()
     env = FrameStackWrapper(base, n_frames=3)
     assert env.observation_space.shape == (9,)
@@ -73,7 +71,6 @@ def test_frame_stack_3_frames():
 
 def test_frame_stack_preserves_info():
     """Info dict from base env is passed through unchanged."""
-    from src.environment.ablation_wrappers import FrameStackWrapper
     base = DummyEnvForFrameStack()
     env = FrameStackWrapper(base, n_frames=4)
     env.reset()
