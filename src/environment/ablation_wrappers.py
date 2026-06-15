@@ -54,3 +54,28 @@ class FrameStackWrapper(gym.Wrapper):
 
     def _get_stacked(self) -> np.ndarray:
         return np.concatenate(list(self._buffer)).astype(np.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Cubic Action Wrapper — nonlinear action mapping for origin precision
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CubicActionWrapper(gym.Wrapper):
+    """Map raw policy output a ∈ [-1,1] through a cubic function: a³.
+
+    This gives the policy fine-grained control near the origin while preserving
+    full authority at the extremes:
+
+        a=0.0 → 0.000  (dead zone for small jitter)
+        a=0.1 → 0.001  (~1000 steps to max, extremely precise)
+        a=0.5 → 0.125  (~8 steps to max)
+        a=1.0 → 1.000  (full authority preserved)
+
+    The mapping applies to all action dimensions uniformly. Exploration noise
+    from PPO's log_std also passes through this mapping.
+    """
+
+    def step(self, action):
+        action = np.asarray(action, dtype=np.float32)
+        mapped = np.sign(action) * np.power(np.abs(action), 3.0)
+        return self.env.step(mapped)
