@@ -12,6 +12,7 @@ import gymnasium as gym
 import numpy as np
 
 from src.utils.geometry import compute_forward_vector, compute_los
+from src.environment.single_pursuit_env import PHYSICS_DT as SINGLE_PURSUIT_PHYSICS_DT
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -120,7 +121,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         target_pos = env.target_ac.position_ned
         target_vel = env.target_ac.velocity_ned
 
-        dt = env.PHYSICS_DT
+        dt = SINGLE_PURSUIT_PHYSICS_DT
 
         # 1. Velocity alignment: is the aircraft MOVING toward the target?
         _, los_dir, _ = compute_los(pursuer_pos, target_pos)
