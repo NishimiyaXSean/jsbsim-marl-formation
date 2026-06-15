@@ -72,7 +72,7 @@ class ResidualExpertWrapper(gym.Wrapper):
         """
         return np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
-    # Delegate curriculum_stage to underlying env
+    # Delegate curriculum_stage / difficulty_level to underlying env
     @property
     def curriculum_stage(self):
         return self._base_env.curriculum_stage
@@ -80,6 +80,14 @@ class ResidualExpertWrapper(gym.Wrapper):
     @curriculum_stage.setter
     def curriculum_stage(self, value):
         self._base_env.curriculum_stage = value
+
+    @property
+    def difficulty_level(self):
+        return self._base_env.difficulty_level
+
+    @difficulty_level.setter
+    def difficulty_level(self, value):
+        self._base_env.difficulty_level = value
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -99,6 +107,138 @@ TARGET_CAPTURE_RATE_STAGE_2_3 = 0.50   # stage 2.0→2.5 and 2.5→3.0
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Callbacks
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class AutoCurriculumCallback(BaseCallback):
+    """Adaptive auto-curriculum with sliding-window win-rate tracking.
+
+    Replaces fixed-stage curriculum with a continuous ``difficulty_level``
+    that breathes with the agent's real capability.  A deque of the last
+    100 episode outcomes provides a smoothed win-rate estimate, and
+    difficulty is adjusted via a "two-forward, one-back" spring mechanism
+    centred on the flow zone (30%–80% win rate).
+
+    Adjustment rules (applied after each eval, with a minimum step
+    interval between changes):
+        win_rate ≥ 80%  →  difficulty += 0.05   (aggressive push)
+        50% ≤ wr < 80%  →  difficulty += 0.02   (gentle push)
+        30% ≤ wr < 50%  →  no change            (flow — maintain)
+        10% ≤ wr < 30%  →  difficulty -= 0.03   (gentle retreat)
+        wr < 10%        →  difficulty -= 0.05   (aggressive retreat)
+    """
+
+    MIN_STEPS_PER_LEVEL = 20_000  # minimum steps between difficulty changes
+
+    def __init__(self, eval_env, log_dir: str, verbose: int = 0):
+        super().__init__(verbose)
+        self._eval_env = eval_env
+        self._log_dir = log_dir
+        self._difficulty = 0.0
+        self._best_capture_rate = -1.0
+        self._last_difficulty_change = 0
+        self._eval_metrics: list = []
+        # Sliding window: True = success, False = failure
+        from collections import deque
+        self._recent_outcomes: deque = deque(maxlen=100)
+
+    @property
+    def difficulty_level(self) -> float:
+        return self._difficulty
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        # Evaluate at EVAL_FREQ intervals (same as CurriculumCallback)
+        if self.num_timesteps % EVAL_FREQ > 2048:
+            return
+
+        # Update eval env to current difficulty
+        self._eval_env.difficulty_level = self._difficulty
+
+        # ── Evaluation ─────────────────────────────────────────────────
+        successes, min_dists, intercept_times = 0, [], []
+        for _ in range(EVAL_EPISODES):
+            obs, _ = self._eval_env.reset()
+            done = False
+            ep_min_dist = 8000.0
+            ep_intercept_time = 120.0
+            while not done:
+                action, _ = self.model.predict(obs, deterministic=True)
+                obs, _, terminated, truncated, info = self._eval_env.step(action)
+                done = terminated or truncated
+                if "min_dist" in info:
+                    ep_min_dist = min(ep_min_dist, info["min_dist"])
+            is_success = info.get("reason") == "success"
+            if is_success:
+                successes += 1
+                base_env = self._eval_env.unwrapped
+                ep_intercept_time = base_env._step_counter / 60.0  # CTRL_FREQ
+            self._recent_outcomes.append(is_success)
+            min_dists.append(ep_min_dist)
+            intercept_times.append(ep_intercept_time)
+
+        capture_rate = successes / EVAL_EPISODES
+
+        # ── Win rate from sliding window ───────────────────────────────
+        if len(self._recent_outcomes) > 0:
+            win_rate = sum(self._recent_outcomes) / len(self._recent_outcomes)
+        else:
+            win_rate = 0.0
+
+        avg_min_dist = np.mean(min_dists)
+        avg_intercept_time = np.mean(intercept_times)
+
+        print(f"\n  [Eval @ {self.num_timesteps:,} steps] "
+              f"diff={self._difficulty:.2f} "
+              f"capture_rate={capture_rate:.0%} "
+              f"win_rate(100ep)={win_rate:.0%} "
+              f"avg_min_dist={avg_min_dist:.0f}m "
+              f"avg_intercept={avg_intercept_time:.1f}s")
+
+        # ── Logging ────────────────────────────────────────────────────
+        self.logger.record("eval/capture_rate", capture_rate)
+        self.logger.record("eval/avg_min_dist", avg_min_dist)
+        self.logger.record("curriculum/difficulty", self._difficulty)
+        self.logger.record("curriculum/win_rate_100ep", win_rate)
+
+        self._eval_metrics.append({
+            "timesteps": self.num_timesteps,
+            "difficulty": self._difficulty,
+            "capture_rate": capture_rate,
+            "win_rate_100ep": win_rate,
+            "avg_min_dist": avg_min_dist,
+            "avg_intercept_time": avg_intercept_time,
+        })
+
+        # ── Save best model (only when capture_rate > 0) ───────────────
+        if capture_rate > 0 and capture_rate > self._best_capture_rate:
+            self._best_capture_rate = capture_rate
+            best_path = os.path.join(self._log_dir, "best_model")
+            self.model.save(best_path)
+            print(f"  -> New best model saved: {best_path}  "
+                  f"(capture_rate={capture_rate:.0%})")
+
+        # ── Difficulty adjustment (spring mechanism) ───────────────────
+        steps_since_change = self.num_timesteps - self._last_difficulty_change
+        if steps_since_change >= self.MIN_STEPS_PER_LEVEL:
+            old = self._difficulty
+            if win_rate >= 0.80:
+                self._difficulty = min(1.0, self._difficulty + 0.05)
+            elif win_rate >= 0.50:
+                self._difficulty = min(1.0, self._difficulty + 0.02)
+            elif win_rate >= 0.30:
+                pass  # flow zone — maintain
+            elif win_rate >= 0.10:
+                self._difficulty = max(0.0, self._difficulty - 0.03)
+            else:
+                self._difficulty = max(0.0, self._difficulty - 0.05)
+
+            if abs(self._difficulty - old) > 1e-6:
+                self._last_difficulty_change = self.num_timesteps
+                direction = "▲" if self._difficulty > old else "▼"
+                print(f"  >> Difficulty: {old:.2f} → {self._difficulty:.2f} {direction}  "
+                      f"(win_rate={win_rate:.0%}, recent={len(self._recent_outcomes)}eps)")
+
 
 class CurriculumCallback(BaseCallback):
     """Handles 5-stage curriculum advancement with automatic evaluation.

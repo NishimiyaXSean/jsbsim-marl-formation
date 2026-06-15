@@ -4,10 +4,11 @@ The RL agent flies one F-16 and must intercept a scripted target aircraft.
 The agent controls **high-level flight targets** (heading, altitude, speed)
 through a stabilised ``FlightController``.
 
-Target difficulty increases across 3 curriculum stages:
-    1. Straight-and-level at constant speed/altitude
-    2. Gentle weaving (sinusoidal heading + altitude variations)
-    3. Evasive random maneuvers
+Target difficulty uses a continuous **difficulty_level ∈ [0.0, 1.0]** that
+smoothly scales the target's manoeuvre envelope:
+    0.0 → straight-and-level (easy)
+    0.5 → moderate weaving
+    1.0 → aggressive evasive manoeuvres (hard)
 
 Observations
 ------------
@@ -130,15 +131,27 @@ class SinglePursuitEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "tacview"], "name": "single_pursuit_v0"}
 
+    # ── Backward-compatible stage ↔ difficulty mapping ────────────────────
+    _STAGE_MAP = [1.0, 1.5, 2.0, 2.5, 3.0]
+
     def __init__(
         self,
-        curriculum_stage: float = 1.0,
+        curriculum_stage: Optional[float] = None,
+        difficulty_level: float = 0.0,
         jsbsim_data_dir: Optional[str] = None,
         record_tacview: bool = False,
     ):
         super().__init__()
 
-        self.curriculum_stage = curriculum_stage
+        # Primary API: continuous difficulty ∈ [0, 1]
+        if curriculum_stage is not None:
+            # Map discrete stage to difficulty for backward compatibility
+            idx = next((i for i, s in enumerate(self._STAGE_MAP)
+                       if np.isclose(curriculum_stage, s)), 0)
+            self._difficulty = idx / (len(self._STAGE_MAP) - 1)
+        else:
+            self._difficulty = float(np.clip(difficulty_level, 0.0, 1.0))
+
         self.record_tacview = record_tacview
         self._tacview_frames: List[dict] = []
         self._ref_lla = (30.0, 120.0, 3000.0)
@@ -171,6 +184,30 @@ class SinglePursuitEnv(gym.Env):
         self._prev_target_rpy = np.zeros(3, dtype=np.float64)  # for target angular velocity
         self._prev_airspeed = 180.0  # m/s — for Specific Excess Power calculation
 
+    # ── Difficulty property ─────────────────────────────────────────────────
+
+    @property
+    def difficulty_level(self) -> float:
+        """Continuous difficulty ∈ [0.0, 1.0] — primary API for auto-curriculum."""
+        return self._difficulty
+
+    @difficulty_level.setter
+    def difficulty_level(self, value: float) -> None:
+        self._difficulty = float(np.clip(value, 0.0, 1.0))
+
+    @property
+    def curriculum_stage(self) -> float:
+        """Discrete stage (backward-compatible, derived from difficulty)."""
+        n = len(self._STAGE_MAP) - 1
+        idx = int(round(self._difficulty * n))
+        return self._STAGE_MAP[min(idx, n)]
+
+    @curriculum_stage.setter
+    def curriculum_stage(self, value: float) -> None:
+        idx = next((i for i, s in enumerate(self._STAGE_MAP)
+                   if np.isclose(value, s)), 0)
+        self._difficulty = idx / (len(self._STAGE_MAP) - 1)
+
     # ── Reset ───────────────────────────────────────────────────────────────
 
     def reset(
@@ -198,34 +235,16 @@ class SinglePursuitEnv(gym.Env):
         ])
         self.pursuer.position_ned = pursuer_ned
 
-        # --- Target spawn (5-stage float curriculum) ---
-        stage = self.curriculum_stage
+        # --- Target spawn: continuous interpolation by difficulty_level ---
+        d = self._difficulty
 
-        if np.isclose(stage, 1.0):
-            target_dist = rng.uniform(800, 1800)
-            bearing_offset = 0.0
-            target_alt_offset = rng.uniform(-50, 50)
-            heading_diff = 0.0
-        elif np.isclose(stage, 1.5):
-            target_dist = rng.uniform(900, 2000)
-            bearing_offset = rng.uniform(-7, 7)
-            target_alt_offset = rng.uniform(-75, 75)
-            heading_diff = rng.uniform(-10, 10)
-        elif np.isclose(stage, 2.0):
-            target_dist = rng.uniform(1000, 2500)
-            bearing_offset = rng.uniform(-15, 15)
-            target_alt_offset = rng.uniform(-150, 150)
-            heading_diff = rng.uniform(-20, 20)
-        elif np.isclose(stage, 2.5):
-            target_dist = rng.uniform(1200, 2700)
-            bearing_offset = rng.uniform(-30, 30)
-            target_alt_offset = rng.uniform(-225, 225)
-            heading_diff = rng.uniform(-25, 25)
-        else:  # stage 3.0
-            target_dist = rng.uniform(1500, 3000)
-            bearing_offset = rng.uniform(-45, 45)
-            target_alt_offset = rng.uniform(-300, 300)
-            heading_diff = rng.uniform(-30, 30)
+        target_dist = rng.uniform(800 + d * 700, 1800 + d * 1200)
+        bearing_max = d * 45.0
+        bearing_offset = rng.uniform(-bearing_max, bearing_max)
+        alt_offset_max = 50.0 + d * 250.0
+        target_alt_offset = rng.uniform(-alt_offset_max, alt_offset_max)
+        heading_diff_max = d * 30.0
+        heading_diff = rng.uniform(-heading_diff_max, heading_diff_max)
 
         target_bearing = (pursuer_hdg + bearing_offset) % 360.0
         target_bearing_rad = np.deg2rad(target_bearing)
@@ -500,37 +519,18 @@ class SinglePursuitEnv(gym.Env):
 
     def _generate_target_profile(self, rng: np.random.Generator, spawn_heading: float = 90.0,
                                  spawn_alt_m: float = 3000.0) -> TargetProfile:
-        """Generate stage-dependent target motion."""
+        """Generate target motion with continuous difficulty interpolation.
+
+        difficulty=0.0 → straight-and-level (like old stage 1.0)
+        difficulty=1.0 → aggressive weaving (like old stage 3.0)
+        """
+        d = self._difficulty
         tp = TargetProfile()
-        tp.alt_m = spawn_alt_m  # align with actual spawn altitude
-        stage = self.curriculum_stage
-
-        if np.isclose(stage, 1.0):
-            tp.speed_mps = 130.0
-            tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = 0.0
-            tp.alt_rate_mps = 0.0
-        elif np.isclose(stage, 1.5):
-            tp.speed_mps = 135.0                     # gentle speed increase from 130
-            tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(-1.5, 1.5)  # very gentle weave
-            tp.alt_rate_mps = rng.uniform(-0.5, 0.5)      # minimal altitude drift
-        elif np.isclose(stage, 2.0):
-            tp.speed_mps = 150.0                     # moderate speed
-            tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(-5, 5)       # moderate weave
-            tp.alt_rate_mps = rng.uniform(-1.5, 1.5)       # gentle altitude changes
-        elif np.isclose(stage, 2.5):
-            tp.speed_mps = 165.0                     # faster but not max
-            tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(-8, 8)       # active weaving
-            tp.alt_rate_mps = rng.uniform(-2.5, 2.5)       # moderate climbs
-        else:  # stage 3.0
-            tp.speed_mps = 180.0                     # near-max challenge
-            tp.heading_deg = spawn_heading
-            tp.heading_rate_dps = rng.uniform(-12, 12)     # aggressive evasion
-            tp.alt_rate_mps = rng.uniform(-4, 4)           # significant altitude changes
-
+        tp.alt_m = spawn_alt_m
+        tp.speed_mps = 130.0 + d * 50.0                        # 130 → 180 m/s
+        tp.heading_deg = spawn_heading
+        tp.heading_rate_dps = rng.uniform(-12.0 * d, 12.0 * d)  # 0 → ±12 °/s
+        tp.alt_rate_mps = rng.uniform(-4.0 * d, 4.0 * d)        # 0 → ±4 m/s
         return tp
 
     def _move_target(self, dt: float) -> None:
