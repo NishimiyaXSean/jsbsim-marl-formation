@@ -11,22 +11,25 @@ Target difficulty increases across 3 curriculum stages:
 
 Observations
 ------------
-22-dim local observation:
+25-dim local observation:
     0-2:   target relative position in body frame (3)
     3-5:   own velocity in body frame (3)
     6-8:   own attitude rpy (3)
-    9-11:  own angular velocity [roll, pitch, yaw] (3)   [finite-diff over decision interval]
+    9-11:  own angular velocity [p, q, r] (3)   [real JSBSim body rates, rad/s]
     12:    own height (1)
     13-15: target velocity in body frame (3)
-    16-18: target angular velocity [roll, pitch, yaw] (3) [finite-diff over decision interval]
+    16-18: target angular velocity [roll, pitch, yaw] (3) [finite-diff]
     19-21: tactical geometry cos(ATA), cos(AA), cos(HCA) (3)
+    22:    Angle of Attack (1)  [alpha_deg / 30°]
+    23:    airspeed (1)  [m/s / 400]
+    24:    Specific Excess Power (1)  [Ps / 300 m/s, clipped]
 
 Actions
 -------
 3-dim continuous: ``[d_heading, d_alt, d_speed]`` ∈ [-1, 1]^3
-    d_heading →  [-1, 1] maps to [-30°, +30°] heading change per decision (0.5 s)
-    d_alt     →  [-1, 1] maps to [-50 m, +50 m] altitude change per decision
-    d_speed   →  [-1, 1] maps to [-20, +20] m/s speed change per decision
+    d_heading →  [-1, 1] maps to [-6°, +6°] heading change per decision (0.1 s = 60°/s)
+    d_alt     →  [-1, 1] maps to [-3 m, +3 m] altitude change per decision (0.1 s = 30 m/s)
+    d_speed   →  [-1, 1] maps to [-2, +2] m/s speed change per decision (0.1 s = 20 m/s²)
 
 The FlightController adds these deltas to the persistent target state
 (which the agent never sees directly — only through the observation).
@@ -66,21 +69,24 @@ from src.utils.geometry import compute_forward_vector, compute_los, compute_tact
 
 CTRL_FREQ = 60.0
 PHYSICS_DT = 1.0 / CTRL_FREQ
-DECISION_DT = 0.5          # agent issues new targets every 0.5 s
-DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 30 micro-steps per decision
+DECISION_DT = 0.1           # 10 Hz — agent issues new targets every 0.1 s
+DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 6 micro-steps per decision
 
-MAX_EPISODE_TIME = 120.0   # seconds before timeout
+MAX_EPISODE_TIME = 120.0    # seconds before timeout
 
-# Action scaling (raw [-1,1] → real units)
-MAX_D_HEADING_DEG = 30.0    # per decision (0.5s) — up to 60°/s commanded turn
-MAX_D_ALT_M = 15.0           # per decision — up to 30 m/s climb/descent
-MAX_D_SPEED_MPS = 10.0       # per decision — ±20 m/s/s acceleration
+# Action scaling (raw [-1,1] → real units, scaled per DECISION_DT)
+MAX_D_HEADING_DEG = 6.0     # per 0.1s decision — up to 60°/s commanded turn
+MAX_D_ALT_M = 3.0            # per 0.1s decision — up to 30 m/s climb/descent
+MAX_D_SPEED_MPS = 2.0        # per 0.1s decision — ±20 m/s² acceleration
 
 # Observation normalisation constants
 MAX_DIST = 10000.0
 MAX_HEIGHT = 5000.0
 MAX_VEL = 400.0
 MAX_ANG_VEL = np.pi
+MAX_AOA = 30.0               # AoA in degrees — F-16 limit ~25-30°
+MAX_PS = 300.0               # Specific Excess Power (m/s) — F-16 max ~300 m/s
+LOW_SPEED_THRESHOLD = 100.0  # m/s — below this, large heading commands are penalised
 
 # Reward weights — simple and effective (v5 baseline + staged proximity bonuses)
 REWARD_PROGRESS = 5.0        # primary pursuit signal — closing distance
@@ -89,6 +95,7 @@ REWARD_GROUND_WARNING = 2.0
 REWARD_SUCCESS = 500.0       # capture bonus (dist < 200m)
 REWARD_CRASH = -200.0        # strong negative for crashing
 REWARD_LOST_TARGET = -200.0  # strong negative for losing target
+REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
 
 # Staged proximity bonuses — stepping stones to guide the agent closer.
 # Awarded once per episode when the agent first crosses each threshold.
@@ -147,7 +154,7 @@ class SinglePursuitEnv(gym.Env):
 
         # Observation / action spaces
         self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(22,), dtype=np.float32,
+            low=-1.0, high=1.0, shape=(25,), dtype=np.float32,
         )
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(3,), dtype=np.float32,
@@ -162,6 +169,7 @@ class SinglePursuitEnv(gym.Env):
         self._proximity_awarded: set = set()  # tiers already awarded this episode
         self._prev_rpy = np.zeros(3, dtype=np.float64)  # for pursuer angular velocity
         self._prev_target_rpy = np.zeros(3, dtype=np.float64)  # for target angular velocity
+        self._prev_airspeed = 180.0  # m/s — for Specific Excess Power calculation
 
     # ── Reset ───────────────────────────────────────────────────────────────
 
@@ -268,6 +276,7 @@ class SinglePursuitEnv(gym.Env):
         self._tacview_frames = []
         self._prev_rpy = self.pursuer.rpy_rad.copy()
         self._prev_target_rpy = self.target_ac.rpy_rad.copy()
+        self._prev_airspeed = float(self.pursuer.state["airspeed_mps"])
         self._target_profile = self._generate_target_profile(rng, target_hdg,
                                                             spawn_alt_m=float(target_ned[2]))
 
@@ -293,6 +302,16 @@ class SinglePursuitEnv(gym.Env):
         self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 250.0)
 
         total_reward = 0.0
+
+        # ── Low-speed turn penalty ─────────────────────────────────────────
+        # When airspeed < 100 m/s, aggressive heading changes cause energy
+        # loss and departure.  Penalise large d_heading at low speed to teach
+        # the agent to "dive for speed before turning."
+        airspeed = float(self.pursuer.state["airspeed_mps"])
+        if airspeed < LOW_SPEED_THRESHOLD and abs(d_hdg) > 0.2 * MAX_D_HEADING_DEG:
+            exceed_ratio = abs(d_hdg) / MAX_D_HEADING_DEG
+            low_speed_ratio = (LOW_SPEED_THRESHOLD - airspeed) / LOW_SPEED_THRESHOLD
+            total_reward -= REWARD_LOW_SPEED_TURN * exceed_ratio * low_speed_ratio
         terminated = False
         truncated = False
         reason = "timeout"
@@ -432,14 +451,9 @@ class SinglePursuitEnv(gym.Env):
         own_vel_body = world_to_body(a_vel)
         tgt_vel_body = world_to_body(t_vel)
 
-        # Pursuer angular velocity: finite-difference from previous rpy (yaw unwrapped)
-        current_rpy = a_rpy.copy()
-        d_roll = current_rpy[0] - self._prev_rpy[0]
-        d_pitch = current_rpy[1] - self._prev_rpy[1]
-        d_yaw = current_rpy[2] - self._prev_rpy[2]
-        d_yaw = (d_yaw + np.pi) % (2 * np.pi) - np.pi  # unwrap
-        ang_vel = np.array([d_roll, d_pitch, d_yaw]) / DECISION_DT
-        self._prev_rpy = current_rpy
+        # Pursuer angular velocity: REAL JSBSim body-frame rates [p, q, r] (rad/s)
+        a_state = self.pursuer.state
+        ang_vel = np.array([a_state["p_rps"], a_state["q_rps"], a_state["r_rps"]])
 
         # Target angular velocity: finite-difference from previous target rpy
         current_tgt_rpy = t_rpy.copy()
@@ -450,15 +464,34 @@ class SinglePursuitEnv(gym.Env):
         tgt_ang_vel = np.array([d_tgt_roll, d_tgt_pitch, d_tgt_yaw]) / DECISION_DT
         self._prev_target_rpy = current_tgt_rpy
 
+        # ── Energy / AoA features ──────────────────────────────────────────
+        # Angle of Attack (deg) — tells the agent how hard the wing is working
+        alpha_deg = float(a_state["alpha_deg"])
+
+        # Explicit airspeed (m/s) — critical for energy-aware decisions
+        airspeed_mps = float(a_state["airspeed_mps"])
+
+        # Specific Excess Power: Ps = climb_rate + (V/g) * dV/dt
+        #   climb_rate = h_dot (m/s), dV/dt from finite-diff airspeed change
+        climb_rate = float(a_state["h_dot_fps"]) * 0.3048
+        accel = (airspeed_mps - self._prev_airspeed) / DECISION_DT
+        g = 9.81
+        ps = climb_rate + (airspeed_mps / g) * accel if airspeed_mps > 1.0 else 0.0
+        self._prev_airspeed = airspeed_mps
+
         obs = np.concatenate([
-            rel_pos_body / MAX_DIST,
-            own_vel_body / MAX_VEL,
-            a_rpy / np.pi,
-            ang_vel / MAX_ANG_VEL,
-            [a_pos[2] / MAX_HEIGHT],
-            tgt_vel_body / MAX_VEL,
-            tgt_ang_vel / MAX_ANG_VEL,
-            [geo["cos_ata"], geo["cos_aa"], geo["cos_hca"]],
+            rel_pos_body / MAX_DIST,           # 0-2
+            own_vel_body / MAX_VEL,             # 3-5
+            a_rpy / np.pi,                      # 6-8
+            ang_vel / MAX_ANG_VEL,              # 9-11  (real JSBSim body rates)
+            [a_pos[2] / MAX_HEIGHT],            # 12
+            tgt_vel_body / MAX_VEL,             # 13-15
+            tgt_ang_vel / MAX_ANG_VEL,          # 16-18
+            [geo["cos_ata"], geo["cos_aa"],     # 19-21
+             geo["cos_hca"]],
+            [alpha_deg / MAX_AOA],              # 22  (AoA)
+            [airspeed_mps / MAX_VEL],           # 23  (explicit airspeed)
+            [np.clip(ps / MAX_PS, -1.0, 1.0)], # 24  (Specific Excess Power)
         ]).astype(np.float32)
 
         return np.clip(obs, -1.0, 1.0)
