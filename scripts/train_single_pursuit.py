@@ -157,27 +157,52 @@ class AutoCurriculumCallback(BaseCallback):
 
         # ── Evaluation ─────────────────────────────────────────────────
         successes, min_dists, intercept_times = 0, [], []
+        # Termination counters
+        term_counts = {"success": 0, "timeout": 0, "lost_target": 0,
+                       "ground_crash": 0, "out_of_bounds": 0, "jsbsim_nan": 0}
+        # Reward component accumulators (averaged over eval episodes)
+        r_component_sums: dict = {}
+        r_component_keys = ["r_progress", "r_terminal_boost", "r_ata",
+                           "r_time_pressure", "r_ground_warning", "r_proximity",
+                           "r_low_speed_penalty", "r_step_penalty",
+                           "r_lead_vel_align", "r_lead_pred", "r_los_rate"]
+
         for _ in range(EVAL_EPISODES):
             obs, _ = self._eval_env.reset()
             done = False
             ep_min_dist = 8000.0
             ep_intercept_time = 120.0
+            ep_r_components: dict = {k: 0.0 for k in r_component_keys}
             while not done:
                 action, _ = self.model.predict(obs, deterministic=True)
                 obs, _, terminated, truncated, info = self._eval_env.step(action)
                 done = terminated or truncated
                 if "min_dist" in info:
                     ep_min_dist = min(ep_min_dist, info["min_dist"])
-            is_success = info.get("reason") == "success"
+                # Accumulate reward components from this step
+                for k in r_component_keys:
+                    if k in info:
+                        ep_r_components[k] += float(info[k])
+            reason = info.get("reason", "timeout")
+            is_success = reason == "success"
             if is_success:
                 successes += 1
                 base_env = self._eval_env.unwrapped
                 ep_intercept_time = base_env._step_counter / 60.0  # CTRL_FREQ
+            # Track termination distribution
+            if reason in term_counts:
+                term_counts[reason] += 1
+            else:
+                term_counts[reason] = 1
+            # Accumulate episode reward components
+            for k in r_component_keys:
+                r_component_sums[k] = r_component_sums.get(k, 0.0) + ep_r_components[k]
             self._recent_outcomes.append(is_success)
             min_dists.append(ep_min_dist)
             intercept_times.append(ep_intercept_time)
 
         capture_rate = successes / EVAL_EPISODES
+        n_ep = EVAL_EPISODES
 
         # ── Win rate from sliding window ───────────────────────────────
         if len(self._recent_outcomes) > 0:
@@ -188,18 +213,37 @@ class AutoCurriculumCallback(BaseCallback):
         avg_min_dist = np.mean(min_dists)
         avg_intercept_time = np.mean(intercept_times)
 
+        # ── Reward components: average per episode ──────────────────────
+        r_avg = {k: r_component_sums.get(k, 0.0) / n_ep for k in r_component_keys}
+
         print(f"\n  [Eval @ {self.num_timesteps:,} steps] "
               f"diff={self._difficulty:.2f} "
               f"capture_rate={capture_rate:.0%} "
               f"win_rate(100ep)={win_rate:.0%} "
               f"avg_min_dist={avg_min_dist:.0f}m "
               f"avg_intercept={avg_intercept_time:.1f}s")
+        # Termination distribution
+        print(f"    Terms: succ={term_counts['success']} "
+              f"timeout={term_counts['timeout']} "
+              f"lost={term_counts['lost_target']} "
+              f"crash={term_counts['ground_crash']} "
+              f"oob={term_counts['out_of_bounds']}")
+        # Reward decomposition
+        print(f"    Rewards: progress={r_avg['r_progress']:+.1f} "
+              f"ATA={r_avg['r_ata']:+.1f} "
+              f"lead_vel={r_avg['r_lead_vel_align']:+.2f} "
+              f"lead_pred={r_avg['r_lead_pred']:+.2f} "
+              f"los_rate={r_avg['r_los_rate']:+.2f} "
+              f"step={r_avg['r_step_penalty']:+.1f} "
+              f"prox={r_avg['r_proximity']:+.1f}")
 
         # ── Logging ────────────────────────────────────────────────────
         self.logger.record("eval/capture_rate", capture_rate)
         self.logger.record("eval/avg_min_dist", avg_min_dist)
         self.logger.record("curriculum/difficulty", self._difficulty)
         self.logger.record("curriculum/win_rate_100ep", win_rate)
+        for k in r_component_keys:
+            self.logger.record(f"reward/{k}", r_avg[k])
 
         self._eval_metrics.append({
             "timesteps": self.num_timesteps,
@@ -208,6 +252,11 @@ class AutoCurriculumCallback(BaseCallback):
             "win_rate_100ep": win_rate,
             "avg_min_dist": avg_min_dist,
             "avg_intercept_time": avg_intercept_time,
+            "term_timeout": term_counts["timeout"],
+            "term_lost": term_counts["lost_target"],
+            "term_crash": term_counts["ground_crash"],
+            "term_success": term_counts["success"],
+            **{f"r_{k}": r_avg[k] for k in r_component_keys},
         })
 
         # ── Save best model (only when capture_rate > 0) ───────────────
@@ -411,7 +460,7 @@ def train(seed: int = 0):
         n_steps=2048,
         batch_size=256,
         n_epochs=10,
-        gamma=0.99,
+        gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
         gae_lambda=0.95,
         clip_range=0.2,
         ent_coef=0.01,   # small entropy bonus — prevents policy collapse

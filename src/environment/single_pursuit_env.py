@@ -89,14 +89,17 @@ MAX_AOA = 30.0               # AoA in degrees — F-16 limit ~25-30°
 MAX_PS = 300.0               # Specific Excess Power (m/s) — F-16 max ~300 m/s
 LOW_SPEED_THRESHOLD = 100.0  # m/s — below this, large heading commands are penalised
 
-# Reward weights — simple and effective (v5 baseline + staged proximity bonuses)
-REWARD_PROGRESS = 5.0        # primary pursuit signal — closing distance
+# Reward weights — rebalanced for lead-pursuit guidance (v6)
+# Progress is deliberately weak: the agent must earn reward via collision-course
+# geometry (lead prediction, LOS-rate damping), not raw distance-chasing.
+REWARD_PROGRESS = 0.5        # weak — closing distance is a minor hint, not the goal
 REWARD_ATA = 5.0             # pointing at target
 REWARD_GROUND_WARNING = 2.0
 REWARD_SUCCESS = 500.0       # capture bonus (dist < 200m)
 REWARD_CRASH = -200.0        # strong negative for crashing
 REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
+STEP_PENALTY = 0.3           # per-decision survival penalty — makes stalling painful
 
 # Staged proximity bonuses — stepping stones to guide the agent closer.
 # Awarded once per episode when the agent first crosses each threshold.
@@ -322,15 +325,30 @@ class SinglePursuitEnv(gym.Env):
 
         total_reward = 0.0
 
+        # ── Reward component accumulators (for diagnostics) ────────────────
+        _r_progress = 0.0
+        _r_terminal_boost = 0.0
+        _r_ata = 0.0
+        _r_time_pressure = 0.0
+        _r_ground_warning = 0.0
+        _r_proximity = 0.0
+        _r_low_speed_penalty = 0.0
+        _r_step_penalty = 0.0
+
+        # ── Step penalty: make every decision cost something ───────────────
+        # This penalises "surviving and stalling" — the agent must close the
+        # engagement quickly, not just drift toward the target on progress.
+        total_reward -= STEP_PENALTY
+        _r_step_penalty -= STEP_PENALTY
+
         # ── Low-speed turn penalty ─────────────────────────────────────────
-        # When airspeed < 100 m/s, aggressive heading changes cause energy
-        # loss and departure.  Penalise large d_heading at low speed to teach
-        # the agent to "dive for speed before turning."
         airspeed = float(self.pursuer.state["airspeed_mps"])
         if airspeed < LOW_SPEED_THRESHOLD and abs(d_hdg) > 0.2 * MAX_D_HEADING_DEG:
             exceed_ratio = abs(d_hdg) / MAX_D_HEADING_DEG
             low_speed_ratio = (LOW_SPEED_THRESHOLD - airspeed) / LOW_SPEED_THRESHOLD
-            total_reward -= REWARD_LOW_SPEED_TURN * exceed_ratio * low_speed_ratio
+            penalty = REWARD_LOW_SPEED_TURN * exceed_ratio * low_speed_ratio
+            total_reward -= penalty
+            _r_low_speed_penalty -= penalty
         terminated = False
         truncated = False
         reason = "timeout"
@@ -382,26 +400,37 @@ class SinglePursuitEnv(gym.Env):
             delta_dist = self._prev_dist - current_dist  # + when closing
 
             # Progress: closing distance
-            total_reward += REWARD_PROGRESS * delta_dist
+            prog = REWARD_PROGRESS * delta_dist
+            total_reward += prog
+            _r_progress += prog
             # Terminal boost: extra reward within 500m
             if current_dist < 500.0:
-                total_reward += REWARD_PROGRESS * delta_dist * 2.0
+                boost = REWARD_PROGRESS * delta_dist * 2.0
+                total_reward += boost
+                _r_terminal_boost += boost
 
             # ATA: pointing at target
-            total_reward += REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
+            ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
+            total_reward += ata_r
+            _r_ata += ata_r
 
             # Time pressure
             time_ratio = self._step_counter / (CTRL_FREQ * MAX_EPISODE_TIME)
-            total_reward -= 0.5 * time_ratio * dt
+            tp = -0.5 * time_ratio * dt
+            total_reward += tp
+            _r_time_pressure += tp
 
             # Ground warning
             if a_pos[2] < 800.0:
-                total_reward -= REWARD_GROUND_WARNING * dt
+                gw = -REWARD_GROUND_WARNING * dt
+                total_reward += gw
+                _r_ground_warning += gw
 
             # --- Staged proximity bonuses (one-time per tier) ---
             for threshold, bonus in PROXIMITY_TIERS:
                 if current_dist < threshold and threshold not in self._proximity_awarded:
                     total_reward += bonus
+                    _r_proximity += bonus
                     self._proximity_awarded.add(threshold)
 
             self._prev_dist = current_dist
@@ -437,7 +466,20 @@ class SinglePursuitEnv(gym.Env):
         if self.record_tacview:
             self._record_tacview_frame(current_time)
 
-        return self._get_obs(), total_reward, terminated, truncated, {"reason": reason, "min_dist": min_dist}
+        info = {
+            "reason": reason,
+            "min_dist": min_dist,
+            # Reward decomposition (for diagnostics)
+            "r_progress": _r_progress,
+            "r_terminal_boost": _r_terminal_boost,
+            "r_ata": _r_ata,
+            "r_time_pressure": _r_time_pressure,
+            "r_ground_warning": _r_ground_warning,
+            "r_proximity": _r_proximity,
+            "r_low_speed_penalty": _r_low_speed_penalty,
+            "r_step_penalty": _r_step_penalty,
+        }
+        return self._get_obs(), total_reward, terminated, truncated, info
 
     # ── Observation ──────────────────────────────────────────────────────────
 

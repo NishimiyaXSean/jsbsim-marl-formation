@@ -56,7 +56,7 @@ PPO_CONFIG = dict(
     n_steps=2048,
     batch_size=256,
     n_epochs=10,
-    gamma=0.99,
+    gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
     gae_lambda=0.95,
     clip_range=0.2,
     ent_coef=0.01,          # entropy bonus to prevent policy collapse
@@ -128,14 +128,15 @@ def run_one(ablation_config: dict, seed: int, total_steps: int, output_dir: str)
     model.save(os.path.join(log_dir, "model"))
     model.save(os.path.join(log_dir, "final_model"))
 
-    # Save eval metrics CSV
+    # Save eval metrics CSV (fieldnames from first row for flexibility)
     csv_path = os.path.join(log_dir, "eval_metrics.csv")
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["timesteps", "difficulty", "capture_rate",
-                                               "win_rate_100ep", "avg_min_dist",
-                                               "avg_intercept_time"])
-        writer.writeheader()
-        writer.writerows(auto_cb._eval_metrics)
+    if auto_cb._eval_metrics:
+        with open(csv_path, "w", newline="") as f:
+            # Use fieldnames from the first dict to handle variable reward keys
+            fieldnames = list(auto_cb._eval_metrics[0].keys())
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(auto_cb._eval_metrics)
 
     print(f"  Done -> {csv_path}")
     return csv_path
