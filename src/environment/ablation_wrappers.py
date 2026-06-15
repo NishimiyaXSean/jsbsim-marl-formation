@@ -112,8 +112,9 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         if terminated or truncated:
             return obs, reward, terminated, truncated, info
 
-        # Access underlying SinglePursuitEnv state via unwrapped chain
-        env = self.env
+        # Access underlying SinglePursuitEnv state via .unwrapped (works through
+        # any wrapper chain, e.g. CubicActionWrapper or ResidualExpertWrapper).
+        env = self.unwrapped
 
         pursuer_pos = env.pursuer.position_ned
         pursuer_vel = env.pursuer.velocity_ned

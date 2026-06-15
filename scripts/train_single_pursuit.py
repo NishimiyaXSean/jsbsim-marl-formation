@@ -262,7 +262,7 @@ def train(seed: int = 0):
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.0,   # continuous control — no entropy bonus needed
+        ent_coef=0.01,   # small entropy bonus — prevents policy collapse
         vf_coef=0.5,
         max_grad_norm=0.5,
         tensorboard_log=log_dir,
@@ -462,7 +462,7 @@ def train_with_config(
     seed: int = 0,
     log_dir: str = "",
     learning_rate: float = 1e-4,
-    ent_coef: float = 0.0,  # continuous control — no entropy bonus
+    ent_coef: float = 0.01,  # small entropy bonus — prevents policy collapse
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
     total_timesteps: int = 500_000,

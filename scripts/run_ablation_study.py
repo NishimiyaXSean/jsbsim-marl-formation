@@ -47,10 +47,11 @@ from scripts.train_single_pursuit import (
 # ==============================================================================
 
 ABLATIONS = [
-    {"name": "baseline",     "label": "BL", "wrapper_cls": None},
-    {"name": "lead_pursuit", "label": "RW", "wrapper_cls": LeadPursuitRewardWrapper},
-    {"name": "frame_stack",  "label": "FS", "wrapper_cls": FrameStackWrapper},
-    {"name": "cubic_action", "label": "CA", "wrapper_cls": CubicActionWrapper},
+    {"name": "baseline",          "label": "BL",  "wrappers": []},
+    {"name": "lead_pursuit",      "label": "RW",  "wrappers": [LeadPursuitRewardWrapper]},
+    {"name": "frame_stack",       "label": "FS",  "wrappers": [FrameStackWrapper]},
+    {"name": "cubic_action",      "label": "CA",  "wrappers": [CubicActionWrapper]},
+    {"name": "cubic+lead",        "label": "CARW", "wrappers": [CubicActionWrapper, LeadPursuitRewardWrapper]},
 ]
 
 STAGES_FOR_ABLATION = [1.0, 1.5]  # Only Stage 1.0 and 1.5
@@ -64,7 +65,7 @@ PPO_CONFIG = dict(
     gamma=0.99,
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.0,
+    ent_coef=0.01,          # entropy bonus to prevent policy collapse
     vf_coef=0.5,
     max_grad_norm=0.5,
     device="cpu",
@@ -78,10 +79,10 @@ PPO_CONFIG = dict(
 
 
 def build_env(ablation_config: dict, record_tacview: bool = False):
-    """Build the full env chain: SinglePursuitEnv -> ablation_wrapper? -> ResidualExpertWrapper."""
+    """Build the full env chain: SinglePursuitEnv -> wrappers... -> ResidualExpertWrapper."""
     base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=record_tacview)
-    if ablation_config["wrapper_cls"] is not None:
-        base = ablation_config["wrapper_cls"](base)
+    for wrapper_cls in ablation_config.get("wrappers", []):
+        base = wrapper_cls(base)
     wrapped = ResidualExpertWrapper(base)
     return wrapped
 
@@ -264,8 +265,8 @@ def main():
     parser.add_argument("--skip-training", action="store_true",
                        help="Skip training, just regenerate summary from existing CSVs")
     parser.add_argument("--ablation", type=str, nargs="+",
-                       choices=["BL", "RW", "FS", "CA"],
-                       help="Run only specific ablations (e.g. --ablation BL RW)")
+                       choices=["BL", "RW", "FS", "CA", "CARW"],
+                       help="Run only specific ablations (e.g. --ablation BL CARW)")
     args = parser.parse_args()
 
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
