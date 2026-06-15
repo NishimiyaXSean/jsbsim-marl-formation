@@ -162,7 +162,7 @@ class DummyEnvForLeadPursuit(gym.Env):
 
     def __init__(self):
         self.action_space = gym.spaces.Box(-1, 1, (3,))
-        self.observation_space = gym.spaces.Box(-1, 1, (19,))
+        self.observation_space = gym.spaces.Box(-1, 1, (22,))
         self.pursuer = None
         self.target_ac = None
         self._step_counter = 0
@@ -199,7 +199,7 @@ class DummyEnvForLeadPursuit(gym.Env):
             "beta_deg": 0.0,
         }
 
-        obs = np.zeros(19, dtype=np.float32)
+        obs = np.zeros(22, dtype=np.float32)
         return obs, {}
 
     def step(self, action):
@@ -227,7 +227,7 @@ class DummyEnvForLeadPursuit(gym.Env):
         reward += self.REWARD_ATA * max(geo["cos_ata"], -0.2) * self.PHYSICS_DT
 
         terminated = self._step_counter >= 30
-        obs = np.zeros(19, dtype=np.float32)
+        obs = np.zeros(22, dtype=np.float32)
         return obs, reward, terminated, False, {"reason": "timeout" if terminated else ""}
 
 
@@ -235,7 +235,7 @@ def test_lead_pursuit_wrapper_shape_unchanged():
     """LeadPursuitRewardWrapper preserves observation space."""
     base = DummyEnvForLeadPursuit()
     env = LeadPursuitRewardWrapper(base)
-    assert env.observation_space.shape == (19,)
+    assert env.observation_space.shape == (22,)
 
 
 def test_lead_pursuit_wrapper_adds_reward():

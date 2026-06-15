@@ -11,6 +11,8 @@ from typing import Optional
 import gymnasium as gym
 import numpy as np
 
+from src.utils.geometry import compute_forward_vector, compute_los
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Frame Stack Wrapper — temporal awareness via stacked observations
@@ -117,8 +119,6 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         pursuer_rpy = env.pursuer.rpy_rad
         target_pos = env.target_ac.position_ned
         target_vel = env.target_ac.velocity_ned
-
-        from src.utils.geometry import compute_forward_vector, compute_los
 
         dt = env.PHYSICS_DT
 
