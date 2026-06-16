@@ -94,7 +94,7 @@ class ResidualExpertWrapper(gym.Wrapper):
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 500_000
+TOTAL_TIMESTEPS = 1_000_000
 CURRICULUM_STAGES = [1.0, 1.5, 2.0, 2.5, 3.0]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)  # 100k per stage
 
@@ -678,7 +678,7 @@ def train_with_config(
     ent_coef: float = 0.01,  # small entropy bonus — prevents policy collapse
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
-    total_timesteps: int = 500_000,
+    total_timesteps: int = 1_000_000,  # 1M steps for full-scale training
     batch_size: int = 256,
     gamma: float = 0.99,
     clip_range: float = 0.2,

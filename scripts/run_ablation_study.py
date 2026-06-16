@@ -57,7 +57,7 @@ PPO_CONFIG = dict(
     n_steps=2048,
     batch_size=256,
     n_epochs=10,
-    gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
+    gamma=0.999,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
     gae_lambda=0.95,
     clip_range=0.2,
     ent_coef=0.01,          # entropy bonus to prevent policy collapse
@@ -234,8 +234,8 @@ def main():
     parser = argparse.ArgumentParser(description="Ablation study for single-pursuit training")
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2],
                        help="Seeds to run (default: 0 1 2)")
-    parser.add_argument("--steps", type=int, default=200_000,
-                       help="Total timesteps per run (default: 200000)")
+    parser.add_argument("--steps", type=int, default=1_000_000,
+                       help="Total timesteps per run (default: 1000000)")
     parser.add_argument("--skip-training", action="store_true",
                        help="Skip training, just regenerate summary from existing CSVs")
     parser.add_argument("--ablation", type=str, nargs="+",
