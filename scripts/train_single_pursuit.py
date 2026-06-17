@@ -109,27 +109,37 @@ TARGET_CAPTURE_RATE_STAGE_2_3 = 0.50   # stage 2.0→2.5 and 2.5→3.0
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AutoCurriculumCallback(BaseCallback):
-    """Adaptive auto-curriculum with sliding-window win-rate tracking.
+    """Adaptive auto-curriculum with conservative advancement and fallback rollback.
 
     Replaces fixed-stage curriculum with a continuous ``difficulty_level``
     that breathes with the agent's real capability.  A deque of the last
     50 episode outcomes provides a responsive win-rate estimate, and
-    difficulty is adjusted via a "two-forward, one-back" spring mechanism
-    centred on the flow zone (10%–40% win rate).
+    difficulty is adjusted via a spring mechanism.
 
-    Adjustment rules (applied after each eval, with a minimum step
-    interval between changes).  Retreat is deliberately gentle to give
-    the agent room to learn against real physics without oscillating.
-    Thresholds are tuned for the difficult low-capture regime (10-40% WR):
-        win_rate >= 50%  →  difficulty += 0.05   (aggressive push)
-        40% <= wr < 50%  →  difficulty += 0.02   (gentle push)
-        10% <= wr < 40%  →  no change            (wide flow zone — grind it out)
+    **Advancement** requires *consecutive* good evaluations (win_rate >= 50%
+    for N consecutive evals) before difficulty is increased — this prevents
+    a single lucky evaluation from pushing the agent beyond its true ability.
+
+    **Rollback** fires when difficulty has been previously advanced but the
+    agent subsequently suffers a cliff collapse (win_rate < 15%).  In that
+    case both the environment difficulty AND the model weights are restored
+    to the last healthy pre-advance checkpoint, giving the agent a clean
+    second chance.
+
+    Spring thresholds:
+        win_rate >= 50%  →  difficulty += 0.05   (aggressive push)*
+        40% <= wr < 50%  →  difficulty += 0.02   (gentle push)*
+        10% <= wr < 40%  →  no change            (wide flow zone)
          5% <= wr < 10%  →  difficulty -= 0.01   (gentle nudge back)
         wr < 5%          →  difficulty -= 0.02   (moderate retreat)
+
+        * Requires CONSECUTIVE_ADVANCE_REQUIRED consecutive qualifying evals.
     """
 
-    MIN_STEPS_PER_LEVEL = 6_144  # 3 × n_steps(2048) — fast response, avoids missing the peak
-    MIN_DIFFICULTY = 0.15        # curriculum floor — no trivial straight-line targets
+    MIN_STEPS_PER_LEVEL = 20_000          # minimum steps between difficulty changes
+    MIN_DIFFICULTY = 0.15                 # curriculum floor — no trivial straight-line targets
+    CONSECUTIVE_ADVANCE_REQUIRED = 2      # consecutive good evals to unlock advancement
+    COLLAPSE_WIN_RATE = 0.15              # wr below this + difficulty above floor = rollback
 
     def __init__(self, eval_env, log_dir: str, verbose: int = 0):
         super().__init__(verbose)
@@ -142,6 +152,11 @@ class AutoCurriculumCallback(BaseCallback):
         # Sliding window: True = success, False = failure (50 episodes for responsive spring)
         from collections import deque
         self._recent_outcomes: deque = deque(maxlen=50)
+        # Conservative advancement trackers
+        self._consecutive_good_evals = 0   # consecutive evals with wr >= 50%
+        self._last_healthy_checkpoint: str | None = None  # disk path to pre-advance model
+        self._healthy_params = None         # in-memory copy of pre-advance weights
+        self._peak_difficulty = self.MIN_DIFFICULTY  # highest difficulty achieved this run
 
     @property
     def difficulty_level(self) -> float:
@@ -227,9 +242,10 @@ class AutoCurriculumCallback(BaseCallback):
         print(f"\n  [Eval @ {self.num_timesteps:,} steps] "
               f"diff={self._difficulty:.2f}(phys={physical_diff:.2f}) "
               f"capture_rate={capture_rate:.0%} "
-              f"win_rate(100ep)={win_rate:.0%} "
+              f"win_rate(50ep)={win_rate:.0%} "
               f"avg_min_dist={avg_min_dist:.0f}m "
-              f"avg_intercept={avg_intercept_time:.1f}s")
+              f"avg_intercept={avg_intercept_time:.1f}s "
+              f"consec_good={self._consecutive_good_evals}")
         # Termination distribution
         print(f"    Terms: succ={term_counts['success']} "
               f"timeout={term_counts['timeout']} "
@@ -251,7 +267,8 @@ class AutoCurriculumCallback(BaseCallback):
         self.logger.record("eval/avg_min_dist", avg_min_dist)
         self.logger.record("curriculum/difficulty", self._difficulty)
         self.logger.record("curriculum/difficulty_physical", physical_diff)
-        self.logger.record("curriculum/win_rate_100ep", win_rate)
+        self.logger.record("curriculum/win_rate_50ep", win_rate)
+        self.logger.record("curriculum/consecutive_good", self._consecutive_good_evals)
         for k in r_component_keys:
             self.logger.record(f"reward/{k}", r_avg[k])
 
@@ -278,29 +295,88 @@ class AutoCurriculumCallback(BaseCallback):
             print(f"  -> New best model saved: {best_path}  "
                   f"(capture_rate={capture_rate:.0%})")
 
-        # ── Difficulty adjustment (softened spring mechanism) ──────────
-        # Retreat thresholds are deliberately forgiving: the agent needs
-        # room to struggle against real physics without bouncing between
-        # floor and ceiling in a锯齿 oscillation.
+        # ── Track consecutive good evaluations ─────────────────────────
+        if win_rate >= 0.50:
+            self._consecutive_good_evals += 1
+        else:
+            self._consecutive_good_evals = 0
+
+        # ── Difficulty adjustment (conservative spring with rollback) ───
         steps_since_change = self.num_timesteps - self._last_difficulty_change
+        old_difficulty = self._difficulty
+
         if steps_since_change >= self.MIN_STEPS_PER_LEVEL:
-            old = self._difficulty
-            if win_rate >= 0.50:
-                self._difficulty = min(1.0, self._difficulty + 0.05)
-            elif win_rate >= 0.40:
-                self._difficulty = min(1.0, self._difficulty + 0.02)
-            elif win_rate >= 0.10:   # wide flow zone: 10-40% — grind it out
+            # Check for advancement (requires consecutive good evals)
+            if self._consecutive_good_evals >= self.CONSECUTIVE_ADVANCE_REQUIRED:
+                if win_rate >= 0.50:
+                    self._advance_difficulty(0.05, win_rate)
+                elif win_rate >= 0.40:
+                    self._advance_difficulty(0.02, win_rate)
+            elif win_rate >= 0.10:
+                # Flow zone — maintain current difficulty
                 pass
             elif win_rate >= 0.05:
-                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.01)  # gentle
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.01)
             else:
-                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.02)  # moderate
+                self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.02)
 
-            if abs(self._difficulty - old) > 1e-6:
+            # Log any difficulty change
+            if abs(self._difficulty - old_difficulty) > 1e-6:
                 self._last_difficulty_change = self.num_timesteps
-                direction = "▲" if self._difficulty > old else "▼"
-                print(f"  >> Difficulty: {old:.2f} → {self._difficulty:.2f} {direction}  "
-                      f"(win_rate={win_rate:.0%}, recent={len(self._recent_outcomes)}eps)")
+                direction = "▲" if self._difficulty > old_difficulty else "▼"
+                print(f"  >> Difficulty: {old_difficulty:.2f} → {self._difficulty:.2f} {direction}  "
+                      f"(win_rate={win_rate:.0%}, consec_good={self._consecutive_good_evals}, "
+                      f"recent={len(self._recent_outcomes)}eps)")
+
+            # ── Collapse detection & rollback ───────────────────────────
+            # If difficulty was ever advanced above the floor and win_rate
+            # has now collapsed, restore the healthy checkpoint.
+            if (self._peak_difficulty > self.MIN_DIFFICULTY
+                    and win_rate < self.COLLAPSE_WIN_RATE
+                    and self._healthy_params is not None):
+                self._rollback(win_rate)
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _advance_difficulty(self, delta: float, win_rate: float):
+        """Save a healthy checkpoint, then increase difficulty."""
+        old = self._difficulty
+        self._difficulty = min(1.0, self._difficulty + delta)
+
+        # Save checkpoint BEFORE advancing
+        ckpt_path = os.path.join(self._log_dir, f"healthy_checkpoint_diff_{old:.2f}.zip")
+        self.model.save(ckpt_path)
+        self._healthy_params = self.model.get_parameters()
+        self._last_healthy_checkpoint = ckpt_path
+        if self._difficulty > self._peak_difficulty:
+            self._peak_difficulty = self._difficulty
+
+        print(f"  >> Checkpoint saved: {ckpt_path}  "
+              f"(weights preserved for rollback, consec_good={self._consecutive_good_evals})")
+
+        # Reset consecutive counter after successful advance
+        self._consecutive_good_evals = 0
+
+    def _rollback(self, win_rate: float):
+        """Catastrophic collapse detected — restore model weights and reset difficulty."""
+        print(f"\n  !! CLIFF COLLAPSE DETECTED !!  win_rate={win_rate:.0%} < {self.COLLAPSE_WIN_RATE:.0%}")
+        print(f"     Restoring model weights from: {self._last_healthy_checkpoint}")
+        print(f"     Rolling difficulty back: {self._difficulty:.2f} → {self.MIN_DIFFICULTY:.2f}")
+
+        # Restore model weights from the healthy checkpoint
+        self.model.set_parameters(self._healthy_params)
+
+        # Reset environment difficulty to the floor
+        self._difficulty = self.MIN_DIFFICULTY
+        self._peak_difficulty = self.MIN_DIFFICULTY
+        self._last_difficulty_change = self.num_timesteps
+        self._consecutive_good_evals = 0
+
+        # Clear the sliding window so the new start isn't contaminated
+        # by outcomes from the collapsed policy
+        self._recent_outcomes.clear()
+
+        print(f"     Rollback complete. Agent gets a clean second chance at diff={self.MIN_DIFFICULTY:.2f}.\n")
 
 
 class CurriculumCallback(BaseCallback):
