@@ -63,6 +63,8 @@ PPO_CONFIG = dict(
     ent_coef=0.01,          # entropy bonus to prevent policy collapse
     vf_coef=0.5,
     max_grad_norm=0.5,
+    use_sde=True,           # gSDE: state-dependent exploration → smooth 10 Hz trajectories
+    sde_sample_freq=4,      # re-sample exploration noise every 4 steps
     device="cpu",
     policy_kwargs=dict(
         net_arch=dict(pi=[128, 128], vf=[128, 128]),

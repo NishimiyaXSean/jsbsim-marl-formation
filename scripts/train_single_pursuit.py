@@ -113,22 +113,23 @@ class AutoCurriculumCallback(BaseCallback):
 
     Replaces fixed-stage curriculum with a continuous ``difficulty_level``
     that breathes with the agent's real capability.  A deque of the last
-    100 episode outcomes provides a smoothed win-rate estimate, and
+    50 episode outcomes provides a responsive win-rate estimate, and
     difficulty is adjusted via a "two-forward, one-back" spring mechanism
-    centred on the flow zone (30%–80% win rate).
+    centred on the flow zone (10%–40% win rate).
 
     Adjustment rules (applied after each eval, with a minimum step
     interval between changes).  Retreat is deliberately gentle to give
-    the agent room to learn against real physics without oscillating:
-        win_rate ≥ 80%  →  difficulty += 0.05   (aggressive push)
-        50% ≤ wr < 80%  →  difficulty += 0.02   (gentle push)
-        25% ≤ wr < 50%  →  no change            (wider flow zone)
-        10% ≤ wr < 25%  →  difficulty -= 0.01   (gentle nudge back)
-        wr < 10%        →  difficulty -= 0.02   (moderate retreat)
+    the agent room to learn against real physics without oscillating.
+    Thresholds are tuned for the difficult low-capture regime (10-40% WR):
+        win_rate >= 50%  →  difficulty += 0.05   (aggressive push)
+        40% <= wr < 50%  →  difficulty += 0.02   (gentle push)
+        10% <= wr < 40%  →  no change            (wide flow zone — grind it out)
+         5% <= wr < 10%  →  difficulty -= 0.01   (gentle nudge back)
+        wr < 5%          →  difficulty -= 0.02   (moderate retreat)
     """
 
-    MIN_STEPS_PER_LEVEL = 20_000  # minimum steps between difficulty changes
-    MIN_DIFFICULTY = 0.15         # curriculum floor — no trivial straight-line targets
+    MIN_STEPS_PER_LEVEL = 6_144  # 3 × n_steps(2048) — fast response, avoids missing the peak
+    MIN_DIFFICULTY = 0.15        # curriculum floor — no trivial straight-line targets
 
     def __init__(self, eval_env, log_dir: str, verbose: int = 0):
         super().__init__(verbose)
@@ -138,9 +139,9 @@ class AutoCurriculumCallback(BaseCallback):
         self._best_capture_rate = -1.0
         self._last_difficulty_change = 0
         self._eval_metrics: list = []
-        # Sliding window: True = success, False = failure
+        # Sliding window: True = success, False = failure (50 episodes for responsive spring)
         from collections import deque
-        self._recent_outcomes: deque = deque(maxlen=100)
+        self._recent_outcomes: deque = deque(maxlen=50)
 
     @property
     def difficulty_level(self) -> float:
@@ -168,7 +169,8 @@ class AutoCurriculumCallback(BaseCallback):
         r_component_keys = ["r_progress", "r_terminal_boost", "r_ata",
                            "r_time_pressure", "r_ground_warning", "r_proximity",
                            "r_low_speed_penalty", "r_step_penalty",
-                           "r_lead_vel_align", "r_lead_pred", "r_los_rate"]
+                           "r_lead_vel_align", "r_lead_pred", "r_los_rate",
+                           "r_energy_gated", "r_smoothness"]
 
         for _ in range(EVAL_EPISODES):
             obs, _ = self._eval_env.reset()
@@ -283,13 +285,13 @@ class AutoCurriculumCallback(BaseCallback):
         steps_since_change = self.num_timesteps - self._last_difficulty_change
         if steps_since_change >= self.MIN_STEPS_PER_LEVEL:
             old = self._difficulty
-            if win_rate >= 0.80:
+            if win_rate >= 0.50:
                 self._difficulty = min(1.0, self._difficulty + 0.05)
-            elif win_rate >= 0.50:
+            elif win_rate >= 0.40:
                 self._difficulty = min(1.0, self._difficulty + 0.02)
-            elif win_rate >= 0.25:   # wider flow zone: 25-50% is OK
+            elif win_rate >= 0.10:   # wide flow zone: 10-40% — grind it out
                 pass
-            elif win_rate >= 0.10:
+            elif win_rate >= 0.05:
                 self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.01)  # gentle
             else:
                 self._difficulty = max(self.MIN_DIFFICULTY, self._difficulty - 0.02)  # moderate
@@ -465,6 +467,9 @@ def train(seed: int = 0):
     print(f"{'='*55}\n")
 
     # PPO model — agent controls d_heading, d_alt, d_speed via FC
+    # gSDE (generalised State-Dependent Exploration) produces smooth,
+    # state-consistent exploration trajectories instead of per-step white noise,
+    # which is critical for 10 Hz control without jitter.
     model = PPO(
         "MlpPolicy", env,
         verbose=1,
@@ -478,6 +483,8 @@ def train(seed: int = 0):
         ent_coef=0.01,   # small entropy bonus — prevents policy collapse
         vf_coef=0.5,
         max_grad_norm=0.5,
+        use_sde=True,
+        sde_sample_freq=4,
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
@@ -720,6 +727,8 @@ def train_with_config(
         ent_coef=ent_coef,
         vf_coef=vf_coef,
         max_grad_norm=max_grad_norm,
+        use_sde=True,
+        sde_sample_freq=4,
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(

@@ -96,11 +96,12 @@ LOW_SPEED_THRESHOLD = 100.0  # m/s — below this, large heading commands are pe
 REWARD_PROGRESS = 0.5        # weak — closing distance is a minor hint, not the goal
 REWARD_ATA = 5.0             # pointing at target
 REWARD_GROUND_WARNING = 2.0
-REWARD_SUCCESS = 500.0       # capture bonus (dist < 200m)
+REWARD_SUCCESS = 2000.0      # capture bonus (dist < 200m) — doubled to incentivise kill instinct
 REWARD_CRASH = -200.0        # strong negative for crashing
 REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
-STEP_PENALTY = 0.3           # per-decision survival penalty — makes stalling painful
+STEP_PENALTY = 1.0           # per-decision survival penalty — "surviving-but-not-capturing" bleeds
+LOW_ENERGY_PENALTY = 5.0     # penalty when V_agent < V_target — pointing without energy is useless
 ANTI_STALL_WINDOW = 50       # steps (5 s at 10 Hz) — sliding window for Vc check
 ANTI_STALL_MIN_VC = 2.0      # m/s — closure rate below this triggers stall detection
 ANTI_STALL_MIN_DIST = 300.0  # m — only trigger when still far from target
@@ -193,6 +194,7 @@ class SinglePursuitEnv(gym.Env):
         self._prev_rpy = np.zeros(3, dtype=np.float64)  # for pursuer angular velocity
         self._prev_target_rpy = np.zeros(3, dtype=np.float64)  # for target angular velocity
         self._prev_airspeed = 180.0  # m/s — for Specific Excess Power calculation
+        self._last_action = np.zeros(3, dtype=np.float32)  # for action smoothness tracking
         from collections import deque
         self._closure_rates: deque = deque(maxlen=ANTI_STALL_WINDOW)
 
@@ -333,6 +335,13 @@ class SinglePursuitEnv(gym.Env):
         self._target.altitude_m = np.clip(self._target.altitude_m + d_alt, 500.0, 11000.0)
         self._target.speed_mps = np.clip(self._target.speed_mps + d_spd, 100.0, 270.0)
 
+        # ── Energy state check (before micro-steps) ──────────────────────
+        _airspeed = float(self.pursuer.state["airspeed_mps"])
+        _target_spd = float(self.target_ac.state.get("airspeed_mps", 180.0))
+        _energy_ok = _airspeed >= _target_spd
+        # Track last action for smoothness penalty (used by LeadPursuitRewardWrapper)
+        self._last_action = np.asarray(action, dtype=np.float32)
+
         total_reward = 0.0
 
         # ── Reward component accumulators (for diagnostics) ────────────────
@@ -407,18 +416,29 @@ class SinglePursuitEnv(gym.Env):
             _, los_dir, _ = compute_los(a_pos, t_pos)
             geo = compute_tactical_angles(a_forward, t_forward, los_dir)
 
-            # --- Micro-step rewards (v5 baseline) ---
+            # --- Micro-step rewards (v8: progress guillotine + terminal boost) ---
             delta_dist = self._prev_dist - current_dist  # + when closing
 
-            # Progress: closing distance
-            prog = REWARD_PROGRESS * delta_dist
+            # Progress: closing distance — exponentially decayed with range.
+            # Far away (>1000m) the agent gets only a weak "compass" hint;
+            # meaningful progress reward only appears inside ~500m.
+            dist_factor = np.exp(-current_dist / 600.0)
+            prog = REWARD_PROGRESS * delta_dist * dist_factor
             total_reward += prog
             _r_progress += prog
-            # Terminal boost: extra reward within 500m
+            # Terminal boost: massively amplified within 500m to incentivise
+            # the agent to close the final gap rather than drift for progress.
             if current_dist < 500.0:
-                boost = REWARD_PROGRESS * delta_dist * 2.0
+                boost = REWARD_PROGRESS * delta_dist * 5.0
                 total_reward += boost
                 _r_terminal_boost += boost
+
+            # ── Low energy penalty: "pointing without energy is useless" ──
+            # Applied per micro-step when agent is slower than its target.
+            if not _energy_ok:
+                le_penalty = LOW_ENERGY_PENALTY * dt
+                total_reward -= le_penalty
+                _r_low_speed_penalty -= le_penalty
 
             # ATA: pointing at target
             ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
@@ -513,6 +533,10 @@ class SinglePursuitEnv(gym.Env):
             "r_proximity": _r_proximity,
             "r_low_speed_penalty": _r_low_speed_penalty,
             "r_step_penalty": _r_step_penalty,
+            # Energy state (for LeadPursuitRewardWrapper energy gating)
+            "energy_ok": _energy_ok,
+            # Last action (for LeadPursuitRewardWrapper smoothness penalty)
+            "last_action": self._last_action,
         }
         return self._get_obs(), total_reward, terminated, truncated, info
 
