@@ -102,20 +102,18 @@ REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
 STEP_PENALTY = 1.0           # per-decision survival penalty — "surviving-but-not-capturing" bleeds
 LOW_ENERGY_PENALTY = 5.0     # penalty when V_agent < V_target — pointing without energy is useless
-ANTI_STALL_WINDOW = 50       # steps (5 s at 10 Hz) — sliding window for Vc check
+ANTI_STALL_WINDOW = 30       # steps (3 s at 10 Hz) — sliding window for Vc check
 ANTI_STALL_MIN_VC = 15.0     # m/s — closure rate below this triggers stall detection
 ANTI_STALL_MIN_DIST = 300.0  # m — only trigger when still far from target
 ANTI_STALL_PENALTY = 200.0   # penalty when stall truncation fires
 
-# Zone-of-Death: if the agent lingers in mid-range [300, 800] m with low V_c,
-# apply a gentle but persistent "warm-water" penalty.  The total accumulated
-# penalty over ~30 s of drifting (~300 steps × 1.0) is ~300 — well below the
-# +2000 capture bonus, so the agent still has incentive to fight through.
+# Zone-of-Death: "boiling oil" — drifting in mid-range [300, 800] m at low V_c
+# triggers harsh penalty after only 2 s.  Quick death → fresh episode → re-exploration.
 ZONE_DEATH_DIST_LO = 300.0   # m — lower bound of the danger zone
 ZONE_DEATH_DIST_HI = 800.0   # m — upper bound of the danger zone
 ZONE_DEATH_MIN_VC = 15.0     # m/s — below this in the zone triggers penalty
-ZONE_DEATH_WINDOW = 50       # consecutive steps (5 s) before warm-water penalty begins
-ZONE_DEATH_PENALTY = 1.0     # gentle per-step penalty — "warm water", not "boiling oil"
+ZONE_DEATH_WINDOW = 20       # steps (2 s) — short grace: no tolerance for distant drifting
+ZONE_DEATH_PENALTY = 50.0    # harsh per-step penalty — drift = death, forcing re-exploration
 VELOCITY_SHAPING_WEIGHT = 3.0  # reward multiplier for high speed when well-aligned
 VELOCITY_SHAPING_ATA_THRESH = 0.95  # cos(ATA) threshold for velocity shaping
 
