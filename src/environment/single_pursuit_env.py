@@ -102,18 +102,20 @@ REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
 STEP_PENALTY = 1.0           # per-decision survival penalty — "surviving-but-not-capturing" bleeds
 LOW_ENERGY_PENALTY = 5.0     # penalty when V_agent < V_target — pointing without energy is useless
-ANTI_STALL_WINDOW = 30       # steps (3 s at 10 Hz) — sliding window for Vc check
-ANTI_STALL_MIN_VC = 15.0     # m/s — closure rate below this triggers stall (was 2.0)
+ANTI_STALL_WINDOW = 50       # steps (5 s at 10 Hz) — sliding window for Vc check
+ANTI_STALL_MIN_VC = 15.0     # m/s — closure rate below this triggers stall detection
 ANTI_STALL_MIN_DIST = 300.0  # m — only trigger when still far from target
-ANTI_STALL_PENALTY = 200.0   # penalty when stall truncation fires (was 100.0)
+ANTI_STALL_PENALTY = 200.0   # penalty when stall truncation fires
 
 # Zone-of-Death: if the agent lingers in mid-range [300, 800] m with low V_c,
-# it's "drifting" — apply escalating penalty to force a decision (commit or retreat).
+# apply a gentle but persistent "warm-water" penalty.  The total accumulated
+# penalty over ~30 s of drifting (~300 steps × 1.0) is ~300 — well below the
+# +2000 capture bonus, so the agent still has incentive to fight through.
 ZONE_DEATH_DIST_LO = 300.0   # m — lower bound of the danger zone
 ZONE_DEATH_DIST_HI = 800.0   # m — upper bound of the danger zone
 ZONE_DEATH_MIN_VC = 15.0     # m/s — below this in the zone triggers penalty
-ZONE_DEATH_WINDOW = 20       # consecutive decision steps before penalty kicks in
-ZONE_DEATH_PENALTY = 50.0    # penalty per decision once the window is exceeded
+ZONE_DEATH_WINDOW = 50       # consecutive steps (5 s) before warm-water penalty begins
+ZONE_DEATH_PENALTY = 1.0     # gentle per-step penalty — "warm water", not "boiling oil"
 VELOCITY_SHAPING_WEIGHT = 3.0  # reward multiplier for high speed when well-aligned
 VELOCITY_SHAPING_ATA_THRESH = 0.95  # cos(ATA) threshold for velocity shaping
 
@@ -506,9 +508,9 @@ class SinglePursuitEnv(gym.Env):
                 reason = "out_of_bounds"
                 break
 
-        # ── Anti-Stall Truncation (aggressive) ───────────────────────────
-        # Monitor closure rate over a 3 s sliding window.  If the agent is
-        # closing slower than 15 m/s while still far (> 300 m) for 3+ seconds,
+        # ── Anti-Stall Truncation ─────────────────────────────────────────
+        # Monitor closure rate over a 5 s sliding window.  If the agent is
+        # closing slower than 15 m/s while still far (> 300 m) for 5+ seconds,
         # truncate early — no "comfortable 120 s drifting" at 750m.
         if not terminated:
             end_dist = self._prev_dist
