@@ -261,7 +261,7 @@ class SinglePursuitEnv(gym.Env):
         # --- Target spawn: continuous interpolation by difficulty_level ---
         d = self._difficulty
 
-        target_dist = rng.uniform(800 + d * 700, 1800 + d * 1200)
+        target_dist = rng.uniform(2000 + d * 1000, 3000 + d * 2000)
         bearing_max = d * 45.0
         bearing_offset = rng.uniform(-bearing_max, bearing_max)
         alt_offset_max = 50.0 + d * 250.0
@@ -653,8 +653,14 @@ class SinglePursuitEnv(gym.Env):
                                  spawn_alt_m: float = 3000.0) -> TargetProfile:
         """Generate target motion with continuous difficulty interpolation.
 
-        difficulty=0.0 → straight-and-level (like old stage 1.0)
-        difficulty=1.0 → aggressive weaving (like old stage 3.0)
+        Difficulty primarily controls horizontal manoeuvring (heading rate).
+        Vertical manoeuvring is disabled below d=0.5 — the target flies level
+        so the agent can focus on learning the horizontal intercept geometry first.
+        Only at high difficulty (d > 0.5) and low probability (20%) does the
+        target get a gentle climb/descent rate.
+
+        difficulty=0.0 → straight-and-level
+        difficulty=1.0 → aggressive weaving + occasional gentle altitude change
         """
         d = self._difficulty
         tp = TargetProfile()
@@ -662,7 +668,14 @@ class SinglePursuitEnv(gym.Env):
         tp.speed_mps = 130.0 + d * 30.0                        # 130 → 160 m/s
         tp.heading_deg = spawn_heading
         tp.heading_rate_dps = rng.uniform(-12.0 * d, 12.0 * d)  # 0 → ±12 °/s
-        tp.alt_rate_mps = rng.uniform(-4.0 * d, 4.0 * d)        # 0 → ±4 m/s
+
+        # Target flies level most of the time.  Only at high difficulty (d > 0.5)
+        # and with low probability does it get a gentle vertical manoeuvre.
+        if d > 0.5 and rng.random() < 0.2:
+            tp.alt_rate_mps = rng.uniform(-2.0, 2.0)            # gentle climb/descent
+        else:
+            tp.alt_rate_mps = 0.0                               # pure level flight
+
         return tp
 
     def _move_target(self, dt: float) -> None:
