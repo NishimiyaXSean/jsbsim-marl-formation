@@ -188,13 +188,13 @@ class DummyEnvForLeadPursuit(gym.Env):
             "beta_deg": 0.0,
         }
 
-        # Mock target
+        # Mock target — slower than pursuer so V_c > 0 (closing)
         self.target_ac = type('obj', (object,), {})()
         self.target_ac.position_ned = np.array([1000.0, 0.0, 3000.0], dtype=np.float64)
-        self.target_ac.velocity_ned = np.array([180.0, 10.0, 0.0], dtype=np.float64)  # moving slightly right
+        self.target_ac.velocity_ned = np.array([150.0, 10.0, 0.0], dtype=np.float64)  # pursuer closes at ~30 m/s
         self.target_ac.rpy_rad = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         self.target_ac.state = {
-            "n_z_g": 1.0, "airspeed_mps": 180.0, "alt_m": 3000.0,
+            "n_z_g": 1.0, "airspeed_mps": 150.0, "alt_m": 3000.0,
             "roll_deg": 0.0, "pitch_deg": 0.0, "yaw_deg": 0.0,
             "beta_deg": 0.0,
         }
@@ -203,11 +203,11 @@ class DummyEnvForLeadPursuit(gym.Env):
         return obs, {}
 
     def step(self, action):
-        # Move pursuer forward (simple translation)
+        # Move pursuer forward faster than target → V_c ≈ 30 m/s (closing)
         self.pursuer.position_ned = self.pursuer.position_ned + np.array([3.0, 0.0, 0.0])
 
-        # Target moves as well (same as initial velocity)
-        self.target_ac.position_ned = self.target_ac.position_ned + np.array([3.0, 0.167, 0.0])
+        # Target moves slower → pursuer closes in
+        self.target_ac.position_ned = self.target_ac.position_ned + np.array([2.5, 0.167, 0.0])
 
         self._step_counter += 1
         prev = self._prev_dist
@@ -226,9 +226,15 @@ class DummyEnvForLeadPursuit(gym.Env):
         geo = compute_tactical_angles(a_forward, t_forward, los_dir)
         reward += self.REWARD_ATA * max(geo["cos_ata"], -0.2) * self.PHYSICS_DT
 
+        # Compute closure rate for V_c coupling (pursuer moves 3.0, target 2.5 → ≈30 m/s closing)
+        V_c = 30.0  # approximate m/s
+
         terminated = self._step_counter >= 30
         obs = np.zeros(25, dtype=np.float32)
-        return obs, reward, terminated, False, {"reason": "timeout" if terminated else ""}
+        return obs, reward, terminated, False, {
+            "reason": "timeout" if terminated else "",
+            "closure_rate": V_c,
+        }
 
 
 def test_lead_pursuit_wrapper_shape_unchanged():
