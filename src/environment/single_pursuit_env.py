@@ -102,10 +102,18 @@ REWARD_LOST_TARGET = -200.0  # strong negative for losing target
 REWARD_LOW_SPEED_TURN = 5.0  # penalty per decision for high turn rate at low speed
 STEP_PENALTY = 1.0           # per-decision survival penalty — "surviving-but-not-capturing" bleeds
 LOW_ENERGY_PENALTY = 5.0     # penalty when V_agent < V_target — pointing without energy is useless
-ANTI_STALL_WINDOW = 50       # steps (5 s at 10 Hz) — sliding window for Vc check
-ANTI_STALL_MIN_VC = 2.0      # m/s — closure rate below this triggers stall detection
+ANTI_STALL_WINDOW = 30       # steps (3 s at 10 Hz) — sliding window for Vc check
+ANTI_STALL_MIN_VC = 15.0     # m/s — closure rate below this triggers stall (was 2.0)
 ANTI_STALL_MIN_DIST = 300.0  # m — only trigger when still far from target
-ANTI_STALL_PENALTY = 100.0   # penalty when stall truncation fires
+ANTI_STALL_PENALTY = 200.0   # penalty when stall truncation fires (was 100.0)
+
+# Zone-of-Death: if the agent lingers in mid-range [300, 800] m with low V_c,
+# it's "drifting" — apply escalating penalty to force a decision (commit or retreat).
+ZONE_DEATH_DIST_LO = 300.0   # m — lower bound of the danger zone
+ZONE_DEATH_DIST_HI = 800.0   # m — upper bound of the danger zone
+ZONE_DEATH_MIN_VC = 15.0     # m/s — below this in the zone triggers penalty
+ZONE_DEATH_WINDOW = 20       # consecutive decision steps before penalty kicks in
+ZONE_DEATH_PENALTY = 50.0    # penalty per decision once the window is exceeded
 VELOCITY_SHAPING_WEIGHT = 3.0  # reward multiplier for high speed when well-aligned
 VELOCITY_SHAPING_ATA_THRESH = 0.95  # cos(ATA) threshold for velocity shaping
 
@@ -197,6 +205,7 @@ class SinglePursuitEnv(gym.Env):
         self._last_action = np.zeros(3, dtype=np.float32)  # for action smoothness tracking
         from collections import deque
         self._closure_rates: deque = deque(maxlen=ANTI_STALL_WINDOW)
+        self._zone_death_counter: int = 0  # consecutive decision steps in the danger zone
 
     # ── Difficulty property ─────────────────────────────────────────────────
 
@@ -311,6 +320,7 @@ class SinglePursuitEnv(gym.Env):
         self._prev_target_rpy = self.target_ac.rpy_rad.copy()
         self._prev_airspeed = float(self.pursuer.state["airspeed_mps"])
         self._closure_rates.clear()
+        self._zone_death_counter = 0
         self._target_profile = self._generate_target_profile(rng, target_hdg,
                                                             spawn_alt_m=float(target_ned[2]))
 
@@ -496,10 +506,10 @@ class SinglePursuitEnv(gym.Env):
                 reason = "out_of_bounds"
                 break
 
-        # ── Anti-Stall Truncation ─────────────────────────────────────────
-        # Monitor closure rate over a 5 s sliding window.  If the agent is
-        # barely closing (< 2 m/s) while still far (> 300 m) for 5+ seconds,
-        # truncate early — no more "comfortable 120 s drifting."
+        # ── Anti-Stall Truncation (aggressive) ───────────────────────────
+        # Monitor closure rate over a 3 s sliding window.  If the agent is
+        # closing slower than 15 m/s while still far (> 300 m) for 3+ seconds,
+        # truncate early — no "comfortable 120 s drifting" at 750m.
         if not terminated:
             end_dist = self._prev_dist
             closure_rate = (start_dist - end_dist) / DECISION_DT  # m/s, + = closing
@@ -511,6 +521,19 @@ class SinglePursuitEnv(gym.Env):
                 reason = "stall"
                 total_reward -= ANTI_STALL_PENALTY
 
+            # ── Zone-of-Death penalty ────────────────────────────────────────
+            # If the agent lingers in the mid-range [300, 800] m without
+            # meaningful closure, apply escalating penalty to force commitment.
+            in_zone = (ZONE_DEATH_DIST_LO <= end_dist <= ZONE_DEATH_DIST_HI)
+            vc_low = closure_rate < ZONE_DEATH_MIN_VC
+            if in_zone and vc_low:
+                self._zone_death_counter += 1
+            else:
+                self._zone_death_counter = 0
+            if self._zone_death_counter > ZONE_DEATH_WINDOW:
+                total_reward -= ZONE_DEATH_PENALTY
+                _r_low_speed_penalty -= ZONE_DEATH_PENALTY  # track under low-speed for now
+
         # --- Timeout ---
         current_time = self._step_counter / CTRL_FREQ
         if not terminated and not truncated and current_time >= MAX_EPISODE_TIME:
@@ -520,6 +543,10 @@ class SinglePursuitEnv(gym.Env):
         # --- Tacview ---
         if self.record_tacview:
             self._record_tacview_frame(current_time)
+
+        # ── Decision-level closure rate (for V_c-coupled guidance) ────
+        end_dist = self._prev_dist
+        _closure_rate = (start_dist - end_dist) / DECISION_DT  # m/s, + = closing
 
         info = {
             "reason": reason,
@@ -537,6 +564,10 @@ class SinglePursuitEnv(gym.Env):
             "energy_ok": _energy_ok,
             # Last action (for LeadPursuitRewardWrapper smoothness penalty)
             "last_action": self._last_action,
+            # Closure rate (for V_c-coupled guidance — LeadPursuitRewardWrapper)
+            "closure_rate": _closure_rate,
+            # End distance (for zone-of-death detection)
+            "end_dist": end_dist,
         }
         return self._get_obs(), total_reward, terminated, truncated, info
 

@@ -185,7 +185,7 @@ class AutoCurriculumCallback(BaseCallback):
                            "r_time_pressure", "r_ground_warning", "r_proximity",
                            "r_low_speed_penalty", "r_step_penalty",
                            "r_lead_vel_align", "r_lead_pred", "r_los_rate",
-                           "r_energy_gated", "r_smoothness"]
+                           "r_energy_gated", "r_smoothness", "r_vc_coupled"]
 
         for _ in range(EVAL_EPISODES):
             obs, _ = self._eval_env.reset()

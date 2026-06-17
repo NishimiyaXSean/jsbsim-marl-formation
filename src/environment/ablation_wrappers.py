@@ -118,16 +118,22 @@ class CubicActionWrapper(gym.Wrapper):
 class LeadPursuitRewardWrapper(gym.Wrapper):
     """Add lead pursuit reward terms on top of the base environment reward.
 
-    Three components with energy gating — guidance rewards are only awarded
-    when the pursuer has an energy advantage (V_pursuer >= V_target).
-    "Pointing without energy is useless."
+    Three components with **V_c (closure-rate) multiplicative coupling**
+    and energy gating — guidance rewards are only awarded when the pursuer
+    is actually CLOSING on the target with meaningful speed.
 
-    1. Velocity alignment — cos(pursuer_vel_dir, LOS_dir) × 15.0 × dt
-    2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 25.0 × dt
-    3. LOS-rate damping — exp(-|λ̇| × scale) × 20.0 × dt
+    "Pointing without closing is useless."
 
-    Also adds an action smoothness penalty to suppress 10 Hz jitter:
-        r_smoothness = -w × Σ(a_t − a_{t-1})²
+    1. Velocity alignment — cos(pursuer_vel_dir, LOS_dir) × 15.0 × dt × V_c_norm
+    2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 25.0 × dt × V_c_norm
+    3. LOS-rate damping — exp(-|λ̇| × scale) × 20.0 × dt × V_c_norm
+
+    V_c coupling:
+        V_c_norm = max(0, min(1, closure_rate / 50.0))
+        V_c <= 0  → V_c_norm = 0  (guidance zeroed — separating)
+        V_c >= 50 → V_c_norm = 1  (full guidance — true intercept)
+
+    Also adds an action smoothness penalty and energy gating.
     """
 
     VEL_ALIGN_WEIGHT = 15.0      # velocity alignment — moving toward target
@@ -136,6 +142,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
     SMOOTHNESS_WEIGHT = 2.0      # action-rate penalty weight
+    V_C_REF = 50.0               # reference closure rate (m/s) for V_c coupling normalisation
 
     def __init__(self, env: gym.Env):
         super().__init__(env)
@@ -157,10 +164,20 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         if terminated or truncated:
             info["r_smoothness"] = r_smoothness
             info["r_energy_gated"] = 0.0
+            info["r_vc_coupled"] = 0.0
             info["r_lead_vel_align"] = 0.0
             info["r_lead_pred"] = 0.0
             info["r_los_rate"] = 0.0
             return obs, reward, terminated, truncated, info
+
+        # ── V_c coupling mask ───────────────────────────────────────────
+        # "Pointing without closing is useless."  All guidance rewards are
+        # multiplied by a normalised closure-rate factor ∈ [0, 1].
+        # V_c <= 0 (separating)    → V_c_norm = 0  → ALL guidance zeroed
+        # V_c = 25 m/s (drifting)  → V_c_norm = 0.5 → guidance halved
+        # V_c >= 50 m/s (killing)  → V_c_norm = 1.0 → full guidance
+        V_c = float(info.get("closure_rate", 0.0))
+        V_c_norm = max(0.0, min(1.0, V_c / self.V_C_REF))
 
         # ── Energy gating: read from base env info ──────────────────────
         energy_ok = info.get("energy_ok", True)
@@ -181,42 +198,39 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         # 1. Velocity alignment: is the aircraft MOVING toward the target?
         _, los_dir, _ = compute_los(pursuer_pos, target_pos)
         vel_norm = float(np.linalg.norm(pursuer_vel))
-        r_vel_align = 0.0
+        raw_r_vel_align = 0.0
         if vel_norm > 1.0 and energy_ok:
             vel_dir = pursuer_vel / vel_norm
             cos_vel_los = float(np.clip(np.dot(vel_dir, los_dir), -0.5, 1.0))
-            r_vel_align = cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
-            reward += r_vel_align
+            raw_r_vel_align = cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
 
         # 2. Lead prediction: point at future target position
-        r_lead_pred = 0.0
+        raw_r_lead_pred = 0.0
         if energy_ok:
             future_pos = target_pos + target_vel * self.LEAD_TIME_SEC
             _, future_los_dir, _ = compute_los(pursuer_pos, future_pos)
             pursuer_forward = compute_forward_vector(pursuer_rpy)
             cos_lead = float(np.clip(np.dot(pursuer_forward, future_los_dir), -0.5, 1.0))
-            r_lead_pred = cos_lead * self.LEAD_PREDICT_WEIGHT * dt
-            reward += r_lead_pred
+            raw_r_lead_pred = cos_lead * self.LEAD_PREDICT_WEIGHT * dt
 
         # 3. LOS-rate damping — the core guidance metric
-        # λ̇ = |v_rel_perp| / dist  (rad/s)
-        # λ̇ ≈ 0  →  pursuer is on a perfect collision course
-        # Reward decays exponentially with |λ̇|, creating a strong gradient
-        # toward the collision-course manifold.
-        r_los_rate = 0.0
+        raw_r_los_rate = 0.0
         if energy_ok:
             los_vec = target_pos - pursuer_pos
             los_dist = float(np.linalg.norm(los_vec))
             if los_dist > 10.0:
                 los_dir = los_vec / los_dist
                 rel_vel = target_vel - pursuer_vel
-                # Component of relative velocity perpendicular to LOS
                 rel_vel_parallel = float(np.dot(rel_vel, los_dir)) * los_dir
                 rel_vel_perp = rel_vel - rel_vel_parallel
                 los_rate_mag = float(np.linalg.norm(rel_vel_perp)) / los_dist
-                # Exponential reward: max at λ̇=0, decays to zero for large λ̇
-                r_los_rate = np.exp(-los_rate_mag * self.LOS_RATE_SCALE) * self.LOS_RATE_WEIGHT * dt
-                reward += r_los_rate
+                raw_r_los_rate = np.exp(-los_rate_mag * self.LOS_RATE_SCALE) * self.LOS_RATE_WEIGHT * dt
+
+        # ── V_c multiplicative coupling ──────────────────────────────────
+        r_vel_align = raw_r_vel_align * V_c_norm
+        r_lead_pred = raw_r_lead_pred * V_c_norm
+        r_los_rate  = raw_r_los_rate  * V_c_norm
+        reward += r_vel_align + r_lead_pred + r_los_rate
 
         # Append lead pursuit components to info for diagnostics
         info["r_lead_vel_align"] = r_vel_align
@@ -224,5 +238,6 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         info["r_los_rate"] = r_los_rate
         info["r_smoothness"] = r_smoothness
         info["r_energy_gated"] = gated
+        info["r_vc_coupled"] = V_c_norm
 
         return obs, reward, terminated, truncated, info
