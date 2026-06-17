@@ -74,16 +74,17 @@ class BlendedActionWrapper(gym.Wrapper):
     outputs produce perceptible physical changes, while the cubic component
     still provides precision near the origin.
 
-        a=0.0 → 0.000    a=0.1 → 0.0208   a=0.5 → 0.2188
-        a=1.0 → 1.000    a=-0.3 → -0.078
+        a=0.0 → 0.000    a=0.1 → 0.0118   a=0.5 → 0.1325
+        a=1.0 → 1.000    a=-0.3 → -0.032
 
     Args:
         env:  Gym environment to wrap.
-        alpha: Linear blend coefficient (default 0.2).
+        alpha: Linear blend coefficient (default 0.02).
+               Ultra-low linear floor — preserves gradient without 10 Hz jitter.
                alpha=0.0 → pure cubic,  alpha=1.0 → pure linear.
     """
 
-    def __init__(self, env: gym.Env, alpha: float = 0.2):
+    def __init__(self, env: gym.Env, alpha: float = 0.02):
         super().__init__(env)
         self.alpha = alpha
 
@@ -117,14 +118,16 @@ class CubicActionWrapper(gym.Wrapper):
 class LeadPursuitRewardWrapper(gym.Wrapper):
     """Add lead pursuit reward terms on top of the base environment reward.
 
-    Two new components:
-    1. Velocity alignment — cos(pursuer_vel_dir, LOS_dir) × 2.0 × dt
-       Rewards the aircraft actually MOVING toward the target (not just
-       pointing at it — accounts for AoA/sideslip).
+    Three components with energy gating — guidance rewards are only awarded
+    when the pursuer has an energy advantage (V_pursuer >= V_target).
+    "Pointing without energy is useless."
 
-    2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 3.0 × dt
-       Rewards pointing at where the target WILL be (1 second ahead),
-       not where it currently is. This is the core of lead pursuit.
+    1. Velocity alignment — cos(pursuer_vel_dir, LOS_dir) × 15.0 × dt
+    2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 25.0 × dt
+    3. LOS-rate damping — exp(-|λ̇| × scale) × 20.0 × dt
+
+    Also adds an action smoothness penalty to suppress 10 Hz jitter:
+        r_smoothness = -w × Σ(a_t − a_{t-1})²
     """
 
     VEL_ALIGN_WEIGHT = 15.0      # velocity alignment — moving toward target
@@ -132,13 +135,36 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_WEIGHT = 20.0       # LOS-rate damping — maintaining collision course
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
+    SMOOTHNESS_WEIGHT = 2.0      # action-rate penalty weight
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        self._last_action: np.ndarray | None = None
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
 
+        # ── Action smoothness penalty ───────────────────────────────────
+        r_smoothness = 0.0
+        action_arr = np.asarray(action, dtype=np.float32)
+        if self._last_action is not None:
+            action_diff = action_arr - self._last_action
+            r_smoothness = -self.SMOOTHNESS_WEIGHT * float(np.sum(action_diff ** 2))
+            reward += r_smoothness
+        self._last_action = action_arr.copy()
+
         # Only add lead pursuit bonus during normal flight (not on termination)
         if terminated or truncated:
+            info["r_smoothness"] = r_smoothness
+            info["r_energy_gated"] = 0.0
+            info["r_lead_vel_align"] = 0.0
+            info["r_lead_pred"] = 0.0
+            info["r_los_rate"] = 0.0
             return obs, reward, terminated, truncated, info
+
+        # ── Energy gating: read from base env info ──────────────────────
+        energy_ok = info.get("energy_ok", True)
+        gated = 0.0 if energy_ok else 1.0
 
         # Access underlying SinglePursuitEnv state via .unwrapped (works through
         # any wrapper chain, e.g. CubicActionWrapper or ResidualExpertWrapper).
@@ -156,43 +182,47 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         _, los_dir, _ = compute_los(pursuer_pos, target_pos)
         vel_norm = float(np.linalg.norm(pursuer_vel))
         r_vel_align = 0.0
-        if vel_norm > 1.0:
+        if vel_norm > 1.0 and energy_ok:
             vel_dir = pursuer_vel / vel_norm
             cos_vel_los = float(np.clip(np.dot(vel_dir, los_dir), -0.5, 1.0))
             r_vel_align = cos_vel_los * self.VEL_ALIGN_WEIGHT * dt
             reward += r_vel_align
 
         # 2. Lead prediction: point at future target position
-        future_pos = target_pos + target_vel * self.LEAD_TIME_SEC
-        _, future_los_dir, _ = compute_los(pursuer_pos, future_pos)
-        pursuer_forward = compute_forward_vector(pursuer_rpy)
-        cos_lead = float(np.clip(np.dot(pursuer_forward, future_los_dir), -0.5, 1.0))
-        r_lead_pred = cos_lead * self.LEAD_PREDICT_WEIGHT * dt
-        reward += r_lead_pred
+        r_lead_pred = 0.0
+        if energy_ok:
+            future_pos = target_pos + target_vel * self.LEAD_TIME_SEC
+            _, future_los_dir, _ = compute_los(pursuer_pos, future_pos)
+            pursuer_forward = compute_forward_vector(pursuer_rpy)
+            cos_lead = float(np.clip(np.dot(pursuer_forward, future_los_dir), -0.5, 1.0))
+            r_lead_pred = cos_lead * self.LEAD_PREDICT_WEIGHT * dt
+            reward += r_lead_pred
 
         # 3. LOS-rate damping — the core guidance metric
         # λ̇ = |v_rel_perp| / dist  (rad/s)
         # λ̇ ≈ 0  →  pursuer is on a perfect collision course
         # Reward decays exponentially with |λ̇|, creating a strong gradient
         # toward the collision-course manifold.
-        los_vec = target_pos - pursuer_pos
-        los_dist = float(np.linalg.norm(los_vec))
-        if los_dist > 10.0:
-            los_dir = los_vec / los_dist
-            rel_vel = target_vel - pursuer_vel
-            # Component of relative velocity perpendicular to LOS
-            rel_vel_parallel = float(np.dot(rel_vel, los_dir)) * los_dir
-            rel_vel_perp = rel_vel - rel_vel_parallel
-            los_rate_mag = float(np.linalg.norm(rel_vel_perp)) / los_dist
-            # Exponential reward: max at λ̇=0, decays to zero for large λ̇
-            r_los_rate = np.exp(-los_rate_mag * self.LOS_RATE_SCALE) * self.LOS_RATE_WEIGHT * dt
-            reward += r_los_rate
-        else:
-            r_los_rate = 0.0
+        r_los_rate = 0.0
+        if energy_ok:
+            los_vec = target_pos - pursuer_pos
+            los_dist = float(np.linalg.norm(los_vec))
+            if los_dist > 10.0:
+                los_dir = los_vec / los_dist
+                rel_vel = target_vel - pursuer_vel
+                # Component of relative velocity perpendicular to LOS
+                rel_vel_parallel = float(np.dot(rel_vel, los_dir)) * los_dir
+                rel_vel_perp = rel_vel - rel_vel_parallel
+                los_rate_mag = float(np.linalg.norm(rel_vel_perp)) / los_dist
+                # Exponential reward: max at λ̇=0, decays to zero for large λ̇
+                r_los_rate = np.exp(-los_rate_mag * self.LOS_RATE_SCALE) * self.LOS_RATE_WEIGHT * dt
+                reward += r_los_rate
 
         # Append lead pursuit components to info for diagnostics
         info["r_lead_vel_align"] = r_vel_align
         info["r_lead_pred"] = r_lead_pred
         info["r_los_rate"] = r_los_rate
+        info["r_smoothness"] = r_smoothness
+        info["r_energy_gated"] = gated
 
         return obs, reward, terminated, truncated, info
