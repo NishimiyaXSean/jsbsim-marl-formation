@@ -74,7 +74,7 @@ PHYSICS_DT = 1.0 / CTRL_FREQ
 DECISION_DT = 0.1           # 10 Hz — agent issues new targets every 0.1 s
 DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 6 micro-steps per decision
 
-MAX_EPISODE_TIME = 120.0    # seconds before timeout
+MAX_EPISODE_TIME = 180.0    # seconds before timeout — BVR transit needs breathing room
 
 # Action scaling (raw [-1,1] → real units, scaled per DECISION_DT)
 MAX_D_HEADING_DEG = 6.0     # per 0.1s decision — up to 60°/s commanded turn
@@ -261,7 +261,8 @@ class SinglePursuitEnv(gym.Env):
         # --- Target spawn: continuous interpolation by difficulty_level ---
         d = self._difficulty
 
-        target_dist = rng.uniform(2000 + d * 1000, 3000 + d * 2000)
+        # Progressive spawn: WVR edge (d=0) → true BVR intercept (d=1)
+        target_dist = rng.uniform(1000 + d * 1500, 1500 + d * 2500)
         bearing_max = d * 45.0
         bearing_offset = rng.uniform(-bearing_max, bearing_max)
         alt_offset_max = 50.0 + d * 250.0
@@ -426,14 +427,14 @@ class SinglePursuitEnv(gym.Env):
             _, los_dir, _ = compute_los(a_pos, t_pos)
             geo = compute_tactical_angles(a_forward, t_forward, los_dir)
 
-            # --- Micro-step rewards (v8: progress guillotine + terminal boost) ---
+            # --- Micro-step rewards (v9: constant compass + terminal boost) ---
             delta_dist = self._prev_dist - current_dist  # + when closing
 
-            # Progress: closing distance — exponentially decayed with range.
-            # Far away (>1000m) the agent gets only a weak "compass" hint;
-            # meaningful progress reward only appears inside ~500m.
-            dist_factor = np.exp(-current_dist / 600.0)
-            prog = REWARD_PROGRESS * delta_dist * dist_factor
+            # Progress: weak but constant "compass" signal at all ranges.
+            # The boiling-oil ZONE_DEATH and V_c-coupled guidance prevent
+            # drifting, so we can safely give a persistent distance-closing
+            # hint without creating a "progress低保" attractor at 750m.
+            prog = REWARD_PROGRESS * delta_dist * 0.5
             total_reward += prog
             _r_progress += prog
             # Terminal boost: massively amplified within 500m to incentivise
