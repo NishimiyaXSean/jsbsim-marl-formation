@@ -261,8 +261,9 @@ class SinglePursuitEnv(gym.Env):
         # --- Target spawn: continuous interpolation by difficulty_level ---
         d = self._difficulty
 
-        # Progressive spawn: WVR edge (d=0) → true BVR intercept (d=1)
-        target_dist = rng.uniform(1000 + d * 1500, 1500 + d * 2500)
+        # Decoupled distance curriculum: distance lags behind manoeuvre difficulty.
+        # At d=0 the spawn is in familiar WVR territory; BVR only at high d.
+        target_dist = rng.uniform(900 + d * 1100, 1300 + d * 1700)
         bearing_max = d * 45.0
         bearing_offset = rng.uniform(-bearing_max, bearing_max)
         alt_offset_max = 50.0 + d * 250.0

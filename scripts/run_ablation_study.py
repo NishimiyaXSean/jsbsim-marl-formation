@@ -54,8 +54,8 @@ ABLATIONS = [
 # PPO hyperparameters -- identical across all variants
 PPO_CONFIG = dict(
     learning_rate=3e-4,
-    n_steps=2048,
-    batch_size=256,
+    n_steps=4096,             # doubled for BVR — longer rollouts → lower variance
+    batch_size=512,           # doubled to match n_steps
     n_epochs=10,
     gamma=0.999,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
     gae_lambda=0.95,

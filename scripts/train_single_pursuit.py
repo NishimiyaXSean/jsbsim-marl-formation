@@ -550,8 +550,8 @@ def train(seed: int = 0):
         "MlpPolicy", env,
         verbose=1,
         learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=256,
+        n_steps=4096,             # doubled for BVR — smoother advantage estimates
+        batch_size=512,           # doubled to match n_steps
         n_epochs=10,
         gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
         gae_lambda=0.95,
