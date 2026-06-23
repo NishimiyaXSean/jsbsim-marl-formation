@@ -143,6 +143,8 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
     SMOOTHNESS_WEIGHT = 4.0      # action-rate penalty weight (doubled for V9 — enforces smooth control)
+    ACTION_MAG_WEIGHT = 1.0      # L2 penalty on raw action magnitude — discourages unnecessary maneuvers
+    VZ_PENALTY_WEIGHT = 0.5      # penalty on absolute vertical speed — suppresses porpoising
     V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
     V_C_K = 0.2                  # sigmoid steepness for V_c coupling
     V_C_MID = 25.0               # half-activation closure rate (m/s)
@@ -163,9 +165,26 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
             reward += r_smoothness
         self._last_action = action_arr.copy()
 
+        # ── Action magnitude penalty ─────────────────────────────────────
+        # Discourage unnecessary control inputs.  The agent should output
+        # near-zero (level flight) unless a maneuver is actually needed.
+        r_action_mag = -self.ACTION_MAG_WEIGHT * float(np.sum(action_arr ** 2))
+        reward += r_action_mag
+
+        # ── Vertical velocity penalty ────────────────────────────────────
+        # Suppress porpoising / dolphin-hopping.  Any non-zero vertical
+        # speed costs reward, so diving-for-speed exploits are penalised.
+        # Access pursuer velocity through the wrapper chain.
+        _pursuer_vel = self.unwrapped.pursuer.velocity_ned
+        _vz = float(_pursuer_vel[2])  # positive = descending (NED convention)
+        r_vz_penalty = -self.VZ_PENALTY_WEIGHT * abs(_vz)
+        reward += r_vz_penalty
+
         # Only add lead pursuit bonus during normal flight (not on termination)
         if terminated or truncated:
             info["r_smoothness"] = r_smoothness
+            info["r_action_mag"] = r_action_mag
+            info["r_vz_penalty"] = r_vz_penalty
             info["r_energy_gated"] = 0.0
             info["r_vc_coupled"] = 0.0
             info["r_lead_vel_align"] = 0.0
@@ -240,6 +259,8 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         info["r_lead_pred"] = r_lead_pred
         info["r_los_rate"] = r_los_rate
         info["r_smoothness"] = r_smoothness
+        info["r_action_mag"] = r_action_mag
+        info["r_vz_penalty"] = r_vz_penalty
         info["r_energy_gated"] = gated
         info["r_vc_coupled"] = V_c_norm
 
