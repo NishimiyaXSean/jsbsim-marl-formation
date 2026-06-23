@@ -142,7 +142,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_WEIGHT = 20.0       # LOS-rate damping — maintaining collision course
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
-    SMOOTHNESS_WEIGHT = 2.0      # action-rate penalty weight
+    SMOOTHNESS_WEIGHT = 4.0      # action-rate penalty weight (doubled for V9 — enforces smooth control)
     V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
     V_C_K = 0.2                  # sigmoid steepness for V_c coupling
     V_C_MID = 25.0               # half-activation closure rate (m/s)
