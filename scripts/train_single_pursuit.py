@@ -556,11 +556,11 @@ def train(seed: int = 0):
         gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.03,   # tripled entropy bonus — prevents KL decay & policy collapse
+        ent_coef=0.015,  # moderate entropy — balanced with long-duration gSDE exploration
         vf_coef=0.5,
         max_grad_norm=0.5,
         use_sde=True,
-        sde_sample_freq=2,  # more frequent exploration noise — prevents KL decay
+        sde_sample_freq=10,  # 1.0s exploration duration — lets JSBSim aerodynamics respond
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
@@ -758,7 +758,7 @@ def train_with_config(
     seed: int = 0,
     log_dir: str = "",
     learning_rate: float = 1e-4,
-    ent_coef: float = 0.03,  # tripled entropy bonus — prevents KL decay & policy collapse
+    ent_coef: float = 0.015,  # moderate entropy — balanced with long-duration gSDE
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
     total_timesteps: int = 5_000_000,  # 5M steps for full curriculum exploration
@@ -804,7 +804,7 @@ def train_with_config(
         vf_coef=vf_coef,
         max_grad_norm=max_grad_norm,
         use_sde=True,
-        sde_sample_freq=2,  # more frequent exploration noise — prevents KL decay
+        sde_sample_freq=10,  # 1.0s exploration duration — lets JSBSim aerodynamics respond
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
