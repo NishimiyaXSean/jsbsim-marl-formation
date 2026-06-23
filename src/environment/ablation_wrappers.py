@@ -144,7 +144,8 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
     SMOOTHNESS_WEIGHT = 4.0      # action-rate penalty weight (doubled for V9 — enforces smooth control)
     ACTION_MAG_WEIGHT = 1.0      # L2 penalty on raw action magnitude — discourages unnecessary maneuvers
-    VZ_PENALTY_WEIGHT = 0.5      # penalty on absolute vertical speed — suppresses porpoising
+    VZ_PENALTY_WEIGHT = 15.0     # penalty on normalised vertical speed |V_z/50| — suppresses porpoising
+    ALT_DELTA_WEIGHT = 20.0      # penalty on |alt_diff/1000| — enforces co-planar flight with target
     V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
     V_C_K = 0.2                  # sigmoid steepness for V_c coupling
     V_C_MID = 25.0               # half-activation closure rate (m/s)
@@ -172,19 +173,28 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         reward += r_action_mag
 
         # ── Vertical velocity penalty ────────────────────────────────────
-        # Suppress porpoising / dolphin-hopping.  Any non-zero vertical
-        # speed costs reward, so diving-for-speed exploits are penalised.
-        # Access pursuer velocity through the wrapper chain.
+        # Suppress porpoising / dolphin-hopping.  Normalised by 50 m/s so
+        # the penalty scale is comparable across flight regimes.
         _pursuer_vel = self.unwrapped.pursuer.velocity_ned
         _vz = float(_pursuer_vel[2])  # positive = descending (NED convention)
-        r_vz_penalty = -self.VZ_PENALTY_WEIGHT * abs(_vz)
+        r_vz_penalty = -self.VZ_PENALTY_WEIGHT * abs(_vz / 50.0)
         reward += r_vz_penalty
+
+        # ── Altitude delta penalty ───────────────────────────────────────
+        # Force co-planar flight: penalise any height difference between
+        # pursuer and target.  Normalised by 1000 m so the penalty is
+        # commensurate with guidance rewards (~30-50/step).
+        _pursuer_alt = float(self.unwrapped.pursuer.position_ned[2])
+        _target_alt = float(self.unwrapped.target_ac.position_ned[2])
+        r_alt_delta = -self.ALT_DELTA_WEIGHT * abs(_pursuer_alt - _target_alt) / 1000.0
+        reward += r_alt_delta
 
         # Only add lead pursuit bonus during normal flight (not on termination)
         if terminated or truncated:
             info["r_smoothness"] = r_smoothness
             info["r_action_mag"] = r_action_mag
             info["r_vz_penalty"] = r_vz_penalty
+            info["r_alt_delta"] = r_alt_delta
             info["r_energy_gated"] = 0.0
             info["r_vc_coupled"] = 0.0
             info["r_lead_vel_align"] = 0.0
@@ -261,6 +271,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         info["r_smoothness"] = r_smoothness
         info["r_action_mag"] = r_action_mag
         info["r_vz_penalty"] = r_vz_penalty
+        info["r_alt_delta"] = r_alt_delta
         info["r_energy_gated"] = gated
         info["r_vc_coupled"] = V_c_norm
 
