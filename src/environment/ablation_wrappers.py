@@ -299,6 +299,27 @@ class ActionRepeatWrapper(gym.Wrapper):
         super().__init__(env)
         self.repeat_frames = repeat_frames
 
+    # ── Property delegation ──────────────────────────────────────────
+    # gym.Wrapper.__getattr__ delegates reads, but Python __setattr__
+    # sets instance attrs on the wrapper itself, bypassing inner env
+    # setters.  Explicit @property delegation prevents this.
+
+    @property
+    def difficulty_level(self) -> float:
+        return self.env.difficulty_level
+
+    @difficulty_level.setter
+    def difficulty_level(self, value: float):
+        self.env.difficulty_level = value
+
+    @property
+    def curriculum_stage(self) -> float:
+        return self.env.curriculum_stage
+
+    @curriculum_stage.setter
+    def curriculum_stage(self, value: float):
+        self.env.curriculum_stage = value
+
     def step(self, action):
         total_reward = 0.0
         terminated = False
