@@ -278,3 +278,36 @@ def test_lead_pursuit_wrapper_lead_prediction_contributes():
     # The base reward is identical both steps (same delta_dist, same ATA)
     # so any difference comes from the wrapper
     assert abs(r2 - r1) > 1e-6, f"Lead prediction not varying: r1={r1:.6f}, r2={r2:.6f}"
+
+
+def test_lead_pursuit_vc_coupling_sigmoid():
+    """V_c_norm uses sigmoid coupling with expected values at key points."""
+    from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
+    import math
+
+    K = LeadPursuitRewardWrapper.V_C_K
+    MID = LeadPursuitRewardWrapper.V_C_MID
+
+    assert K == 0.2, f"V_C_K should be 0.2, got {K}"
+    assert MID == 25.0, f"V_C_MID should be 25.0, got {MID}"
+
+    def sigmoid(vc):
+        return 1.0 / (1.0 + math.exp(-K * (vc - MID)))
+
+    # At V_c=0 (stationary), coupling should be nearly zero
+    assert sigmoid(0.0) < 0.01, f"V_c=0 gave {sigmoid(0.0):.4f}, expected < 0.01"
+
+    # At V_c=15 (zone-of-death threshold), coupling ~0.12 (not 0.30 as with linear)
+    v15 = sigmoid(15.0)
+    assert 0.10 < v15 < 0.14, f"V_c=15 gave {v15:.4f}, expected ~0.119"
+
+    # At V_c=25 (midpoint), coupling should be exactly 0.5
+    v25 = sigmoid(25.0)
+    assert abs(v25 - 0.5) < 0.001, f"V_c=25 gave {v25:.4f}, expected 0.5"
+
+    # At V_c=50 (reference, full intercept), coupling should be near 1.0
+    v50 = sigmoid(50.0)
+    assert v50 > 0.99, f"V_c=50 gave {v50:.4f}, expected ~0.993"
+
+    # At V_c=-10 (separating), coupling should be negligible
+    assert sigmoid(-10.0) < 0.001, f"V_c=-10 gave {sigmoid(-10.0):.4f}, expected < 0.001"
