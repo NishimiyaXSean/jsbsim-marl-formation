@@ -524,13 +524,17 @@ def train(seed: int = 0):
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs("data/tacview", exist_ok=True)
 
-    # Environment — agent learns residual correction to expert baseline
+    # Environment — agent makes decisions at 2 Hz via ActionRepeatWrapper
+    # while FlightController and JSBSim continue at full rate internally.
     base_env = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
     env = ResidualExpertWrapper(base_env)
+    from src.environment.ablation_wrappers import ActionRepeatWrapper
+    env = ActionRepeatWrapper(env, repeat_frames=5)
     env = Monitor(env, log_dir)
 
     eval_base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
     eval_env = ResidualExpertWrapper(eval_base)
+    eval_env = ActionRepeatWrapper(eval_env, repeat_frames=5)
 
     # Print setup
     print(f"{'='*55}")

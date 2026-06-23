@@ -3,4 +3,5 @@ from src.environment.ablation_wrappers import (
     CubicActionWrapper,
     BlendedActionWrapper,
     LeadPursuitRewardWrapper,
+    ActionRepeatWrapper,
 )

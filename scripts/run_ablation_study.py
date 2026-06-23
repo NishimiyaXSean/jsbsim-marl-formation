@@ -76,11 +76,16 @@ PPO_CONFIG = dict(
 
 
 def build_env(ablation_config: dict, record_tacview: bool = False):
-    """Build the full env chain: SinglePursuitEnv -> wrappers... -> ResidualExpertWrapper."""
+    """Build the full env chain: SinglePursuitEnv -> wrappers... -> ResidualExpertWrapper -> ActionRepeat."""
+    from src.environment.ablation_wrappers import ActionRepeatWrapper
     base = SinglePursuitEnv(difficulty_level=0.0, record_tacview=record_tacview)
     for wrapper_cls in ablation_config.get("wrappers", []):
         base = wrapper_cls(base)
     wrapped = ResidualExpertWrapper(base)
+    # Action repeat: RL makes decisions at 2 Hz (repeat_frames=5 x 0.1s = 0.5s)
+    # while FlightController and JSBSim continue at full rate internally.
+    repeat = ablation_config.get("action_repeat", 5)
+    wrapped = ActionRepeatWrapper(wrapped, repeat_frames=repeat)
     return wrapped
 
 

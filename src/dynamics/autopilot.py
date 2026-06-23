@@ -141,21 +141,21 @@ class BFMAutopilotConfig:
 
     # ── Nz (elevator) channel ─────────────────────────────────────────
     nz_kp: float = 0.15
-    nz_ki: float = 0.05
-    nz_kd: float = 0.03
+    nz_ki: float = 0.0    # zeroed for P-only stability test (was 0.05)
+    nz_kd: float = 0.0    # zeroed for P-only stability test (was 0.03)
     nz_integral_min: float = -0.5
     nz_integral_max: float = 0.5
 
     # ── Roll (aileron) channel ────────────────────────────────────────
     roll_kp: float = 1.5
-    roll_ki: float = 0.3
-    roll_kd: float = 0.1
+    roll_ki: float = 0.0  # zeroed for P-only stability test (was 0.3)
+    roll_kd: float = 0.0  # zeroed for P-only stability test (was 0.1)
     roll_integral_min: float = -0.4
     roll_integral_max: float = 0.4
 
     # ── Speed (throttle) channel ──────────────────────────────────────
     speed_kp: float = 0.01
-    speed_ki: float = 0.005
+    speed_ki: float = 0.0  # zeroed for P-only stability test (was 0.005)
     speed_kd: float = 0.0
     speed_integral_min: float = -0.5
     speed_integral_max: float = 0.5
@@ -164,7 +164,7 @@ class BFMAutopilotConfig:
 
     # ── Sideslip (rudder) channel ─────────────────────────────────────
     beta_kp: float = 0.06
-    beta_ki: float = 0.01
+    beta_ki: float = 0.0  # zeroed for P-only stability test (was 0.01)
     beta_kd: float = 0.0
 
 
