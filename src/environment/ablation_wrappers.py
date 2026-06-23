@@ -9,6 +9,7 @@ from collections import deque
 from typing import Optional
 
 import gymnasium as gym
+import math
 import numpy as np
 
 from src.utils.geometry import compute_forward_vector, compute_los
@@ -142,7 +143,9 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
     SMOOTHNESS_WEIGHT = 2.0      # action-rate penalty weight
-    V_C_REF = 50.0               # reference closure rate (m/s) for V_c coupling normalisation
+    V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
+    V_C_K = 0.2                  # sigmoid steepness for V_c coupling
+    V_C_MID = 25.0               # half-activation closure rate (m/s)
 
     def __init__(self, env: gym.Env):
         super().__init__(env)
@@ -177,7 +180,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         # V_c = 25 m/s (drifting)  → V_c_norm = 0.5 → guidance halved
         # V_c >= 50 m/s (killing)  → V_c_norm = 1.0 → full guidance
         V_c = float(info.get("closure_rate", 0.0))
-        V_c_norm = max(0.0, min(1.0, V_c / self.V_C_REF))
+        V_c_norm = 1.0 / (1.0 + math.exp(-self.V_C_K * (V_c - self.V_C_MID)))
 
         # ── Energy gating: read from base env info ──────────────────────
         energy_ok = info.get("energy_ok", True)

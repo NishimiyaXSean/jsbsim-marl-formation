@@ -94,7 +94,7 @@ class ResidualExpertWrapper(gym.Wrapper):
 #  Training config
 # ═══════════════════════════════════════════════════════════════════════════════
 
-TOTAL_TIMESTEPS = 1_000_000
+TOTAL_TIMESTEPS = 5_000_000
 CURRICULUM_STAGES = [1.0, 1.5, 2.0, 2.5, 3.0]
 STAGE_TIMESTEPS = TOTAL_TIMESTEPS // len(CURRICULUM_STAGES)  # 100k per stage
 
@@ -138,7 +138,7 @@ class AutoCurriculumCallback(BaseCallback):
 
     MIN_STEPS_PER_LEVEL = 20_000          # minimum steps between difficulty changes
     MIN_DIFFICULTY = 0.15                 # curriculum floor — no trivial straight-line targets
-    CONSECUTIVE_ADVANCE_REQUIRED = 2      # consecutive good evals to unlock advancement
+    CONSECUTIVE_ADVANCE_REQUIRED = 1      # consecutive good evals to unlock advancement
     COLLAPSE_WIN_RATE = 0.15              # wr below this + difficulty above floor = rollback
 
     def __init__(self, eval_env, log_dir: str, verbose: int = 0):
@@ -556,11 +556,11 @@ def train(seed: int = 0):
         gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,   # small entropy bonus — prevents policy collapse
+        ent_coef=0.03,   # tripled entropy bonus — prevents KL decay & policy collapse
         vf_coef=0.5,
         max_grad_norm=0.5,
         use_sde=True,
-        sde_sample_freq=4,
+        sde_sample_freq=2,  # more frequent exploration noise — prevents KL decay
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(
@@ -758,10 +758,10 @@ def train_with_config(
     seed: int = 0,
     log_dir: str = "",
     learning_rate: float = 1e-4,
-    ent_coef: float = 0.01,  # small entropy bonus — prevents policy collapse
+    ent_coef: float = 0.03,  # tripled entropy bonus — prevents KL decay & policy collapse
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
-    total_timesteps: int = 1_000_000,  # 1M steps for full-scale training
+    total_timesteps: int = 5_000_000,  # 5M steps for full curriculum exploration
     batch_size: int = 256,
     gamma: float = 0.99,
     clip_range: float = 0.2,
@@ -804,7 +804,7 @@ def train_with_config(
         vf_coef=vf_coef,
         max_grad_norm=max_grad_norm,
         use_sde=True,
-        sde_sample_freq=4,
+        sde_sample_freq=2,  # more frequent exploration noise — prevents KL decay
         tensorboard_log=log_dir,
         device="cpu",
         policy_kwargs=dict(

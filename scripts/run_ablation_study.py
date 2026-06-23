@@ -60,11 +60,11 @@ PPO_CONFIG = dict(
     gamma=0.999,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.01,          # entropy bonus to prevent policy collapse
+    ent_coef=0.03,          # tripled entropy bonus — prevents KL decay & policy collapse
     vf_coef=0.5,
     max_grad_norm=0.5,
     use_sde=True,           # gSDE: state-dependent exploration → smooth 10 Hz trajectories
-    sde_sample_freq=4,      # re-sample exploration noise every 4 steps
+    sde_sample_freq=2,      # re-sample exploration noise every 2 steps (prevents KL decay)
     device="cpu",
     policy_kwargs=dict(
         net_arch=dict(pi=[128, 128], vf=[128, 128]),
@@ -236,8 +236,8 @@ def main():
     parser = argparse.ArgumentParser(description="Ablation study for single-pursuit training")
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2],
                        help="Seeds to run (default: 0 1 2)")
-    parser.add_argument("--steps", type=int, default=1_000_000,
-                       help="Total timesteps per run (default: 1000000)")
+    parser.add_argument("--steps", type=int, default=5_000_000,
+                       help="Total timesteps per run (default: 5000000)")
     parser.add_argument("--skip-training", action="store_true",
                        help="Skip training, just regenerate summary from existing CSVs")
     parser.add_argument("--ablation", type=str, nargs="+",

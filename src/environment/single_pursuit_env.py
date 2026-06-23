@@ -110,7 +110,8 @@ ANTI_STALL_PENALTY = 200.0   # penalty when stall truncation fires
 # Zone-of-Death: "boiling oil" — drifting in mid-range [300, 800] m at low V_c
 # triggers harsh penalty after only 2 s.  Quick death → fresh episode → re-exploration.
 ZONE_DEATH_DIST_LO = 300.0   # m — lower bound of the danger zone
-ZONE_DEATH_DIST_HI = 800.0   # m — upper bound of the danger zone
+ZONE_DEATH_DIST_HI = 800.0   # m — upper bound of the danger zone (base value, scaled by difficulty)
+ZONE_DEATH_DIST_HI_SCALE = 400.0  # m per unit difficulty added to base threshold
 ZONE_DEATH_MIN_VC = 15.0     # m/s — below this in the zone triggers penalty
 ZONE_DEATH_WINDOW = 20       # steps (2 s) — short grace: no tolerance for distant drifting
 ZONE_DEATH_PENALTY = 50.0    # harsh per-step penalty — drift = death, forcing re-exploration
@@ -512,6 +513,8 @@ class SinglePursuitEnv(gym.Env):
         # Monitor closure rate over a 5 s sliding window.  If the agent is
         # closing slower than 15 m/s while still far (> 300 m) for 5+ seconds,
         # truncate early — no "comfortable 120 s drifting" at 750m.
+        # ── Dynamic zone-of-death threshold (scales with difficulty) ───────
+        _zone_death_hi = ZONE_DEATH_DIST_HI + self.difficulty_level * ZONE_DEATH_DIST_HI_SCALE
         if not terminated:
             end_dist = self._prev_dist
             closure_rate = (start_dist - end_dist) / DECISION_DT  # m/s, + = closing
@@ -524,9 +527,10 @@ class SinglePursuitEnv(gym.Env):
                 total_reward -= ANTI_STALL_PENALTY
 
             # ── Zone-of-Death penalty ────────────────────────────────────────
-            # If the agent lingers in the mid-range [300, 800] m without
-            # meaningful closure, apply escalating penalty to force commitment.
-            in_zone = (ZONE_DEATH_DIST_LO <= end_dist <= ZONE_DEATH_DIST_HI)
+            # If the agent lingers in the mid-range without meaningful
+            # closure, apply escalating penalty to force commitment.
+            # Upper bound scales with difficulty (computed above after the block).
+            in_zone = (ZONE_DEATH_DIST_LO <= end_dist <= _zone_death_hi)
             vc_low = closure_rate < ZONE_DEATH_MIN_VC
             if in_zone and vc_low:
                 self._zone_death_counter += 1
@@ -570,6 +574,8 @@ class SinglePursuitEnv(gym.Env):
             "closure_rate": _closure_rate,
             # End distance (for zone-of-death detection)
             "end_dist": end_dist,
+            # Dynamic zone-of-death upper bound (scales with difficulty)
+            "zone_death_dist_hi": _zone_death_hi,
         }
         return self._get_obs(), total_reward, terminated, truncated, info
 
