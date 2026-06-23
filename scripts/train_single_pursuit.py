@@ -147,6 +147,7 @@ class AutoCurriculumCallback(BaseCallback):
         self._log_dir = log_dir
         self._difficulty = self.MIN_DIFFICULTY
         self._best_capture_rate = -1.0
+        self._best_capture_rate_per_level: dict[float, float] = {}  # best CR at each difficulty
         self._last_difficulty_change = 0
         self._eval_metrics: list = []
         # Sliding window: True = success, False = failure (50 episodes for responsive spring)
@@ -295,6 +296,16 @@ class AutoCurriculumCallback(BaseCallback):
             print(f"  -> New best model saved: {best_path}  "
                   f"(capture_rate={capture_rate:.0%})")
 
+        # ── Save per-difficulty best model ─────────────────────────────
+        diff_key = round(self._difficulty, 2)
+        prev_best = self._best_capture_rate_per_level.get(diff_key, -1.0)
+        if capture_rate > prev_best:
+            self._best_capture_rate_per_level[diff_key] = capture_rate
+            per_lvl_path = os.path.join(self._log_dir, f"best_model_diff_{diff_key:.2f}")
+            self.model.save(per_lvl_path)
+            print(f"  -> Per-level best saved: {per_lvl_path}  "
+                  f"(capture_rate={capture_rate:.0%} @ diff={diff_key:.2f})")
+
         # ── Track consecutive good evaluations ─────────────────────────
         if win_rate >= 0.50:
             self._consecutive_good_evals += 1
@@ -343,7 +354,7 @@ class AutoCurriculumCallback(BaseCallback):
         old = self._difficulty
         self._difficulty = min(1.0, self._difficulty + delta)
 
-        # Save checkpoint BEFORE advancing
+        # Save checkpoint BEFORE advancing (rollback safety net)
         ckpt_path = os.path.join(self._log_dir, f"healthy_checkpoint_diff_{old:.2f}.zip")
         self.model.save(ckpt_path)
         self._healthy_params = self.model.get_parameters()
@@ -351,8 +362,14 @@ class AutoCurriculumCallback(BaseCallback):
         if self._difficulty > self._peak_difficulty:
             self._peak_difficulty = self._difficulty
 
+        # Save entry snapshot for the NEW difficulty level
+        entry_path = os.path.join(self._log_dir, f"entry_model_diff_{self._difficulty:.2f}.zip")
+        self.model.save(entry_path)
+
         print(f"  >> Checkpoint saved: {ckpt_path}  "
               f"(weights preserved for rollback, consec_good={self._consecutive_good_evals})")
+        print(f"  >> Entry snapshot: {entry_path}  "
+              f"(initial weights for diff={self._difficulty:.2f})")
 
         # Reset consecutive counter after successful advance
         self._consecutive_good_evals = 0
