@@ -244,3 +244,41 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         info["r_vc_coupled"] = V_c_norm
 
         return obs, reward, terminated, truncated, info
+
+
+class ActionRepeatWrapper(gym.Wrapper):
+    """Frame-skip / action-repeat for RL decision-rate control.
+
+    Lets the RL agent make tactical decisions at 1-2 Hz while the inner
+    FlightController and JSBSim physics continue running at full rate
+    (60 Hz micro-steps, 10 Hz FC updates).
+
+    Parameters
+    ----------
+    env: gym.Env
+        The inner environment (e.g. SinglePursuitEnv wrapped with reward/action wrappers).
+    repeat_frames: int
+        Number of times to repeat each action.  With the standard 10 Hz
+        decision interval (0.1 s per env.step), repeat=5 gives 2 Hz
+        decisions (0.5 s) and repeat=10 gives 1 Hz (1.0 s).
+    """
+
+    def __init__(self, env: gym.Env, repeat_frames: int = 5):
+        super().__init__(env)
+        self.repeat_frames = repeat_frames
+
+    def step(self, action):
+        total_reward = 0.0
+        terminated = False
+        truncated = False
+        info = {}
+
+        for _ in range(self.repeat_frames):
+            obs, reward, term, trunc, info = self.env.step(action)
+            total_reward += reward
+            terminated = term
+            truncated = trunc
+            if terminated or truncated:
+                break
+
+        return obs, total_reward, terminated, truncated, info
