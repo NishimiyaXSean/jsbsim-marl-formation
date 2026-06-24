@@ -325,6 +325,7 @@ class AirCombatEnv(MultiAgentEnv):
                         roll_rad=roll_rad,
                         airspeed_mps=ac_state["airspeed_mps"],
                         beta_deg=ac_state["beta_deg"],
+                        alpha_deg=ac_state["alpha_deg"],
                     )
                 else:
                     # ── Continuous direct control with trim bias ──────

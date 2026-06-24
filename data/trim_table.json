@@ -1,0 +1,39 @@
+{
+  "description": "F-16 speed-to-elevator-trim lookup from Phase 1 sweep",
+  "throttle_fixed": 0.8,
+  "init_alt_ft": 9842,
+  "ref_speed_mps": 205.7777777777778,
+  "ref_elevator": -0.0492,
+  "ref_throttle": 0.8,
+  "entries": [
+    {
+      "speed_kts": 300,
+      "speed_mps": 154.3,
+      "elevator_trim": -0.0813,
+      "alpha_deg": 1.51,
+      "n_z_g": -1.008,
+      "airspeed_mps": 166.0
+    },
+    {
+      "speed_kts": 400,
+      "speed_mps": 205.8,
+      "elevator_trim": -0.0492,
+      "alpha_deg": 0.27,
+      "n_z_g": -1.004,
+      "airspeed_mps": 215.3
+    },
+    {
+      "speed_kts": 500,
+      "speed_mps": 257.2,
+      "elevator_trim": -0.0328,
+      "alpha_deg": -0.3,
+      "n_z_g": -0.999,
+      "airspeed_mps": 262.7
+    }
+  ],
+  "1_v2_fit": {
+    "formula": "ref_elevator * (ref_speed_mps / V)^2",
+    "rms_error_elevator_units": 0.003661,
+    "fit_quality": "GOOD"
+  }
+}

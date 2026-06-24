@@ -33,15 +33,18 @@ from typing import Optional
 
 import numpy as np
 
-from src.dynamics.autopilot import PIDController
+from src.dynamics.autopilot import PIDController, TrimSchedule
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Trim constants
+#  Shared trim schedule (Phase 3: dynamic, replaces hardcoded constants)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-THROTTLE_TRIM = 0.80
-ELEVATOR_TRIM = -0.05
+_trim = TrimSchedule()
+
+# Backward-compatible module-level constants (derived from TrimSchedule defaults)
+THROTTLE_TRIM = _trim.ref_throttle
+ELEVATOR_TRIM = _trim.ref_elevator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
