@@ -109,34 +109,52 @@ def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
     }
 
 
-def _save_tacview(all_results: list[dict], out_dir: str, tag: str):
-    """Write a simple Tacview .acmi file from collected telemetry."""
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"{tag}.txt.acmi")
+def _save_tacview_single(r: dict, out_dir: str):
+    """Write a standalone Tacview .acmi file for one action, with spatial tracking."""
+    action_idx = r["action"]
+    action_name = describe_pursuit_action(action_idx)
+    safe_name = f"action_{action_idx}_{action_name.replace(' ','_').replace('+','plus')}"
+    path = os.path.join(out_dir, f"{safe_name}.txt.acmi")
+
+    # Reconstruct lat/lon by integrating heading + speed (flat-earth, 3000m reference)
+    t = r["t"]
+    hdg_rad = np.deg2rad(r["hdg"])
+    spd = r["spd"]
+    dt = t[1] - t[0] if len(t) > 1 else 1.0 / 60.0
+
+    # Integrate NED position from velocity
+    v_n = spd * np.cos(hdg_rad)
+    v_e = spd * np.sin(hdg_rad)
+    n = np.cumsum(v_n * dt)
+    e = np.cumsum(v_e * dt)
+
+    # Convert meters back to lat/lon offset from reference point
+    ref_lat, ref_lon = 30.0, 120.0
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = m_per_deg_lat * np.cos(np.radians(ref_lat))
+    lat_vals = ref_lat + n / m_per_deg_lat
+    lon_vals = ref_lon + e / m_per_deg_lon
 
     with open(path, "w") as f:
         f.write("FileType=text/acmi/tacview\n")
         f.write("FileVersion=2.2\n")
         f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-
-        # One object for the aircraft
-        f.write("0,Name=Aircraft\n")
+        f.write(f"# Action {action_idx}: {action_name} — 5s hold at 3000m/400kts\n")
+        f.write("0,Name=F-16\n")
         f.write("0,Color=Red\n")
 
-        for r in results:
-            action_name = describe_pursuit_action(r["action"])
-            f.write(f"# Action {r['action']}: {action_name}\n")
-            for i in range(0, len(r["t"]), 10):  # downsample to 6 Hz
-                t_sec = r["t"][i]
-                lat = 30.0   # fixed (not tracking position)
-                lon = 120.0
-                alt = r["alt"][i]
-                roll = r["roll"][i]
-                hdg = r["hdg"][i]
-                f.write(f"#{t_sec:.2f}\n")
-                f.write(f"0,T={lat}|{lon}|{alt:.0f}|{roll:.1f}|{0.0}|{hdg:.1f}\n")
+        for i in range(0, len(t), 5):  # downsample to 12 Hz for smooth playback
+            f.write(f"#{t[i]:.2f}\n")
+            f.write(f"0,T={lat_vals[i]:.6f}|{lon_vals[i]:.6f}|{r['alt'][i]:.1f}"
+                    f"|{r['roll'][i]:.1f}|{0.0}|{r['hdg'][i]:.1f}\n")
 
-    print(f"  Tacview saved → {path}")
+    print(f"  Tacview → {path}")
+
+
+def _save_tacview_all(all_results: list[dict], out_dir: str):
+    """Save individual Tacview files for each action."""
+    for r in all_results:
+        _save_tacview_single(r, out_dir)
 
 
 def main():
@@ -295,9 +313,8 @@ def main():
     print(f"  Stress test:        {'OK' if stress_ok else 'FAIL'}")
     print(f"  TOTAL:              {'ALL PASSED' if n_fail == 0 else f'{n_fail} FAILURES'}")
 
-    # ── Tacview output ─────────────────────────────────────────────────
-    _save_tacview(all_results, out_dir, "bfm_validation")
-    print(f"  Tacview saved → {os.path.join(out_dir, 'bfm_validation.txt.acmi')}")
+    # ── Tacview output (one file per action with spatial tracking) ──────
+    _save_tacview_all(all_results, out_dir)
 
     # ── Summary plot ───────────────────────────────────────────────────
     fig, axes = plt.subplots(3, 3, figsize=(18, 14))
