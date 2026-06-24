@@ -3,9 +3,12 @@
 Executes all 9 PURSUIT_ACTIONS through the complete Phase 3 pipeline
 (FlightEnvelope → BFMAutopilot → JSBSim FCS) and verifies:
 1. Each action produces a stable trajectory (5s hold)
-2. Random switching never causes loss of control
-3. Composite actions (accelerating turns) are stable
-4. Tacview + trajectory plots for visual inspection
+2. G-tracking: steady-state n_z converges to target within 0.1G
+3. Roll-tracking: steady-state roll converges to target within 3°
+4. Oscillation: pitch/roll rate std below 0.05 rad/s (no porpoising/jitter)
+5. Random switching never causes loss of control
+6. Composite actions (accelerating turns) are stable
+7. Tacview + trajectory plots for visual inspection
 
 Usage:
     /c/Users/Sean/anaconda3/envs/jsbsim_rl/python scripts/verify_bfm_actions.py
@@ -13,9 +16,9 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import sys
-import time
 import warnings
 import logging
 
@@ -41,9 +44,94 @@ INIT_ALT_FT = 9842      # 3000 m
 INIT_HEADING_DEG = 90.0
 INIT_SPEED_KTS = 400
 ACTION_HOLD_S = 5.0      # hold each action for 5s
+STEADY_STATE_S = 2.0     # last N seconds used for steady-state checks
 STRESS_DURATION_S = 60.0  # random switching stress test
 STRESS_SEEDS = [42, 123, 456]
 STRESS_SWITCH_INTERVAL = (0.5, 2.0)  # seconds between random switches
+
+# ── Steady-state pass/fail thresholds ─────────────────────────────────────
+
+G_TRACKING_TOLERANCE = 0.1      # G (mean n_z within 0.1G of effective target)
+ROLL_TRACKING_TOLERANCE = 3.0   # deg (mean roll within 3° of target)
+OSCILLATION_MAX_STD_Q = 0.05    # rad/s (pitch-rate std → catches porpoising)
+OSCILLATION_MAX_STD_P = 0.05    # rad/s (roll-rate std → catches aileron jitter)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _compute_expected_g(n_n: float, mu: float) -> float:
+    """Effective G target including bank compensation.
+
+    Level flight: n_n=1.0, mu=0 → expected G = 1.0
+    Banked turn:  n_n=2.0, mu=60° → expected G = 2.0 + (1/cos(60°)-1) = 3.0
+    """
+    if abs(mu) < 0.01:
+        bank_extra = 0.0
+    else:
+        bank_extra = (1.0 / max(math.cos(abs(mu)), 0.1)) - 1.0
+    return n_n + bank_extra
+
+
+def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
+    """Run G-tracking, roll-tracking, and oscillation checks on last STEADY_STATE_S.
+
+    Oscillation is measured on the *residual* after subtracting the mean — this
+    removes the steady pitch rate needed for a coordinated turn (which is
+    non-zero by design) and only flags true jitter / porpoising.
+    """
+    n_x_raw, n_n_raw, mu_raw = PURSUIT_ACTIONS[r["action"]]
+
+    # Slice last STEADY_STATE_S
+    n_ss = int(STEADY_STATE_S / DT)
+    if len(r["t"]) < n_ss:
+        return False, "too few samples", {}
+
+    nz_ss = r["nz"][-n_ss:]
+    roll_ss = r["roll"][-n_ss:]
+    q_ss = r["q"][-n_ss:]
+    p_ss = r["p"][-n_ss:]
+
+    # G-tracking: compare mean perceived G against effective target
+    expected_g = _compute_expected_g(n_n_raw, mu_raw)
+    g_error = abs(float(np.mean(nz_ss)) - expected_g)
+
+    # Roll-tracking: compare mean |roll| against |mu| (only for banked actions)
+    target_roll_deg = abs(np.rad2deg(mu_raw))
+    if target_roll_deg > 0.5:
+        roll_error = abs(float(np.mean(np.abs(roll_ss))) - target_roll_deg)
+    else:
+        roll_error = 0.0
+
+    # Oscillation: residual std after removing the mean (detrended)
+    # During a steady turn, q is non-zero by design (turn rate × sin(bank)).
+    # We flag only the high-frequency jitter around that steady value.
+    q_residual = q_ss - np.mean(q_ss)
+    p_residual = p_ss - np.mean(p_ss)
+    std_q = float(np.std(q_residual))
+    std_p = float(np.std(p_residual))
+
+    metrics = {
+        "expected_g": expected_g, "g_error": g_error,
+        "target_roll_deg": target_roll_deg, "roll_error": roll_error,
+        "std_q": std_q, "std_p": std_p,
+        "mean_q": float(np.mean(q_ss)),  # for diagnostics
+    }
+
+    reasons = []
+    if g_error > G_TRACKING_TOLERANCE:
+        reasons.append(f"G-err={g_error:.3f}>{G_TRACKING_TOLERANCE}")
+    if target_roll_deg > 0.5 and roll_error > ROLL_TRACKING_TOLERANCE:
+        reasons.append(f"Roll-err={roll_error:.1f}>{ROLL_TRACKING_TOLERANCE}")
+    if std_q > OSCILLATION_MAX_STD_Q:
+        reasons.append(f"std(q)={std_q:.4f}>{OSCILLATION_MAX_STD_Q}")
+    if std_p > OSCILLATION_MAX_STD_P:
+        reasons.append(f"std(p)={std_p:.4f}>{OSCILLATION_MAX_STD_P}")
+
+    passed = len(reasons) == 0
+    reason = " ; ".join(reasons) if reasons else "OK"
+    return passed, reason, metrics
 
 
 def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
@@ -53,20 +141,19 @@ def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
 
     t_vals, alt_vals, spd_vals = [], [], []
     nz_vals, alpha_vals, roll_vals, hdg_vals, thrust_vals = [], [], [], [], []
+    q_vals, p_vals = [], []
     elev_vals, ail_vals, thr_vals = [], [], []
 
     t = 0.0
     n_steps = int(duration_s / DT)
     for _ in range(n_steps):
         s = ac.state
-        # Run through FlightEnvelope
         n_x_env, n_n_env, mu_env = envelope.step(
             n_x_raw, n_n_raw, mu_raw,
             speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
-            vz_mps=s["h_dot_fps"] * 0.3048,  # ft/s → m/s
+            vz_mps=s["h_dot_fps"] * 0.3048,
             current_roll_rad=np.deg2rad(s["roll_deg"]), dt=DT,
         )
-        # Autopilot
         thr, elev, ail, rud = ap.step(
             n_x_env, n_n_env, mu_env, DT,
             n_z_g=s["n_z_g"],
@@ -86,6 +173,8 @@ def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
         roll_vals.append(s["roll_deg"])
         hdg_vals.append(s["yaw_deg"])
         thrust_vals.append(s["thrust_lbs"])
+        q_vals.append(s["q_rps"])
+        p_vals.append(s["p_rps"])
         elev_vals.append(elev)
         ail_vals.append(ail)
         thr_vals.append(thr)
@@ -98,6 +187,7 @@ def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
         "nz": np.array(nz_vals), "alpha": np.array(alpha_vals),
         "roll": np.array(roll_vals), "hdg": np.array(hdg_vals),
         "thrust": np.array(thrust_vals),
+        "q": np.array(q_vals), "p": np.array(p_vals),
         "elev": np.array(elev_vals), "ail": np.array(ail_vals),
         "thr": np.array(thr_vals),
         "alpha_max": float(np.max(np.abs(alpha_vals))),
@@ -116,19 +206,16 @@ def _save_tacview_single(r: dict, out_dir: str):
     safe_name = f"action_{action_idx}_{action_name.replace(' ','_').replace('+','plus')}"
     path = os.path.join(out_dir, f"{safe_name}.txt.acmi")
 
-    # Reconstruct lat/lon by integrating heading + speed (flat-earth, 3000m reference)
     t = r["t"]
     hdg_rad = np.deg2rad(r["hdg"])
     spd = r["spd"]
     dt = t[1] - t[0] if len(t) > 1 else 1.0 / 60.0
 
-    # Integrate NED position from velocity
     v_n = spd * np.cos(hdg_rad)
     v_e = spd * np.sin(hdg_rad)
     n = np.cumsum(v_n * dt)
     e = np.cumsum(v_e * dt)
 
-    # Convert meters back to lat/lon offset from reference point
     ref_lat, ref_lon = 30.0, 120.0
     m_per_deg_lat = 111320.0
     m_per_deg_lon = m_per_deg_lat * np.cos(np.radians(ref_lat))
@@ -143,7 +230,7 @@ def _save_tacview_single(r: dict, out_dir: str):
         f.write("0,Name=F-16\n")
         f.write("0,Color=Red\n")
 
-        for i in range(0, len(t), 5):  # downsample to 12 Hz for smooth playback
+        for i in range(0, len(t), 5):  # downsample to 12 Hz
             f.write(f"#{t[i]:.2f}\n")
             f.write(f"0,T={lat_vals[i]:.6f}|{lon_vals[i]:.6f}|{r['alt'][i]:.1f}"
                     f"|{r['roll'][i]:.1f}|{0.0}|{r['hdg'][i]:.1f}\n")
@@ -157,13 +244,41 @@ def _save_tacview_all(all_results: list[dict], out_dir: str):
         _save_tacview_single(r, out_dir)
 
 
+def _make_summary_plot(all_results: list[dict], out_dir: str):
+    """3×3 grid: altitude + speed time series for each action."""
+    fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+    for i, r in enumerate(all_results):
+        ax = axes[i // 3][i % 3]
+        ax.plot(r["t"], r["alt"], "b-", lw=1.0, alpha=0.7, label="Alt (m)")
+        ax2 = ax.twinx()
+        ax2.plot(r["t"], r["spd"], "r-", lw=1.0, alpha=0.5, label="Spd (m/s)")
+        ax.set_title(f"Action {r['action']}: {describe_pursuit_action(r['action'])}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Altitude (m)", color="b")
+        ax2.set_ylabel("Speed (m/s)", color="r")
+        ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path = os.path.join(out_dir, "bfm_validation_summary.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Plot saved → {path}")
+    plt.close("all")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def main():
     out_dir = "results/bfm_validation"
     os.makedirs(out_dir, exist_ok=True)
 
-    print("=" * 60)
+    print("=" * 70)
     print("PHASE 4: BFM Discrete Command Suite Validation")
-    print("=" * 60)
+    print(f"  Steady-state window: last {STEADY_STATE_S}s of {ACTION_HOLD_S}s hold")
+    print(f"  G-tracking tolerance: ±{G_TRACKING_TOLERANCE}G")
+    print(f"  Roll-tracking tolerance: ±{ROLL_TRACKING_TOLERANCE}°")
+    print(f"  Oscillation limit: std(q) < {OSCILLATION_MAX_STD_Q}, std(p) < {OSCILLATION_MAX_STD_P} rad/s")
+    print("=" * 70)
 
     cfg = BFMAutopilotConfig()
     trim = TrimSchedule()
@@ -172,7 +287,8 @@ def main():
     # ── 1. Individual action tests ─────────────────────────────────────
     print("\n--- Individual Action Tests (5s each) ---")
     all_results = []
-    failures = []
+    envelope_failures = []
+    tracking_failures = []
 
     for action_idx in sorted(PURSUIT_ACTIONS.keys()):
         ap = BFMAutopilot(cfg, trim=trim)
@@ -194,15 +310,33 @@ def main():
         r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
         all_results.append(r)
 
-        ok = (r["alpha_max"] < 28.0 and r["nz_max"] < 9.5
-              and r["alt_min"] > 500.0 and r["alt_max"] < 6000.0
-              and r["spd_min"] > 80.0 and r["spd_max"] < 400.0)
-        status = "OK" if ok else f"FAIL (a_max={r['alpha_max']:.1f}, nz_max={r['nz_max']:.1f})"
-        print(f"  Action {action_idx}: {describe_pursuit_action(action_idx):25s}  "
-              f"alpha_max={r['alpha_max']:.1f}°  nz_max={r['nz_max']:.1f}G  "
-              f"dh={r['alt_max']-r['alt_min']:.0f}m  {status}")
-        if not ok:
-            failures.append((action_idx, status))
+        # ── Envelope check ─────────────────────────────────────────────
+        env_ok = (r["alpha_max"] < 28.0 and r["nz_max"] < 9.5
+                  and r["alt_min"] > 500.0 and r["alt_max"] < 6000.0
+                  and r["spd_min"] > 80.0 and r["spd_max"] < 400.0)
+        if not env_ok:
+            envelope_failures.append(action_idx)
+
+        # ── Steady-state tracking + oscillation check ──────────────────
+        ss_ok, ss_reason, ss_metrics = _check_steady_state(r)
+        if not ss_ok:
+            tracking_failures.append((action_idx, ss_reason))
+
+        n_x_raw, n_n_raw, mu_raw = PURSUIT_ACTIONS[action_idx]
+        name = describe_pursuit_action(action_idx)
+        status_bits = []
+        if not env_ok:
+            status_bits.append("ENV")
+        if not ss_ok:
+            status_bits.append("TRACK")
+        status = " | ".join(status_bits) if status_bits else "OK"
+
+        print(f"  [{status:12s}] {name:25s}  "
+              f"G_err={ss_metrics['g_error']:.3f}  "
+              f"R_err={ss_metrics['roll_error']:.1f}°  "
+              f"stq={ss_metrics['std_q']:.4f}  stp={ss_metrics['std_p']:.4f}")
+        if not ss_ok:
+            print(f"    -> FAIL details: {ss_reason}")
 
     # ── 2. Random switching stress test ────────────────────────────────
     print(f"\n--- Random Switching Stress Test ({STRESS_DURATION_S}s, "
@@ -214,7 +348,6 @@ def main():
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
-        # Warmup
         for _ in range(60):
             s = ac.state
             thr, elev, ail, rud = ap.step(
@@ -277,7 +410,7 @@ def main():
         if not seed_ok:
             stress_ok = False
 
-    # ── 3. Deep test for composite actions (7, 8) ──────────────────────
+    # ── 3. Composite action deep test ───────────────────────────────────
     print("\n--- Composite Action Deep Test (10s each) ---")
     for action_idx in [7, 8]:
         ap = BFMAutopilot(cfg, trim=trim)
@@ -296,43 +429,39 @@ def main():
             ac.run()
 
         r = _run_action(ac, ap, envelope, action_idx, 10.0)
-        ok = (r["alpha_max"] < 28.0 and r["nz_max"] < 9.5
-              and r["alt_min"] > 500.0 and r["alt_max"] < 6000.0)
+        env_ok = (r["alpha_max"] < 28.0 and r["nz_max"] < 9.5
+                  and r["alt_min"] > 500.0 and r["alt_max"] < 6000.0)
+        ss_ok, ss_reason, ss_metrics = _check_steady_state(r)
+        ok = env_ok and ss_ok
         print(f"  Action {action_idx} ({describe_pursuit_action(action_idx)}): "
-              f"alpha_max={r['alpha_max']:.1f}°  nz_max={r['nz_max']:.1f}G  "
-              f"dh={r['alt_max']-r['alt_min']:.0f}m  "
-              f"{'OK' if ok else 'FAIL'}")
-        if not ok:
-            failures.append((action_idx, f"Composite: a_max={r['alpha_max']:.1f}"))
+              f"G_err={ss_metrics['g_error']:.3f}  "
+              f"R_err={ss_metrics['roll_error']:.1f}°  "
+              f"stq={ss_metrics['std_q']:.4f}  "
+              f"{'OK' if ok else 'FAIL: ' + ss_reason}")
+        if not env_ok:
+            envelope_failures.append(action_idx)
+        if not ss_ok:
+            tracking_failures.append((action_idx, f"Composite: {ss_reason}"))
 
     # ── Summary ────────────────────────────────────────────────────────
-    print(f"\n{'=' * 60}")
-    n_fail = len(failures) + (0 if stress_ok else 1)
-    print(f"  Individual actions: {9 - len([f for f in failures if f[0] < 9])}/9 OK")
-    print(f"  Composite actions:  {2 - len([f for f in failures if f[0] in (7,8)])}/2 OK")
-    print(f"  Stress test:        {'OK' if stress_ok else 'FAIL'}")
-    print(f"  TOTAL:              {'ALL PASSED' if n_fail == 0 else f'{n_fail} FAILURES'}")
+    print(f"\n{'=' * 70}")
+    n_env_fail = len(envelope_failures)
+    n_track_fail = len(tracking_failures)
+    n_total_fail = n_env_fail + n_track_fail + (0 if stress_ok else 1)
 
-    # ── Tacview output (one file per action with spatial tracking) ──────
+    print(f"  Envelope safety:   {9 - n_env_fail}/9 OK"
+          + (f"  (failures: {envelope_failures})" if envelope_failures else ""))
+    print(f"  Tracking + osc:    {9 - n_track_fail}/9 OK"
+          + (f"  (failures: {[f[0] for f in tracking_failures]})" if tracking_failures else ""))
+    print(f"  Composite actions: 2/2 OK" if not any(
+        f[0] in (7, 8) for f in tracking_failures) else f"  Composite: SEE FAILURES")
+    print(f"  Stress test:       {'OK' if stress_ok else 'FAIL'}")
+    print(f"  ─────────────────────────")
+    print(f"  TOTAL:             {'ALL PASSED' if n_total_fail == 0 else f'{n_total_fail} FAILURES'}")
+
+    # ── Tacview + plot ─────────────────────────────────────────────────
     _save_tacview_all(all_results, out_dir)
-
-    # ── Summary plot ───────────────────────────────────────────────────
-    fig, axes = plt.subplots(3, 3, figsize=(18, 14))
-    for i, r in enumerate(all_results):
-        ax = axes[i // 3][i % 3]
-        ax.plot(r["t"], r["alt"], "b-", lw=1.0, alpha=0.7, label="Alt (m)")
-        ax2 = ax.twinx()
-        ax2.plot(r["t"], r["spd"], "r-", lw=1.0, alpha=0.5, label="Spd (m/s)")
-        ax.set_title(f"Action {r['action']}: {describe_pursuit_action(r['action'])}")
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel("Altitude (m)", color="b")
-        ax2.set_ylabel("Speed (m/s)", color="r")
-        ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "bfm_validation_summary.png"),
-                dpi=150, bbox_inches="tight")
-    print(f"  Plot saved → {os.path.join(out_dir, 'bfm_validation_summary.png')}")
-    plt.close("all")
+    _make_summary_plot(all_results, out_dir)
 
 
 if __name__ == "__main__":

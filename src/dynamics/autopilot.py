@@ -56,8 +56,8 @@ class TrimSchedule:
     (scripts/sweep_elevator.py) at 3000 m / 400 kts.
     """
 
-    ref_speed_mps: float = 176.0
-    ref_elevator: float = -0.05
+    ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured trim)
+    ref_elevator: float = -0.0492  # Phase 1 measured value at 400 kts / 3000 m
     ref_throttle: float = 0.80
     min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
 
@@ -169,28 +169,30 @@ class TurnCoordinator:
 class BFMAutopilotConfig:
     """Gains for the four-channel BFM autopilot.
 
-    Phase 3 values: PD from Phase 2 single-channel tuning, small integral
-    terms re-enabled with conservative anti-windup limits (~30 % of output
-    range) to prevent windup during aggressive manoeuvres.
+    Phase 3.5 (conservative): boost integral + derivative within cascaded
+    stability limits.  Outer-loop kp must stay ≤ 0.5× inner-loop kp to
+    avoid fighting the JSBSim native FCS PIDs.
     """
 
     # ── Nz (elevator) channel ─────────────────────────────────────────
-    nz_kp: float = 0.18      # Phase 2: kp=0.18 (slower rise, stable)
-    nz_ki: float = 0.02      # small integral to kill steady-state G error
-    nz_kd: float = 0.012     # Phase 2: kd=0.012
-    nz_integral_min: float = -0.3
-    nz_integral_max: float = 0.3
+    # JSBSim inner G-load PID: kp=0.3.  Keep outer kp ≤ 0.18 (0.6× margin).
+    nz_kp: float = 0.18      # hold at Phase 2 (stable response)
+    nz_ki: float = 0.05      # 2.5x from 0.02 — kill steady-state G error
+    nz_kd: float = 0.025     # 2x from 0.012 — dampen turn-induced pitch jitter
+    nz_integral_min: float = -0.4
+    nz_integral_max: float = 0.4
 
     # ── Roll (aileron) channel ────────────────────────────────────────
-    roll_kp: float = 1.5     # Phase 2: V10 default (fast roll, overshoot acceptable)
-    roll_ki: float = 0.05    # small integral for precise bank-angle hold
-    roll_kd: float = 0.08    # Phase 2: kd=0.08 (dampens overshoot)
-    roll_integral_min: float = -0.2
-    roll_integral_max: float = 0.2
+    # JSBSim inner roll-rate PID: kp=3.0.  Keep outer kp ≤ 1.5 (0.5× margin).
+    roll_kp: float = 1.5     # hold at Phase 2 (overshoot acceptable)
+    roll_ki: float = 0.10    # 2x from 0.05 — push through 10° bank shortfall
+    roll_kd: float = 0.10    # slight bump from 0.08 — dampen higher ki
+    roll_integral_min: float = -0.4
+    roll_integral_max: float = 0.4
 
     # ── Speed (throttle) channel ──────────────────────────────────────
-    speed_kp: float = 0.02   # Phase 2: highest kp without oscillation
-    speed_ki: float = 0.005  # small integral (slow dynamics)
+    speed_kp: float = 0.02
+    speed_ki: float = 0.005
     speed_kd: float = 0.0
     speed_integral_min: float = -0.3
     speed_integral_max: float = 0.3
@@ -199,7 +201,7 @@ class BFMAutopilotConfig:
 
     # ── Sideslip (rudder) channel ─────────────────────────────────────
     beta_kp: float = 0.06
-    beta_ki: float = 0.005   # small integral for persistent sideslip correction
+    beta_ki: float = 0.005
     beta_kd: float = 0.0
 
 
