@@ -31,7 +31,7 @@ from src.dynamics.aircraft import Aircraft
 from src.dynamics.autopilot import BFMAutopilot, BFMAutopilotConfig, TrimSchedule, GainScheduler
 from src.dynamics.flight_envelope import FlightEnvelope, EnvelopeConfig
 from src.dynamics.flight_controller import AltitudeStabilizer
-from src.dynamics.bfm_actions import PURSUIT_ACTIONS, describe_pursuit_action
+from src.dynamics.bfm_actions import PURSUIT_ACTIONS, describe_pursuit_action, NUM_PURSUIT_ACTIONS
 from src.utils.geometry import compute_forward_vector, compute_los, compute_tactical_angles
 
 
@@ -146,10 +146,15 @@ class BFMPursuitEnv(gym.Env):
         self._target_alt_stab = AltitudeStabilizer()
 
         # Observation / action spaces
-        self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(25,), dtype=np.float32,
-        )
-        self.action_space = gym.spaces.Discrete(9)
+        self.observation_space = gym.spaces.Dict({
+            "obs": gym.spaces.Box(
+                low=-1.0, high=1.0, shape=(25,), dtype=np.float32,
+            ),
+            "action_mask": gym.spaces.Box(
+                low=0.0, high=1.0, shape=(NUM_PURSUIT_ACTIONS,), dtype=np.float32,
+            ),
+        })
+        self.action_space = gym.spaces.Discrete(NUM_PURSUIT_ACTIONS)
 
         # Episode state
         self._step_counter = 0
@@ -184,6 +189,50 @@ class BFMPursuitEnv(gym.Env):
         idx = next((i for i, s in enumerate(self._STAGE_MAP)
                    if np.isclose(value, s)), 0)
         self._difficulty = idx / (len(self._STAGE_MAP) - 1)
+
+    # ── Action mask ───────────────────────────────────────────────────────
+
+    def action_masks(self) -> np.ndarray:
+        """Return valid-action mask for current flight state.
+
+        True = action allowed, False = action forbidden by safety rules.
+        This prevents the agent from selecting self-destructive actions.
+        """
+        s = self.pursuer.state
+        alt = s["alt_m"]
+        speed = s["airspeed_mps"]
+        alpha = s["alpha_deg"]
+
+        mask = np.ones(NUM_PURSUIT_ACTIONS, dtype=bool)
+
+        # 1. Hard deck: no pure dive below 1500 m
+        if alt < 1500.0:
+            mask[6] = False   # Descend
+
+        # 2. Stall prevention: at low speed, block energy-losing actions
+        if speed < 160.0:
+            mask[2] = False   # Decelerate
+            mask[5] = False   # Climb (bleeds speed rapidly)
+
+        # 3. Overspeed protection: block acceleration above 350 m/s
+        if speed > 350.0:
+            mask[1] = False   # Accelerate
+            mask[7] = False   # Accel + turn right
+            mask[8] = False   # Accel + turn left
+
+        # 4. High-alpha protection: block aggressive turns when near stall
+        if alpha > 20.0:
+            mask[3] = False   # Turn right
+            mask[4] = False   # Turn left
+            mask[5] = False   # Climb
+            mask[7] = False   # Accel + turn right
+            mask[8] = False   # Accel + turn left
+
+        # 5. Safety net: guarantee at least level flight is available
+        if not mask.any():
+            mask[0] = True
+
+        return mask
 
     # ── Reset ──────────────────────────────────────────────────────────────
 
@@ -467,7 +516,7 @@ class BFMPursuitEnv(gym.Env):
 
     # ── Observation (identical to SinglePursuitEnv) ────────────────────────
 
-    def _get_obs(self) -> np.ndarray:
+    def _get_obs(self) -> dict:
         a_pos = self.pursuer.position_ned
         t_pos = self.target_ac.position_ned
         a_rpy = self.pursuer.rpy_rad
@@ -514,7 +563,7 @@ class BFMPursuitEnv(gym.Env):
         ps = self._compute_specific_excess_power(airspeed, a_pos[2])
         ps_norm = ps / MAX_PS
 
-        obs = np.array([
+        obs_array = np.array([
             rel_pos_body[0] / MAX_DIST,
             rel_pos_body[1] / MAX_DIST,
             rel_pos_body[2] / MAX_DIST,
@@ -541,7 +590,11 @@ class BFMPursuitEnv(gym.Env):
             airspeed_norm,
             ps_norm,
         ], dtype=np.float32)
-        return np.clip(obs, -1.0, 1.0)
+
+        return {
+            "obs": np.clip(obs_array, -1.0, 1.0),
+            "action_mask": self.action_masks().astype(np.float32),
+        }
 
     def _compute_angular_velocity(self, current_rpy, prev_rpy):
         diff = current_rpy - prev_rpy

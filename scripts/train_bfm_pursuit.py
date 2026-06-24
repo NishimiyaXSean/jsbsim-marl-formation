@@ -33,6 +33,7 @@ from src.environment.bfm_pursuit_env import BFMPursuitEnv
 from src.environment.ablation_wrappers import (
     ActionRepeatWrapper, BlendedActionWrapper, LeadPursuitRewardWrapper,
 )
+from src.environment.masked_policy import MaskableActorCriticPolicy
 from scripts.train_single_pursuit import (
     AutoCurriculumCallback, EVAL_EPISODES, EVAL_FREQ,
 )
@@ -70,12 +71,13 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
     print(f"  Autopilot:      BFMAutopilot + GainScheduler + TrimSchedule")
     print(f"  V_c:            minimum-wage floor (V11 anti-collapse)")
     print(f"  Alt penalty:    quadratic gravity well (V10.5 anti-dolphin)")
+    print(f"  Action mask:    5 safety rules (hard deck, stall, overspeed, alpha)")
     print(f"  Total steps:    {total_steps:,}")
     print(f"  Log dir:        {log_dir}")
     print(f"{'='*55}\n")
 
     model = PPO(
-        "MlpPolicy", train_env,
+        MaskableActorCriticPolicy, train_env,
         verbose=1,
         learning_rate=3e-4,
         n_steps=2048,             # shorter rollouts for discrete actions
