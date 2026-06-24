@@ -162,6 +162,58 @@ class TurnCoordinator:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Gain scheduler (Phase 3.5: speed + target-Nz adaptive PID gains)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class GainScheduler:
+    """1-D speed-scheduled gains for the Nz channel, with target-Nz boost.
+
+    Control effectiveness ∝ dynamic pressure ∝ V².  To maintain constant
+    loop gain across the speed envelope, kp scales as 1/V²:
+
+        kp(V) = kp_ref · (V_ref / V)²
+
+    The integral gain ki is boosted for large Nz commands to rapidly kill
+    steady-state error during aggressive manoeuvres.
+
+    Roll, speed, and beta channels use fixed gains for now.
+    """
+
+    # ── Speed LUT: reference points for 1/V² interpolation ────────────
+    ref_speed_mps: float = 206.0     # calibration point (400 kts)
+    kp_ref: float = 0.18             # stable kp at reference speed
+    kd_ref: float = 0.025            # stable kd at reference speed
+    kp_min: float = 0.08             # floor at V_max (avoid vanishing gain)
+    kp_max: float = 0.30             # ceiling at V_min (avoid instability)
+    kd_min: float = 0.010
+    kd_max: float = 0.040
+
+    # ── Target-Nz boost for integral ──────────────────────────────────
+    ki_base: float = 0.08            # baseline integral — moderate trim-bias correction
+    ki_boost: float = 0.14           # boosted integral for large-G commands
+    nz_boost_threshold: float = 1.5  # |target_nz - 1.0| above this → begin boost
+    nz_boost_slope: float = 2.0      # tanh slope for smooth transition
+
+    def schedule_nz(self, airspeed_mps: float, target_nz: float
+                    ) -> tuple[float, float, float]:
+        """Return (kp, ki, kd) for the Nz channel at current flight condition."""
+        V = max(airspeed_mps, 80.0)
+
+        # 1/V² scaling for kp and kd
+        ratio_sq = (self.ref_speed_mps / V) ** 2
+        kp = float(np.clip(self.kp_ref * ratio_sq, self.kp_min, self.kp_max))
+        kd = float(np.clip(self.kd_ref * ratio_sq, self.kd_min, self.kd_max))
+
+        # ki boost: smoothly transition from baseline to boosted for large commands
+        delta_nz = abs(target_nz - 1.0)  # deviation from level flight
+        boost_factor = 0.5 * (1.0 + math.tanh(self.nz_boost_slope * (delta_nz - self.nz_boost_threshold)))
+        ki = self.ki_base + (self.ki_boost - self.ki_base) * boost_factor
+
+        return kp, ki, kd
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BFM autopilot — λ-g flight control law
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -225,9 +277,11 @@ class BFMAutopilot:
     """
 
     def __init__(self, config: Optional[BFMAutopilotConfig] = None,
-                 trim: Optional[TrimSchedule] = None) -> None:
+                 trim: Optional[TrimSchedule] = None,
+                 scheduler: Optional[GainScheduler] = None) -> None:
         cfg = config or BFMAutopilotConfig()
         self._trim = trim or TrimSchedule()
+        self._scheduler = scheduler  # None → use fixed cfg gains
 
         # ── Per-channel PIDs ──────────────────────────────────────────
         self._nz_pid = PIDController(
@@ -312,19 +366,18 @@ class BFMAutopilot:
         elevator_trim = self._trim.get_elevator_trim(airspeed_mps)
 
         # ── Elevator: track body-Z normal acceleration ───────────────
-        # JSBSim convention: n_z_g < 0 means positive-G (pilot pushed into seat).
-        # BFM convention:   n_n > 0 means positive-G pull-up.
-        # Therefore:        target_n_z_g = -(n_n).
-        #
-        # Bank compensation (Phase 3): in a banked turn at angle μ,
-        # vertical lift = cos(μ).  To maintain altitude, total lift must
-        # be weight / cos(μ), i.e. n_z = 1 / cos(μ) G.
-        # Extra G needed beyond 1G: bank_extra = 1/cos(μ) - 1.
-        # This feedforward is added to the Nz target so the PID doesn't
-        # have to discover basic physics.
+        # Bank compensation (Phase 3): feedforward Nz boost for banked turns.
         cos_roll = math.cos(abs(roll_rad))
         bank_extra_g = (1.0 / max(cos_roll, 0.1)) - 1.0
         target_n_z_g = -(n_n + bank_extra_g)
+
+        # Gain scheduling (Phase 3.5): adapt Nz gains to current speed + target
+        if self._scheduler is not None:
+            kp_s, ki_s, kd_s = self._scheduler.schedule_nz(
+                airspeed_mps, abs(target_n_z_g))
+            self._nz_pid.kp = kp_s
+            self._nz_pid.ki = ki_s
+            self._nz_pid.kd = kd_s
 
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
         elevator = elevator_trim - self._nz_pid.step(nz_error, dt)

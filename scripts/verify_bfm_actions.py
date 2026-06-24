@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.dynamics.aircraft import Aircraft
-from src.dynamics.autopilot import BFMAutopilot, BFMAutopilotConfig, TrimSchedule
+from src.dynamics.autopilot import BFMAutopilot, BFMAutopilotConfig, TrimSchedule, GainScheduler
 from src.dynamics.flight_envelope import FlightEnvelope, EnvelopeConfig
 from src.dynamics.bfm_actions import PURSUIT_ACTIONS, describe_pursuit_action
 
@@ -282,6 +282,7 @@ def main():
 
     cfg = BFMAutopilotConfig()
     trim = TrimSchedule()
+    scheduler = GainScheduler()   # Phase 3.5: speed-scheduled Nz gains
     envelope = FlightEnvelope(EnvelopeConfig())
 
     # ── 1. Individual action tests ─────────────────────────────────────
@@ -291,7 +292,7 @@ def main():
     tracking_failures = []
 
     for action_idx in sorted(PURSUIT_ACTIONS.keys()):
-        ap = BFMAutopilot(cfg, trim=trim)
+        ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
@@ -344,7 +345,7 @@ def main():
     stress_ok = True
     for seed in STRESS_SEEDS:
         rng = np.random.default_rng(seed)
-        ap = BFMAutopilot(cfg, trim=trim)
+        ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
@@ -413,7 +414,7 @@ def main():
     # ── 3. Composite action deep test ───────────────────────────────────
     print("\n--- Composite Action Deep Test (10s each) ---")
     for action_idx in [7, 8]:
-        ap = BFMAutopilot(cfg, trim=trim)
+        ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
