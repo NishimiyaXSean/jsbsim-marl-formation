@@ -281,35 +281,35 @@ def test_lead_pursuit_wrapper_lead_prediction_contributes():
 
 
 def test_lead_pursuit_vc_coupling_sigmoid():
-    """V_c_norm uses sigmoid coupling with expected values at key points."""
+    """V_c_norm uses linear clamp with minimum-wage floor (V11: anti-collapse).
+
+    Formula:  V_c_norm = 0.3 + 0.7 * clamp(V_c / 30.0, 0, 1)
+
+    The 0.3 floor keeps gradient alive during low-speed turns, preventing
+    the "pointing without closing → zero reward → policy collapse" spiral.
+    """
     from src.environment.ablation_wrappers import LeadPursuitRewardWrapper
-    import math
 
-    K = LeadPursuitRewardWrapper.V_C_K
-    MID = LeadPursuitRewardWrapper.V_C_MID
+    BASE = LeadPursuitRewardWrapper.V_C_BASE
+    SAT = LeadPursuitRewardWrapper.V_C_SAT
 
-    assert K == 0.3, f"V_C_K should be 0.3, got {K}"
-    assert MID == 15.0, f"V_C_MID should be 15.0, got {MID}"
+    assert BASE == 0.3, f"V_C_BASE should be 0.3, got {BASE}"
+    assert SAT == 30.0, f"V_C_SAT should be 30.0, got {SAT}"
 
-    def sigmoid(vc):
-        return 1.0 / (1.0 + math.exp(-K * (vc - MID)))
+    def vc_norm(vc):
+        return BASE + (1.0 - BASE) * max(0.0, min(1.0, vc / SAT))
 
-    # At V_c=0 (stationary), coupling should be nearly zero
-    assert sigmoid(0.0) < 0.012, f"V_c=0 gave {sigmoid(0.0):.4f}, expected ~0.011"
+    # At V_c=0 (stationary), should get minimum wage
+    assert abs(vc_norm(0.0) - 0.3) < 1e-9, f"V_c=0 gave {vc_norm(0.0):.4f}, expected 0.3"
 
-    # At V_c=15 (midpoint), coupling should be exactly 0.5
-    v15 = sigmoid(15.0)
-    assert abs(v15 - 0.5) < 0.001, f"V_c=15 gave {v15:.4f}, expected 0.5"
+    # At V_c=-10 (separating), still gets minimum wage — gradient lives!
+    assert abs(vc_norm(-10.0) - 0.3) < 1e-9, f"V_c=-10 gave {vc_norm(-10.0):.4f}, expected 0.3"
 
-    # At V_c=30 (level-flight achievable), coupling should be near 1.0
-    # This is the key anti-dive mechanism: level flight saturates the multiplier,
-    # so diving gives zero extra guidance reward.
-    v30 = sigmoid(30.0)
-    assert v30 > 0.98, f"V_c=30 gave {v30:.4f}, expected ~0.989"
+    # At V_c=15 (midpoint), should be 0.65
+    assert abs(vc_norm(15.0) - 0.65) < 1e-9, f"V_c=15 gave {vc_norm(15.0):.4f}, expected 0.65"
 
-    # At V_c=50 (diving hard), coupling should be essentially 1.0 — saturated
-    v50 = sigmoid(50.0)
-    assert v50 > 0.999, f"V_c=50 gave {v50:.4f}, expected ~0.9999"
+    # At V_c=30 (level-flight achievable), should be exactly 1.0
+    assert abs(vc_norm(30.0) - 1.0) < 1e-9, f"V_c=30 gave {vc_norm(30.0):.4f}, expected 1.0"
 
-    # At V_c=-10 (separating), coupling should be negligible
-    assert sigmoid(-10.0) < 0.001, f"V_c=-10 gave {sigmoid(-10.0):.4f}, expected < 0.001"
+    # At V_c=50 (diving), still 1.0 — saturated, no extra gain from diving
+    assert abs(vc_norm(50.0) - 1.0) < 1e-9, f"V_c=50 gave {vc_norm(50.0):.4f}, expected 1.0"
