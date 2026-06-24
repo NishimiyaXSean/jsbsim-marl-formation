@@ -56,8 +56,8 @@ class TrimSchedule:
     (scripts/sweep_elevator.py) at 3000 m / 400 kts.
     """
 
-    ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured trim)
-    ref_elevator: float = -0.0492  # Phase 1 measured value at 400 kts / 3000 m
+    ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured)
+    ref_elevator: float = -0.0492  # Phase 1 measured trim at 3000 m / 400 kts
     ref_throttle: float = 0.80
     min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
 
@@ -362,16 +362,16 @@ class BFMAutopilot:
         Returns:
             ``(throttle, elevator, aileron, rudder)`` — all in [-1, 1].
         """
-        # ── Dynamic trim (Phase 3: speed-dependent) ──────────────────
+        # ── Elevator: track body-Z normal acceleration ───────────────
+        # 1. Dynamic trim: 1/V² speed-scaling from calibrated reference
         elevator_trim = self._trim.get_elevator_trim(airspeed_mps)
 
-        # ── Elevator: track body-Z normal acceleration ───────────────
-        # Bank compensation (Phase 3): feedforward Nz boost for banked turns.
+        # 2. Target: BFM n_n → body-Z, with bank feedforward
         cos_roll = math.cos(abs(roll_rad))
         bank_extra_g = (1.0 / max(cos_roll, 0.1)) - 1.0
         target_n_z_g = -(n_n + bank_extra_g)
 
-        # Gain scheduling (Phase 3.5): adapt Nz gains to current speed + target
+        # 3. Gain scheduling (Phase 3.5): adapt Nz gains to speed + target
         if self._scheduler is not None:
             kp_s, ki_s, kd_s = self._scheduler.schedule_nz(
                 airspeed_mps, abs(target_n_z_g))
@@ -379,6 +379,7 @@ class BFMAutopilot:
             self._nz_pid.ki = ki_s
             self._nz_pid.kd = kd_s
 
+        # 4. Error and PID
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
         elevator = elevator_trim - self._nz_pid.step(nz_error, dt)
 
