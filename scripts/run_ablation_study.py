@@ -60,7 +60,7 @@ PPO_CONFIG = dict(
     gamma=0.999,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
     gae_lambda=0.95,
     clip_range=0.2,
-    ent_coef=0.015,        # moderate entropy — balanced with long-duration gSDE exploration
+    ent_coef=0.02,         # raised for V11 — pacemaker to prevent policy collapse
     vf_coef=0.5,
     max_grad_norm=0.5,
     use_sde=True,           # gSDE: state-dependent exploration → smooth 10 Hz trajectories

@@ -9,7 +9,6 @@ from collections import deque
 from typing import Optional
 
 import gymnasium as gym
-import math
 import numpy as np
 
 from src.utils.geometry import compute_forward_vector, compute_los
@@ -146,11 +145,14 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 25.0 × dt × V_c_norm
     3. LOS-rate damping — exp(-|λ̇| × scale) × 20.0 × dt × V_c_norm
 
-    V_c coupling (sigmoid):
-        V_c_norm = 1 / (1 + exp(-K · (V_c - MID)))   with K=0.3, MID=15
-        V_c <= 0   → V_c_norm ≈ 0     (guidance zeroed — separating)
-        V_c >= 30  → V_c_norm ≈ 0.99  (full guidance — level-flight achievable)
-        V_c >= 50  → V_c_norm ≈ 1.0   (saturated — diving yields zero extra multiplier)
+    V_c coupling (linear clamp with minimum-wage floor):
+        V_c_norm = 0.3 + 0.7 * clamp(V_c / 30.0, 0, 1)
+        V_c <= 0   → V_c_norm = 0.30  ("minimum wage" — pointing always rewarded)
+        V_c = 15   → V_c_norm = 0.65  (half guidance)
+        V_c >= 30  → V_c_norm = 1.00  (full guidance — level-flight achievable)
+        V_c >= 50  → V_c_norm = 1.0   (saturated — diving yields zero extra multiplier)
+    The 0.3 base keeps gradient alive during low-speed turns, preventing the
+    "pointing without closing → zero reward → policy collapse" death spiral.
 
     Also adds an action smoothness penalty and energy gating.
     """
@@ -165,8 +167,8 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     VZ_PENALTY_WEIGHT = 15.0     # penalty on normalised vertical speed |V_z/50| — suppresses porpoising
     ALT_DELTA_WEIGHT = 30.0      # quadratic penalty weight (Δh/1000)² — gravity well against diving
     V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
-    V_C_K = 0.3                  # sigmoid steepness — saturates at V_c ≈ 30 m/s (level-flight achievable)
-    V_C_MID = 15.0               # half-activation closure rate (m/s) — lowered to kill dive arbitrage
+    V_C_BASE = 0.3                # minimum-wage floor — keeps gradient alive in low-speed turns
+    V_C_SAT = 30.0               # closure rate (m/s) at which multiplier saturates to 1.0
 
     def __init__(self, env: gym.Env):
         super().__init__(env)
@@ -240,15 +242,15 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
             info["r_los_rate"] = 0.0
             return obs, reward, terminated, truncated, info
 
-        # ── V_c coupling mask ───────────────────────────────────────────
-        # "Pointing without closing is useless."  All guidance rewards are
-        # multiplied by a normalised closure-rate factor ∈ [0, 1].
-        # V_c <= 0 (separating)     → V_c_norm ≈ 0    → ALL guidance zeroed
-        # V_c = 15 m/s (midpoint)   → V_c_norm = 0.5  → guidance halved
-        # V_c >= 30 m/s (level flt) → V_c_norm ≈ 0.99 → full guidance
-        # V_c >= 50 m/s (diving)    → V_c_norm ≈ 1.0  → SATURATED — no extra gain
+        # ── V_c coupling mask (minimum-wage floor) ──────────────────────
+        # Linear clamp with 0.3 base: "pointing always gets SOMETHING."
+        # This prevents the policy-collapse death spiral where low V_c
+        # zeroes all guidance rewards, killing the gradient.
+        #   V_c <= 0  (separating)  → V_c_norm = 0.30  (minimum wage)
+        #   V_c = 15  (halfway)     → V_c_norm = 0.65
+        #   V_c >= 30 (level flt)   → V_c_norm = 1.00  (full guidance)
         V_c = float(info.get("closure_rate", 0.0))
-        V_c_norm = 1.0 / (1.0 + math.exp(-self.V_C_K * (V_c - self.V_C_MID)))
+        V_c_norm = self.V_C_BASE + (1.0 - self.V_C_BASE) * max(0.0, min(1.0, V_c / self.V_C_SAT))
 
         # ── Energy gating: read from base env info ──────────────────────
         energy_ok = info.get("energy_ok", True)

@@ -588,7 +588,7 @@ def train(seed: int = 0):
         gamma=0.998,  # raised for 10Hz — matches 2Hz γ=0.99 effective horizon
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.015,  # moderate entropy — balanced with long-duration gSDE exploration
+        ent_coef=0.02,   # raised for V11 — pacemaker to prevent policy collapse
         vf_coef=0.5,
         max_grad_norm=0.5,
         use_sde=True,
@@ -599,7 +599,7 @@ def train(seed: int = 0):
             net_arch=dict(pi=[128, 128], vf=[128, 128]),
             activation_fn=torch.nn.ReLU,
             ortho_init=True,
-            log_std_init=0.0,    # σ=1.0 — full exploration; ent_coef=0 lets it decay naturally
+            log_std_init=0.0,    # σ=1.0 — full exploration; ent_coef=0.02 acts as decay pacemaker
         ),
     )
 
@@ -791,7 +791,7 @@ def train_with_config(
     seed: int = 0,
     log_dir: str = "",
     learning_rate: float = 1e-4,
-    ent_coef: float = 0.015,  # moderate entropy — balanced with long-duration gSDE
+    ent_coef: float = 0.02,   # raised for V11 — pacemaker to prevent policy collapse
     net_arch_pi: list | None = None,
     n_steps: int = 2048,
     total_timesteps: int = 5_000_000,  # 5M steps for full curriculum exploration
