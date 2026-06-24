@@ -31,10 +31,44 @@ which is how real F-16-class flight control systems work  (Stevens & Lewis,
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Speed-dependent trim schedule (Phase 3: replaces hardcoded constants)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class TrimSchedule:
+    """Speed-to-elevator-trim lookup using 1/V² scaling law.
+
+    trim(V) = ref_elevator * (V_ref / V)²
+
+    This follows from: lift required = weight (constant), lift ∝ q·CL,
+    and CL ∝ elevator deflection in the linear regime.  Since q ∝ V²,
+    elevator_trim ∝ 1/V².
+
+    Reference values calibrated from Phase 1 open-loop sweep
+    (scripts/sweep_elevator.py) at 3000 m / 400 kts.
+    """
+
+    ref_speed_mps: float = 176.0
+    ref_elevator: float = -0.05
+    ref_throttle: float = 0.80
+    min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
+
+    def get_elevator_trim(self, speed_mps: float) -> float:
+        """Return trim elevator for level flight at *speed_mps*."""
+        V = max(speed_mps, self.min_speed_mps)
+        return self.ref_elevator * (self.ref_speed_mps / V) ** 2
+
+    def get_throttle_trim(self, speed_mps: float) -> float:
+        """Return trim throttle.  First-order constant; may refine later."""
+        return self.ref_throttle
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -135,36 +169,37 @@ class TurnCoordinator:
 class BFMAutopilotConfig:
     """Gains for the four-channel BFM autopilot.
 
-    These were hand-tuned for the JSBSim F-16 at 60 Hz with a 0.5 s
-    decision interval.  Expect to iterate after flight testing.
+    Phase 3 values: PD from Phase 2 single-channel tuning, small integral
+    terms re-enabled with conservative anti-windup limits (~30 % of output
+    range) to prevent windup during aggressive manoeuvres.
     """
 
     # ── Nz (elevator) channel ─────────────────────────────────────────
-    nz_kp: float = 0.15
-    nz_ki: float = 0.0    # zeroed for P-only stability test (was 0.05)
-    nz_kd: float = 0.0    # zeroed for P-only stability test (was 0.03)
-    nz_integral_min: float = -0.5
-    nz_integral_max: float = 0.5
+    nz_kp: float = 0.18      # Phase 2: kp=0.18 (slower rise, stable)
+    nz_ki: float = 0.02      # small integral to kill steady-state G error
+    nz_kd: float = 0.012     # Phase 2: kd=0.012
+    nz_integral_min: float = -0.3
+    nz_integral_max: float = 0.3
 
     # ── Roll (aileron) channel ────────────────────────────────────────
-    roll_kp: float = 1.5
-    roll_ki: float = 0.0  # zeroed for P-only stability test (was 0.3)
-    roll_kd: float = 0.0  # zeroed for P-only stability test (was 0.1)
-    roll_integral_min: float = -0.4
-    roll_integral_max: float = 0.4
+    roll_kp: float = 1.5     # Phase 2: V10 default (fast roll, overshoot acceptable)
+    roll_ki: float = 0.05    # small integral for precise bank-angle hold
+    roll_kd: float = 0.08    # Phase 2: kd=0.08 (dampens overshoot)
+    roll_integral_min: float = -0.2
+    roll_integral_max: float = 0.2
 
     # ── Speed (throttle) channel ──────────────────────────────────────
-    speed_kp: float = 0.01
-    speed_ki: float = 0.0  # zeroed for P-only stability test (was 0.005)
+    speed_kp: float = 0.02   # Phase 2: highest kp without oscillation
+    speed_ki: float = 0.005  # small integral (slow dynamics)
     speed_kd: float = 0.0
-    speed_integral_min: float = -0.5
-    speed_integral_max: float = 0.5
+    speed_integral_min: float = -0.3
+    speed_integral_max: float = 0.3
     min_target_speed_mps: float = 80.0
     max_target_speed_mps: float = 400.0
 
     # ── Sideslip (rudder) channel ─────────────────────────────────────
     beta_kp: float = 0.06
-    beta_ki: float = 0.0  # zeroed for P-only stability test (was 0.01)
+    beta_ki: float = 0.005   # small integral for persistent sideslip correction
     beta_kd: float = 0.0
 
 
@@ -187,8 +222,10 @@ class BFMAutopilot:
         ac.set_controls(thr, elev, ail, rud)
     """
 
-    def __init__(self, config: Optional[BFMAutopilotConfig] = None) -> None:
+    def __init__(self, config: Optional[BFMAutopilotConfig] = None,
+                 trim: Optional[TrimSchedule] = None) -> None:
         cfg = config or BFMAutopilotConfig()
+        self._trim = trim or TrimSchedule()
 
         # ── Per-channel PIDs ──────────────────────────────────────────
         self._nz_pid = PIDController(
@@ -217,6 +254,11 @@ class BFMAutopilot:
         # Throttle channel has memory: where we want the speed to be
         self._target_speed_mps: Optional[float] = None
 
+        # Alpha / G-limiter constants
+        self._max_alpha_deg = 25.0
+        self._max_nz_g = 9.0
+        self._alpha_limiter_gain = 0.5
+
     # ── Public API ────────────────────────────────────────────────────
 
     def reset(self, initial_speed_mps: Optional[float] = None) -> None:
@@ -243,6 +285,7 @@ class BFMAutopilot:
         roll_rad: float,
         airspeed_mps: float,
         beta_deg: float,
+        alpha_deg: float = 0.0,
     ) -> tuple[float, float, float, float]:
         """One autopilot iteration.
 
@@ -257,26 +300,49 @@ class BFMAutopilot:
             roll_rad:      Current roll angle (rad).  JSBSim ``attitude/roll-rad``.
             airspeed_mps:  Current calibrated airspeed (m/s).
             beta_deg:      Sideslip angle (deg).  JSBSim ``aero/beta-deg``.
+            alpha_deg:     Angle of attack (deg).  JSBSim ``aero/alpha-deg``.
+                           Used for alpha limiter (Phase 3).
 
         Returns:
             ``(throttle, elevator, aileron, rudder)`` — all in [-1, 1].
         """
+        # ── Dynamic trim (Phase 3: speed-dependent) ──────────────────
+        elevator_trim = self._trim.get_elevator_trim(airspeed_mps)
+
         # ── Elevator: track body-Z normal acceleration ───────────────
         # JSBSim convention: n_z_g < 0 means positive-G (pilot pushed into seat).
         # BFM convention:   n_n > 0 means positive-G pull-up.
         # Therefore:        target_n_z_g = -(n_n).
-        # JSBSim F-16:  elevator > 0 → nose DOWN (less pull).
-        #               elevator < 0 → nose UP   (more pull).
-        # Trim: elevator ≈ -0.05 gives 1G level flight at ~176 m/s.
-        # PID corrects around trim: positive error → need MORE pull → MORE negative elevator.
-        ELEVATOR_TRIM = -0.05
-        target_n_z_g = -n_n
+        #
+        # Bank compensation (Phase 3): in a banked turn at angle μ,
+        # vertical lift = cos(μ).  To maintain altitude, total lift must
+        # be weight / cos(μ), i.e. n_z = 1 / cos(μ) G.
+        # Extra G needed beyond 1G: bank_extra = 1/cos(μ) - 1.
+        # This feedforward is added to the Nz target so the PID doesn't
+        # have to discover basic physics.
+        cos_roll = math.cos(abs(roll_rad))
+        bank_extra_g = (1.0 / max(cos_roll, 0.1)) - 1.0
+        target_n_z_g = -(n_n + bank_extra_g)
+
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
-        elevator = ELEVATOR_TRIM - self._nz_pid.step(nz_error, dt)
+        elevator = elevator_trim - self._nz_pid.step(nz_error, dt)
+
+        # ── Alpha / G-limiter (Phase 3: last safety net) ─────────────
+        # Overrides PID output when limits are violated.  The JSBSim
+        # native FCS has its own limiter at 28-30° alpha; this Python-
+        # level limiter catches our PID outputs before they reach JSBSim.
+        alpha_excess = abs(alpha_deg) - self._max_alpha_deg
+        if alpha_excess > 0:
+            # Push nose down proportionally as alpha increases
+            alpha_override = self._alpha_limiter_gain * alpha_excess / (35.0 - self._max_alpha_deg)
+            elevator = max(elevator, 0.0)             # don't pull any more
+            elevator = min(elevator + alpha_override, 1.0)  # push nose down
+
+        # G-limiter: if already at max positive G, prevent more pull
+        if abs(n_z_g) > self._max_nz_g and n_z_g < 0:
+            elevator = max(elevator, elevator_trim - 0.2)  # don't go more negative than trim-0.2
 
         # ── Aileron: track bank angle ────────────────────────────────
-        # JSBSim convention: positive aileron → roll right (negative roll angle).
-        # So we negate the error: positive error → need right roll → positive aileron.
         roll_error = roll_rad - mu   # + when need right roll
         roll_error = (roll_error + np.pi) % (2 * np.pi) - np.pi
         aileron = self._roll_pid.step(roll_error, dt)
@@ -298,10 +364,9 @@ class BFMAutopilot:
         * n_x < 0  →  target speed decreases  (close throttle to decelerate)
         * n_x = 0  →  hold current target
 
-        Includes a feed-forward bias of 0.8 (≈mil power trim) so the PID
-        only needs to correct the residual.
+        Includes a speed-dependent feed-forward bias (Phase 3: dynamic trim).
         """
-        THROTTLE_BIAS = 0.80  # F-16 trim throttle at ~176 m/s level flight
+        throttle_bias = self._trim.get_throttle_trim(airspeed_mps)
 
         # Bootstrap target on first call
         if self._target_speed_mps is None:
@@ -316,4 +381,4 @@ class BFMAutopilot:
         ))
 
         speed_error = self._target_speed_mps - airspeed_mps  # + when need more speed
-        return float(np.clip(THROTTLE_BIAS + self._speed_pid.step(speed_error, dt), 0.0, 1.0))
+        return float(np.clip(throttle_bias + self._speed_pid.step(speed_error, dt), 0.0, 1.0))

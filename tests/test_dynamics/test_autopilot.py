@@ -50,37 +50,42 @@ class TestOutputShape:
 # ── Elevator (Nz-tracking) channel ───────────────────────────────────────────
 
 class TestElevatorChannel:
-    """Elevator tracks body-Z normal acceleration."""
+    """Elevator tracks body-Z normal acceleration.
 
-    def test_pull_up_positive_elevator(self, autopilot, dt):
-        """When pulling up (n_n > 1), elevator should be positive."""
+    JSBSim F-16 sign convention:
+        elevator > 0 → nose DOWN (less pull, altitude decreases)
+        elevator < 0 → nose UP   (more pull, altitude increases)
+    """
+
+    def test_pull_up_negative_elevator(self, autopilot, dt):
+        """When pulling up (n_n > 1), elevator should be negative (nose UP)."""
         thr, elev, ail, rud = autopilot.step(
             0.0, 5.0, 0.0, dt,
             n_z_g=-1.0,  # current level flight (1G)
             roll_rad=0.0, airspeed_mps=200.0, beta_deg=0.0,
         )
-        # Need to go from n_z_g=-1 to n_z_g=-5 — positive elevator
-        assert elev > 0.0
+        # Need to go from n_z_g=-1 to n_z_g=-5 → MORE negative elevator (pull)
+        assert elev < 0.0
 
-    def test_push_over_negative_elevator(self, autopilot, dt):
-        """When pushing over (n_n < 1), elevator should be negative."""
+    def test_push_over_positive_elevator(self, autopilot, dt):
+        """When pushing over (n_n < 1), elevator should be positive (nose DOWN)."""
         thr, elev, ail, rud = autopilot.step(
             0.0, -1.0, 0.0, dt,
             n_z_g=-1.0,  # current level flight
             roll_rad=0.0, airspeed_mps=200.0, beta_deg=0.0,
         )
-        # Need to go from n_z_g=-1 to n_z_g=+1 — negative elevator (push)
-        assert elev < 0.0
+        # Need to go from n_z_g=-1 to n_z_g=+1 → MORE positive elevator (push)
+        assert elev > 0.0
 
-    def test_steady_state_zero_elevator(self, autopilot, dt):
-        """When n_z already matches target, elevator should be near zero."""
+    def test_steady_state_near_trim(self, autopilot, dt):
+        """When n_z already matches target, elevator should be near trim."""
         thr, elev, ail, rud = autopilot.step(
             0.0, 3.0, 0.0, dt,
             n_z_g=-3.0,  # already at target
             roll_rad=0.0, airspeed_mps=200.0, beta_deg=0.0,
         )
-        # Close to zero (integral hasn't built up yet)
-        assert abs(elev) < 0.7  # P-only component may still be small
+        # At target, error=0, elevator = trim (about -0.04 at 200 m/s)
+        assert abs(elev) < 0.7
 
 
 # ── Aileron (roll-tracking) channel ──────────────────────────────────────────
@@ -203,5 +208,6 @@ class TestIntegration:
             0.0, 8.0, 0.0, dt,
             n_z_g=-1.0, roll_rad=0.0, airspeed_mps=200.0, beta_deg=0.0,
         )
-        assert elev > 0.3  # Significant pull-up
+        # Pull-up → negative elevator (nose UP per JSBSim convention)
+        assert elev < -0.3  # Significant pull-up
         assert abs(ail) < 0.5  # Wings level
