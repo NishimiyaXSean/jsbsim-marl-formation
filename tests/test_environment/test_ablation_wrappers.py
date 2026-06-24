@@ -288,26 +288,28 @@ def test_lead_pursuit_vc_coupling_sigmoid():
     K = LeadPursuitRewardWrapper.V_C_K
     MID = LeadPursuitRewardWrapper.V_C_MID
 
-    assert K == 0.2, f"V_C_K should be 0.2, got {K}"
-    assert MID == 25.0, f"V_C_MID should be 25.0, got {MID}"
+    assert K == 0.3, f"V_C_K should be 0.3, got {K}"
+    assert MID == 15.0, f"V_C_MID should be 15.0, got {MID}"
 
     def sigmoid(vc):
         return 1.0 / (1.0 + math.exp(-K * (vc - MID)))
 
     # At V_c=0 (stationary), coupling should be nearly zero
-    assert sigmoid(0.0) < 0.01, f"V_c=0 gave {sigmoid(0.0):.4f}, expected < 0.01"
+    assert sigmoid(0.0) < 0.012, f"V_c=0 gave {sigmoid(0.0):.4f}, expected ~0.011"
 
-    # At V_c=15 (zone-of-death threshold), coupling ~0.12 (not 0.30 as with linear)
+    # At V_c=15 (midpoint), coupling should be exactly 0.5
     v15 = sigmoid(15.0)
-    assert 0.10 < v15 < 0.14, f"V_c=15 gave {v15:.4f}, expected ~0.119"
+    assert abs(v15 - 0.5) < 0.001, f"V_c=15 gave {v15:.4f}, expected 0.5"
 
-    # At V_c=25 (midpoint), coupling should be exactly 0.5
-    v25 = sigmoid(25.0)
-    assert abs(v25 - 0.5) < 0.001, f"V_c=25 gave {v25:.4f}, expected 0.5"
+    # At V_c=30 (level-flight achievable), coupling should be near 1.0
+    # This is the key anti-dive mechanism: level flight saturates the multiplier,
+    # so diving gives zero extra guidance reward.
+    v30 = sigmoid(30.0)
+    assert v30 > 0.98, f"V_c=30 gave {v30:.4f}, expected ~0.989"
 
-    # At V_c=50 (reference, full intercept), coupling should be near 1.0
+    # At V_c=50 (diving hard), coupling should be essentially 1.0 — saturated
     v50 = sigmoid(50.0)
-    assert v50 > 0.99, f"V_c=50 gave {v50:.4f}, expected ~0.993"
+    assert v50 > 0.999, f"V_c=50 gave {v50:.4f}, expected ~0.9999"
 
     # At V_c=-10 (separating), coupling should be negligible
     assert sigmoid(-10.0) < 0.001, f"V_c=-10 gave {sigmoid(-10.0):.4f}, expected < 0.001"

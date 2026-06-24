@@ -89,6 +89,23 @@ class BlendedActionWrapper(gym.Wrapper):
         super().__init__(env)
         self.alpha = alpha
 
+    # ── Property delegation ──────────────────────────────────────────
+    @property
+    def difficulty_level(self) -> float:
+        return self.env.difficulty_level
+
+    @difficulty_level.setter
+    def difficulty_level(self, value: float):
+        self.env.difficulty_level = value
+
+    @property
+    def curriculum_stage(self) -> float:
+        return self.env.curriculum_stage
+
+    @curriculum_stage.setter
+    def curriculum_stage(self, value: float):
+        self.env.curriculum_stage = value
+
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
         cubic = np.sign(action) * np.power(np.abs(action), 3.0)
@@ -129,10 +146,11 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     2. Lead prediction — cos(pursuer_forward, LOS_to_future) × 25.0 × dt × V_c_norm
     3. LOS-rate damping — exp(-|λ̇| × scale) × 20.0 × dt × V_c_norm
 
-    V_c coupling:
-        V_c_norm = max(0, min(1, closure_rate / 50.0))
-        V_c <= 0  → V_c_norm = 0  (guidance zeroed — separating)
-        V_c >= 50 → V_c_norm = 1  (full guidance — true intercept)
+    V_c coupling (sigmoid):
+        V_c_norm = 1 / (1 + exp(-K · (V_c - MID)))   with K=0.3, MID=15
+        V_c <= 0   → V_c_norm ≈ 0     (guidance zeroed — separating)
+        V_c >= 30  → V_c_norm ≈ 0.99  (full guidance — level-flight achievable)
+        V_c >= 50  → V_c_norm ≈ 1.0   (saturated — diving yields zero extra multiplier)
 
     Also adds an action smoothness penalty and energy gating.
     """
@@ -145,14 +163,31 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     SMOOTHNESS_WEIGHT = 4.0      # action-rate penalty weight (doubled for V9 — enforces smooth control)
     ACTION_MAG_WEIGHT = 1.0      # L2 penalty on raw action magnitude — discourages unnecessary maneuvers
     VZ_PENALTY_WEIGHT = 15.0     # penalty on normalised vertical speed |V_z/50| — suppresses porpoising
-    ALT_DELTA_WEIGHT = 20.0      # penalty on |alt_diff/1000| — enforces co-planar flight with target
+    ALT_DELTA_WEIGHT = 30.0      # quadratic penalty weight (Δh/1000)² — gravity well against diving
     V_C_REF = 50.0               # reference closure rate (m/s) — retained for backwards compat
-    V_C_K = 0.2                  # sigmoid steepness for V_c coupling
-    V_C_MID = 25.0               # half-activation closure rate (m/s)
+    V_C_K = 0.3                  # sigmoid steepness — saturates at V_c ≈ 30 m/s (level-flight achievable)
+    V_C_MID = 15.0               # half-activation closure rate (m/s) — lowered to kill dive arbitrage
 
     def __init__(self, env: gym.Env):
         super().__init__(env)
         self._last_action: np.ndarray | None = None
+
+    # ── Property delegation ──────────────────────────────────────────
+    @property
+    def difficulty_level(self) -> float:
+        return self.env.difficulty_level
+
+    @difficulty_level.setter
+    def difficulty_level(self, value: float):
+        self.env.difficulty_level = value
+
+    @property
+    def curriculum_stage(self) -> float:
+        return self.env.curriculum_stage
+
+    @curriculum_stage.setter
+    def curriculum_stage(self, value: float):
+        self.env.curriculum_stage = value
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
@@ -180,13 +215,16 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         r_vz_penalty = -self.VZ_PENALTY_WEIGHT * abs(_vz / 50.0)
         reward += r_vz_penalty
 
-        # ── Altitude delta penalty ───────────────────────────────────────
-        # Force co-planar flight: penalise any height difference between
-        # pursuer and target.  Normalised by 1000 m so the penalty is
-        # commensurate with guidance rewards (~30-50/step).
+        # ── Altitude delta penalty (quadratic "gravity well") ────────────
+        # Quadratic penalty: small deviations are cheap (tactical micro-adjustments
+        # allowed), but large deviations explode — diving 800 m to farm V_c now
+        # incurs 64× the penalty of a 100 m adjustment, killing the arbitrage.
+        #   Δh = 100 m  →  penalty = K × 0.01  (tiny)
+        #   Δh = 800 m  →  penalty = K × 0.64  (devastating)
         _pursuer_alt = float(self.unwrapped.pursuer.position_ned[2])
         _target_alt = float(self.unwrapped.target_ac.position_ned[2])
-        r_alt_delta = -self.ALT_DELTA_WEIGHT * abs(_pursuer_alt - _target_alt) / 1000.0
+        alt_diff_norm = (_pursuer_alt - _target_alt) / 1000.0
+        r_alt_delta = -self.ALT_DELTA_WEIGHT * alt_diff_norm ** 2
         reward += r_alt_delta
 
         # Only add lead pursuit bonus during normal flight (not on termination)
@@ -205,9 +243,10 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         # ── V_c coupling mask ───────────────────────────────────────────
         # "Pointing without closing is useless."  All guidance rewards are
         # multiplied by a normalised closure-rate factor ∈ [0, 1].
-        # V_c <= 0 (separating)    → V_c_norm = 0  → ALL guidance zeroed
-        # V_c = 25 m/s (drifting)  → V_c_norm = 0.5 → guidance halved
-        # V_c >= 50 m/s (killing)  → V_c_norm = 1.0 → full guidance
+        # V_c <= 0 (separating)     → V_c_norm ≈ 0    → ALL guidance zeroed
+        # V_c = 15 m/s (midpoint)   → V_c_norm = 0.5  → guidance halved
+        # V_c >= 30 m/s (level flt) → V_c_norm ≈ 0.99 → full guidance
+        # V_c >= 50 m/s (diving)    → V_c_norm ≈ 1.0  → SATURATED — no extra gain
         V_c = float(info.get("closure_rate", 0.0))
         V_c_norm = 1.0 / (1.0 + math.exp(-self.V_C_K * (V_c - self.V_C_MID)))
 

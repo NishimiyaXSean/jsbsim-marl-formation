@@ -141,9 +141,10 @@ class AutoCurriculumCallback(BaseCallback):
     CONSECUTIVE_ADVANCE_REQUIRED = 1      # consecutive good evals to unlock advancement
     COLLAPSE_WIN_RATE = 0.15              # wr below this + difficulty above floor = rollback
 
-    def __init__(self, eval_env, log_dir: str, verbose: int = 0):
+    def __init__(self, eval_env, log_dir: str, train_env=None, verbose: int = 0):
         super().__init__(verbose)
         self._eval_env = eval_env
+        self._train_env = train_env
         self._log_dir = log_dir
         self._difficulty = self.MIN_DIFFICULTY
         self._best_capture_rate = -1.0
@@ -173,6 +174,9 @@ class AutoCurriculumCallback(BaseCallback):
 
         # Update eval env to current difficulty
         self._eval_env.difficulty_level = self._difficulty
+        # Also update training env so rollout data matches eval distribution
+        if self._train_env is not None:
+            self._train_env.unwrapped.difficulty_level = self._difficulty
 
         # ── Evaluation ─────────────────────────────────────────────────
         successes, min_dists, intercept_times = 0, [], []
@@ -543,13 +547,20 @@ def train(seed: int = 0):
 
     # Environment — agent makes decisions at 2 Hz via ActionRepeatWrapper
     # while FlightController and JSBSim continue at full rate internally.
-    base_env = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
+    # Wrapper chain: SinglePursuitEnv → BlendedAction → LeadPursuitReward → ResidualExpert → ActionRepeat
+    from src.environment.ablation_wrappers import (
+        ActionRepeatWrapper, BlendedActionWrapper, LeadPursuitRewardWrapper,
+    )
+    base_env = SinglePursuitEnv(difficulty_level=0.15, record_tacview=False)
+    base_env = BlendedActionWrapper(base_env, alpha=0.02)
+    base_env = LeadPursuitRewardWrapper(base_env)
     env = ResidualExpertWrapper(base_env)
-    from src.environment.ablation_wrappers import ActionRepeatWrapper
     env = ActionRepeatWrapper(env, repeat_frames=5)
     env = Monitor(env, log_dir)
 
-    eval_base = SinglePursuitEnv(curriculum_stage=1.0, record_tacview=False)
+    eval_base = SinglePursuitEnv(difficulty_level=0.15, record_tacview=False)
+    eval_base = BlendedActionWrapper(eval_base, alpha=0.02)
+    eval_base = LeadPursuitRewardWrapper(eval_base)
     eval_env = ResidualExpertWrapper(eval_base)
     eval_env = ActionRepeatWrapper(eval_env, repeat_frames=5)
 
@@ -594,10 +605,10 @@ def train(seed: int = 0):
 
     # Train
     try:
-        curriculum_cb = CurriculumCallback(eval_env, log_dir)
+        auto_cb = AutoCurriculumCallback(eval_env, log_dir, train_env=env)
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
-            callback=curriculum_cb,
+            callback=auto_cb,
             progress_bar=False,
         )
     except KeyboardInterrupt:
@@ -612,15 +623,16 @@ def train(seed: int = 0):
     model.save(os.path.join(log_dir, "model"))
     print(f"Simple model saved → {os.path.join(log_dir, 'model')}.zip")
 
-    # Save eval metrics CSV
+    # Save eval metrics CSV (uses actual fieldnames from auto_cb data)
     import csv
     eval_csv_path = os.path.join(log_dir, "eval_metrics.csv")
-    with open(eval_csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["timesteps", "stage", "capture_rate",
-                                                "avg_min_dist", "avg_intercept_time"])
-        writer.writeheader()
-        writer.writerows(curriculum_cb._eval_metrics)
-    print(f"Eval metrics saved → {eval_csv_path}")
+    if auto_cb._eval_metrics:
+        with open(eval_csv_path, "w", newline="") as f:
+            fieldnames = list(auto_cb._eval_metrics[0].keys())
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(auto_cb._eval_metrics)
+        print(f"Eval metrics saved → {eval_csv_path}")
 
     # ── Final evaluation with Tacview ─────────────────────────────────────
     print(f"\n{'='*55}")
