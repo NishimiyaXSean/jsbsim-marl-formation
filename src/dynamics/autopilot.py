@@ -57,11 +57,10 @@ class TrimSchedule:
     """
 
     ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured)
-    # Recalibrated 2026-06-25: original -0.0492 was ~correct per 1/V^2 fit
-    # (350 kts level trim ≈ -0.065). Boosted to -0.055 for a modest
-    # nose-up bias that the PID can trim against with positive elevator,
-    # avoiding the region where negative saturation causes windup.
-    ref_elevator: float = -0.0550
+    # Preserving the Phase 1 calibrated value (verified 2026-06-25:
+    # the 1/V^2 fit is correct — trim was NOT the root cause of the
+    # step-response issues; those were PID-tuning problems now fixed).
+    ref_elevator: float = -0.0492
     ref_throttle: float = 0.80
     min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
 

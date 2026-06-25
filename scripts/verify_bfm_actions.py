@@ -161,6 +161,7 @@ def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
             airspeed_mps=s["airspeed_mps"],
             beta_deg=s["beta_deg"],
             alpha_deg=s["alpha_deg"],
+            q_rps=s["q_rps"],
         )
         ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
         ac.run()
@@ -303,7 +304,7 @@ def main():
                 0.0, 1.0, 0.0, DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"],
+                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
             )
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
@@ -355,7 +356,7 @@ def main():
                 0.0, 1.0, 0.0, DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"],
+                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
             )
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
@@ -387,7 +388,7 @@ def main():
                 n_x_env, n_n_env, mu_env, DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"],
+                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
             )
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
@@ -424,7 +425,7 @@ def main():
                 0.0, 1.0, 0.0, DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"],
+                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
             )
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
