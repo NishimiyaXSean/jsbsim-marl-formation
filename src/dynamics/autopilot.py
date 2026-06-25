@@ -479,7 +479,15 @@ class BFMAutopilot:
             elevator = max(elevator, elevator_trim - 0.2)  # don't go more negative than trim-0.2
 
         # ── Aileron: track bank angle ────────────────────────────────
-        roll_error = roll_rad - mu   # + when need right roll
+        # Convention bridge (2026-06-25):
+        #   JSBSim attitude/roll-rad:  positive = right bank
+        #   BFM action mu / Envelope:  positive = left  bank
+        # Convert mu from BFM → JSBSim so both operands share one frame.
+        # Original formula  roll_rad - mu  exploited the sign mismatch
+        # for direct BFM targets but gave positive feedback (wrong sign)
+        # when recovering to wings-level (mu=0, roll≠0).
+        mu_jsbsim = -mu
+        roll_error = mu_jsbsim - roll_rad   # + when need right roll
         roll_error = (roll_error + np.pi) % (2 * np.pi) - np.pi
         aileron = self._roll_pid.step(roll_error, dt)
 

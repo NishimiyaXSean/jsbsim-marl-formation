@@ -167,16 +167,24 @@ class TestRollControl:
     """Test roll P-controller with rate limiting."""
 
     def test_roll_tracks_target(self, envelope, dt):
-        """Roll should converge toward target over multiple steps."""
-        mu_current = 0.0
+        """Roll should converge toward target over multiple steps.
+
+        The envelope takes ``current_roll_rad`` in JSBSim convention
+        (positive = right) and returns ``mu_cmd`` in BFM convention
+        (positive = left).  Feed back with a sign flip to bridge the two.
+        """
+        roll_jsbsim = 0.0   # aircraft roll angle in JSBSim convention
         for _ in range(60):  # 1.0 sec — enough for roll to converge
-            n_x, n_n, mu_current = envelope.step(
-                0.0, 1.0, np.pi / 3,  # 60° bank
+            n_x, n_n, mu_bfm = envelope.step(
+                0.0, 1.0, np.pi / 3,  # 60° bank (BFM: left)
                 speed_mps=200.0, alt_m=3000.0, vz_mps=0.0,
-                current_roll_rad=mu_current,  # feed back previous mu
+                current_roll_rad=roll_jsbsim,  # JSBSim convention
                 dt=dt,
             )
-        assert abs(mu_current - np.pi / 3) < 0.15    # within ~8.6°
+            # Simulate the aircraft following the command:
+            # mu_bfm is in BFM convention → convert to JSBSim for next step
+            roll_jsbsim = -mu_bfm
+        assert abs(mu_bfm - np.pi / 3) < 0.15    # within ~8.6°
 
     def test_roll_rate_limited(self, envelope, dt):
         """Single step cannot exceed max roll rate * dt."""
