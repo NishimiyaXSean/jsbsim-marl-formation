@@ -346,6 +346,11 @@ class BFMAutopilot:
         # step shocks that cause integral windup, 2026-06-25)
         self._filtered_target_nz: Optional[float] = None
 
+        # Derivative-on-measurement state (2026-06-25): tracking the
+        # ACTUAL Nz for the D-term avoids derivative kick when the
+        # target changes stepwise.  D = -Kd * d(Nz_actual)/dt
+        self._prev_nz: Optional[float] = None
+
         # Alpha / G-limiter constants
         self._max_alpha_deg = 25.0
         self._max_nz_g = 9.0
@@ -366,6 +371,7 @@ class BFMAutopilot:
         self._beta_pid.reset()
         self._target_speed_mps = initial_speed_mps
         self._filtered_target_nz = None
+        self._prev_nz = None
 
     def step(
         self,
@@ -444,12 +450,23 @@ class BFMAutopilot:
         # 4. Error
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
 
-        # 5. Derivative on Nz error (computed BEFORE integral update
-        #    so the D-term reflects the raw error rate of change)
+        # 5. Derivative-on-MEASUREMENT (2026-06-25):
+        #    D = Kd * d(Nz_actual)/dt   (NOT d(error)/dt)
+        #
+        #    Using the actual Nz rate instead of the error rate eliminates
+        #    "derivative kick": when the target steps (1G→4G), d(error)/dt
+        #    includes a d(target)/dt spike that produces a huge nose-UP
+        #    transient.  d(Nz)/dt is unaffected by target changes.
+        #
+        #    Sign convention (JSBSim): n_z_g < 0 when pulling positive G.
+        #    When n_z_g goes more negative (pulling harder), (n_z_g-prev)<0
+        #    → derivative < 0 → pid_out more negative → elevator more
+        #    positive → nose DOWN → opposes the pull increase. ✓
         derivative = 0.0
-        if self._nz_pid._prev_error is not None and dt > 1e-8:
-            derivative = (nz_error - self._nz_pid._prev_error) / dt
-        self._nz_pid._prev_error = nz_error
+        if self._prev_nz is not None and dt > 1e-8:
+            derivative = (n_z_g - self._prev_nz) / dt  # = d(Nz)/dt
+        self._prev_nz = n_z_g
+        self._nz_pid._prev_error = nz_error  # preserved for diagnostics
 
         # 6. Q-damping (inner-loop pitch-rate feedback, 2026-06-25)
         q_damping = self._kq * q_rps

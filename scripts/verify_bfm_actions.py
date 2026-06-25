@@ -31,8 +31,10 @@ import numpy as np
 
 from src.dynamics.aircraft import Aircraft
 from src.dynamics.autopilot import BFMAutopilot, BFMAutopilotConfig, TrimSchedule, GainScheduler
+from src.dynamics.flight_controller import FlightController, FlightControlTargets
 from src.dynamics.flight_envelope import FlightEnvelope, EnvelopeConfig
 from src.dynamics.bfm_actions import PURSUIT_ACTIONS, describe_pursuit_action
+from src.utils.units import kts_to_mps
 
 os.environ.setdefault("JSBSIM_DEBUG", "0")
 
@@ -146,6 +148,74 @@ def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
     passed = len(reasons) == 0
     reason = " ; ".join(reasons) if reasons else "OK"
     return passed, reason, metrics
+
+
+def _run_fc_action(ac: Aircraft, fc: FlightController, target: FlightControlTargets,
+                   action_idx: int, duration_s: float) -> dict:
+    """Execute a trajectory-hold action via FlightController for *duration_s* s.
+
+    Used for Level Flight (action 0) and Decelerate (action 2) where the
+    tactical intent is to maintain altitude, heading, and speed — which
+    the FlightController's three-channel stabilisers handle natively.
+    The BFMAutopilot's Nz+speed architecture lacks the altitude feedback
+    needed to prevent the thrust-surplus climb.
+    """
+    n_x_raw, n_n_raw, mu_raw = PURSUIT_ACTIONS[action_idx]
+
+    t_vals, alt_vals, spd_vals = [], [], []
+    nz_vals, alpha_vals, roll_vals, hdg_vals, thrust_vals = [], [], [], [], []
+    q_vals, p_vals = [], []
+    elev_vals, ail_vals, thr_vals = [], [], []
+    raw_nn_vals, filt_nn_vals = [], []
+    raw_mu_vals, filt_mu_vals = [], []
+
+    t = 0.0
+    n_steps = int(duration_s / DT)
+    for _ in range(n_steps):
+        s = ac.state
+        thr, elev, ail, rud = fc.compute(s, target, DT)
+        ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
+        ac.run()
+
+        t_vals.append(t)
+        alt_vals.append(s["alt_m"])
+        spd_vals.append(s["airspeed_mps"])
+        nz_vals.append(-s["n_z_g"])
+        alpha_vals.append(s["alpha_deg"])
+        roll_vals.append(s["roll_deg"])
+        hdg_vals.append(s["yaw_deg"])
+        thrust_vals.append(s["thrust_lbs"])
+        q_vals.append(s["q_rps"])
+        p_vals.append(s["p_rps"])
+        elev_vals.append(elev)
+        ail_vals.append(ail)
+        thr_vals.append(thr)
+        raw_nn_vals.append(n_n_raw)
+        filt_nn_vals.append(n_n_raw)  # FC doesn't filter Nz
+        raw_mu_vals.append(np.rad2deg(mu_raw))
+        filt_mu_vals.append(np.rad2deg(mu_raw))
+        t += DT
+
+    return {
+        "action": action_idx,
+        "t": np.array(t_vals),
+        "alt": np.array(alt_vals), "spd": np.array(spd_vals),
+        "nz": np.array(nz_vals), "alpha": np.array(alpha_vals),
+        "roll": np.array(roll_vals), "hdg": np.array(hdg_vals),
+        "thrust": np.array(thrust_vals),
+        "q": np.array(q_vals), "p": np.array(p_vals),
+        "elev": np.array(elev_vals), "ail": np.array(ail_vals),
+        "thr": np.array(thr_vals),
+        "raw_nn": np.array(raw_nn_vals), "filt_nn": np.array(filt_nn_vals),
+        "raw_mu": np.array(raw_mu_vals), "filt_mu": np.array(filt_mu_vals),
+        "nn_clip_frac": 0.0, "mu_clip_frac": 0.0,
+        "alpha_max": float(np.max(np.abs(alpha_vals))),
+        "nz_max": float(np.max(np.abs(nz_vals))),
+        "alt_min": float(np.min(alt_vals)),
+        "alt_max": float(np.max(alt_vals)),
+        "spd_min": float(np.min(spd_vals)),
+        "spd_max": float(np.max(spd_vals)),
+    }
 
 
 def _run_action(ac: Aircraft, ap: BFMAutopilot, envelope: FlightEnvelope,
@@ -331,33 +401,54 @@ def main():
     init_alt_m = INIT_ALT_FT * 0.3048  # 9842 ft -> 3000 m
 
     for action_idx in sorted(PURSUIT_ACTIONS.keys()):
-        ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
-        # Warmup: 3s at 1G through FlightEnvelope (2026-06-25 fix).
-        # Previously the raw n_n=1.0 step command slammed the PID directly,
-        # causing ~1Hz elevator oscillation that ratcheted pitch from 0->3.6deg
-        # and started an uncontrolled climb.  The envelope's G-smoothing
-        # (tau=0.15s) prevents this transient shock.
-        envelope.reset(ref_alt_m=init_alt_m)
-        for _ in range(180):
-            s = ac.state
-            nx, nn, mu = envelope.step(0.0, 1.0, 0.0,
-                speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
-                vz_mps=s["h_dot_fps"] * 0.3048,
-                current_roll_rad=np.deg2rad(s["roll_deg"]), dt=DT)
-            thr, elev, ail, rud = ap.step(
-                nx, nn, mu, DT,
-                n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
-                airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
-            )
-            ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
-            ac.run()
 
-        # Reset envelope between actions (clears G-smoothing state)
-        r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
+        # ── Hybrid FCS routing (2026-06-25) ──────────────────────────
+        # Level Flight (0) and Decelerate (2): trajectory-hold via
+        # FlightController (altitude + heading + speed stabilisers).
+        # All other actions: tactical manoeuvring via BFMAutopilot.
+        use_fc = action_idx in (0, 2)
+
+        if use_fc:
+            fc = FlightController()
+            fc.reset()
+            fc_target = FlightControlTargets(
+                heading_deg=INIT_HEADING_DEG,
+                altitude_m=init_alt_m,
+                speed_mps=kts_to_mps(INIT_SPEED_KTS),
+            )
+            # Warmup: 3s with FlightController
+            for _ in range(180):
+                s = ac.state
+                thr, elev, ail, rud = fc.compute(s, fc_target, DT)
+                ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
+                ac.run()
+            # Action: maintain trajectory hold
+            r = _run_fc_action(ac, fc, fc_target, action_idx, ACTION_HOLD_S)
+        else:
+            ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
+            ap.reset(initial_speed_mps=kts_to_mps(INIT_SPEED_KTS))
+            # Warmup: 3s through FlightEnvelope
+            envelope.reset(ref_alt_m=init_alt_m)
+            for _ in range(180):
+                s = ac.state
+                nx, nn, mu = envelope.step(0.0, 1.0, 0.0,
+                    speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
+                    vz_mps=s["h_dot_fps"] * 0.3048,
+                    current_roll_rad=np.deg2rad(s["roll_deg"]), dt=DT)
+                thr, elev, ail, rud = ap.step(
+                    nx, nn, mu, DT,
+                    n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
+                    airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
+                    alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
+                )
+                ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
+                ac.run()
+            # Action: tactical manoeuvring
+            r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
+
         all_results.append(r)
 
         # ── Envelope check ─────────────────────────────────────────────
