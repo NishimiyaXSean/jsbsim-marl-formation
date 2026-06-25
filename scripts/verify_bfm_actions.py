@@ -100,8 +100,15 @@ def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
     q_ss = r["q"][-n_ss:]
     p_ss = r["p"][-n_ss:]
 
-    # G-tracking: compare mean perceived G against effective target
-    expected_g = _compute_expected_g(n_n_raw, mu_raw)
+    # G-tracking: compare mean perceived G against the FILTERED target
+    # (FlightEnvelope may have corrected n_n for altitude hold, etc.)
+    filt_nn_ss = r["filt_nn"][-n_ss:] if "filt_nn" in r else None
+    if filt_nn_ss is not None and len(filt_nn_ss) > 0:
+        # Use the envelope-corrected target, with bank compensation
+        expected_g = float(np.mean(filt_nn_ss)) + (
+            (1.0 / max(np.cos(abs(mu_raw)), 0.1) - 1.0) if abs(mu_raw) > 0.01 else 0.0)
+    else:
+        expected_g = _compute_expected_g(n_n_raw, mu_raw)
     g_error = abs(float(np.mean(nz_ss)) - expected_g)
 
     # Roll-tracking: compare mean |roll| against |mu| (only for banked actions)
@@ -338,7 +345,9 @@ def main():
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
 
-        envelope.reset()  # prevent state leakage between actions (2026-06-25)
+        # Prevent state leakage + set altitude-hold reference
+        init_alt_m = INIT_ALT_FT * 0.3048  # 9842 ft -> 3000 m
+        envelope.reset(ref_alt_m=init_alt_m)
         r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
         all_results.append(r)
 

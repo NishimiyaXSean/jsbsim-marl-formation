@@ -51,6 +51,13 @@ class EnvelopeConfig:
     # First-order lag for G-onset  (reduced from 0.4s for better autopilot tracking)
     tau_g: float = 0.15
 
+    # Altitude-hold gain (2026-06-25): mild P-correction on Nz when the
+    # aircraft drifts from the reference altitude.  Prevents the excess-thrust
+    # climb that occurs when n_n=1.0G is tracked perfectly but the throttle
+    # channel cannot fully compensate for the thrust surplus.
+    alt_hold_kp: float = 0.0002  # ~0.2G correction per 1000m altitude error (gentle)
+    alt_hold_max_correction: float = 0.3  # max G correction from altitude hold
+
     # Roll control
     max_roll_rate: float = np.pi           # 180 deg/s
     roll_gain: float = 4.0                 # P-controller proportional gain
@@ -81,11 +88,16 @@ class FlightEnvelope:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def reset(self) -> None:
-        """Reset per-episode smoothing state."""
+    def reset(self, ref_alt_m: float = 3048.0) -> None:
+        """Reset per-episode smoothing state.
+
+        Args:
+            ref_alt_m: Reference altitude for altitude-hold (m MSL).
+        """
         self._n_x_sm: float = 0.0    # smoothed tangential G
         self._n_n_sm: float = 1.0    # smoothed normal G  (1 G = level trim)
         self._mu_sm: float = 0.0     # smoothed bank angle (rad)
+        self._ref_alt_m: float = ref_alt_m  # altitude-hold reference
 
     def step(
         self,
@@ -123,6 +135,11 @@ class FlightEnvelope:
         """
         # 1.  V-n envelope  ────────────────────────────────────────────────
         n_n_cmd = self._apply_vn_limits(n_n_cmd, speed_mps, g_scale)
+
+        # 1b. Altitude-hold correction (2026-06-25): mild P-bias on Nz
+        #      to prevent the BFMAutopilot's excess-thrust climb when
+        #      n_n=1.0G is tracked but no altitude feedback exists.
+        n_n_cmd = self._apply_altitude_hold(n_n_cmd, alt_m)
 
         # 2.  Speed-based tangential clamp  ─────────────────────────────────
         n_x_cmd = self._clamp_tangential(n_x_cmd, speed_mps, speed_scale)
@@ -210,6 +227,20 @@ class FlightEnvelope:
         # rolls through multiple revolutions (cosmetic; the PID uses the
         # wrapped error, so the control action is identical either way).
         return float((raw_output + np.pi) % (2 * np.pi) - np.pi)
+
+    def _apply_altitude_hold(self, n_n: float, alt_m: float) -> float:
+        """Mild altitude-hold correction on the Nz command (2026-06-25).
+
+        Without altitude feedback, the BFMAutopilot's Nz+speed tracking
+        converges to a steady climb whenever the throttle trim provides
+        excess thrust.  A gentle P-correction based on altitude error
+        nudges the Nz command to maintain the reference altitude.
+        """
+        alt_error = self._ref_alt_m - alt_m  # + when below target (need climb)
+        correction = alt_error * self.cfg.alt_hold_kp
+        correction = float(np.clip(correction, -self.cfg.alt_hold_max_correction,
+                                   self.cfg.alt_hold_max_correction))
+        return n_n + correction
 
     def _apply_altitude_limits(
         self, n_n: float, mu: float, alt_m: float,
