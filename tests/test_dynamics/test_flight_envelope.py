@@ -166,34 +166,26 @@ class TestSmoothing:
 class TestRollControl:
     """Test roll P-controller with rate limiting."""
 
-    def test_roll_tracks_target(self, envelope, dt):
-        """Roll should converge toward target over multiple steps.
-
-        The envelope takes ``current_roll_rad`` in JSBSim convention
-        (positive = right) and returns ``mu_cmd`` in BFM convention
-        (positive = left).  Feed back with a sign flip to bridge the two.
-        """
-        roll_jsbsim = 0.0   # aircraft roll angle in JSBSim convention
-        for _ in range(60):  # 1.0 sec — enough for roll to converge
+    def test_roll_passthrough_consistent(self, envelope, dt):
+        """Roll target passes through unchanged regardless of current roll."""
+        for roll_test in [0.0, 0.5, -0.8]:
+            target = np.pi / 3  # 60° bank (BFM: left)
             n_x, n_n, mu_bfm = envelope.step(
-                0.0, 1.0, np.pi / 3,  # 60° bank (BFM: left)
+                0.0, 1.0, target,
                 speed_mps=200.0, alt_m=3000.0, vz_mps=0.0,
-                current_roll_rad=roll_jsbsim,  # JSBSim convention
-                dt=dt,
+                current_roll_rad=roll_test, dt=dt,
             )
-            # Simulate the aircraft following the command:
-            # mu_bfm is in BFM convention → convert to JSBSim for next step
-            roll_jsbsim = -mu_bfm
-        assert abs(mu_bfm - np.pi / 3) < 0.15    # within ~8.6°
+            # mu_bfm should equal target (pass-through), independent of current roll
+            assert mu_bfm == target
 
-    def test_roll_rate_limited(self, envelope, dt):
-        """Single step cannot exceed max roll rate * dt."""
-        mu_start = 0.0
-        target = np.pi  # 180° roll command
+    def test_roll_target_passthrough(self, envelope, dt):
+        """Roll target passes through unchanged (rate limiting is now the
+        BFMAutopilot's responsibility — 2026-06-25 convention fix)."""
+        target = np.pi / 3  # 60° bank
         n_x, n_n, mu = envelope.step(
             0.0, 1.0, target,
             speed_mps=200.0, alt_m=3000.0, vz_mps=0.0,
-            current_roll_rad=mu_start, dt=dt,
+            current_roll_rad=0.0, dt=dt,
         )
-        max_step = np.pi * dt  # max_roll_rate * dt
-        assert abs(mu - mu_start) <= max_step + 1e-10
+        # mu should equal the raw target (BFM convention pass-through)
+        assert mu == target

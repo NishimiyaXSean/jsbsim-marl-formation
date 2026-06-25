@@ -42,6 +42,12 @@ class EnvelopeConfig:
     gpws_trigger_alt_evader: float = 800.0
     gpws_vz_threshold: float = -5.0        # must be descending faster than this (m/s)
 
+    # Ceiling / hard-deck protection (2026-06-25)
+    ceiling_trigger_alt: float = 5800.0   # force nose-down above this
+    ceiling_target_g: float = 0.5         # max G when above ceiling
+    hard_deck_trigger_alt: float = 1500.0 # force pull-up below this
+    hard_deck_target_g: float = 3.0       # min G when below hard deck
+
     # First-order lag for G-onset  (reduced from 0.4s for better autopilot tracking)
     tau_g: float = 0.15
 
@@ -124,15 +130,19 @@ class FlightEnvelope:
         # 3.  First-order G-onset lag  ──────────────────────────────────────
         n_x_sm, n_n_sm = self._smooth_g(n_x_cmd, n_n_cmd, dt)
 
-        # 4.  Roll P-controller with rate limiting  ─────────────────────────
-        # _roll_step works entirely in JSBSim convention (positive = right).
-        # Negate target_mu from BFM (positive = left) → JSBSim, then negate
-        # the output for the BFMAutopilot which also works in BFM convention.
-        target_mu_jsbsim = -target_mu
-        mu_cmd_jsbsim = self._roll_step(target_mu_jsbsim, current_roll_rad, dt)
-        mu_cmd = -mu_cmd_jsbsim  # back to BFM convention for autopilot
+        # 4.  Roll target — pass-through with convention bridge ───────────
+        # _roll_step provides rate-limited trajectory tracking, BUT its
+        # output stays too close to current_roll when near the target,
+        # starving the BFMAutopilot of error signal.  For the autopilot
+        # we pass the RAW target (with convention conversion) so the PID
+        # sees the full error.  Roll rate is inherently limited by the
+        # aileron PID gains + JSBSim's own roll damping.
+        mu_cmd = target_mu  # already in BFM convention (positive = left)
 
-        # 5.  GPWS override  (hard safety — runs LAST to guarantee pull-up) ─
+        # 5.  Altitude protection: ceiling + hard deck (2026-06-25) ─────
+        n_n_sm, mu_cmd = self._apply_altitude_limits(n_n_sm, mu_cmd, alt_m)
+
+        # 6.  GPWS override  (hard safety — runs LAST to guarantee pull-up) ─
         n_n_sm, mu_cmd = self._apply_gpws(n_n_sm, mu_cmd, alt_m, vz_mps,
                                           g_scale, is_attacker)
 
@@ -200,6 +210,27 @@ class FlightEnvelope:
         # rolls through multiple revolutions (cosmetic; the PID uses the
         # wrapped error, so the control action is identical either way).
         return float((raw_output + np.pi) % (2 * np.pi) - np.pi)
+
+    def _apply_altitude_limits(
+        self, n_n: float, mu: float, alt_m: float,
+    ) -> tuple[float, float]:
+        """Ceiling and hard-deck protection (2026-06-25).
+
+        Above the ceiling, force nose-down to prevent "escape to space".
+        Below the hard deck, force wings-level pull-up to prevent CFIT.
+        These run BEFORE GPWS so that GPWS can further override if needed.
+        """
+        # Ceiling: force nose-down to stop climb
+        if alt_m > self.cfg.ceiling_trigger_alt:
+            n_n = min(n_n, self.cfg.ceiling_target_g)
+            mu = 0.0  # wings level — don't turn while descending
+
+        # Hard deck: force pull-up, wings level for max vertical lift
+        if alt_m < self.cfg.hard_deck_trigger_alt:
+            n_n = max(n_n, self.cfg.hard_deck_target_g)
+            mu = 0.0  # wings level
+
+        return n_n, mu
 
     def _apply_gpws(
         self, n_n: float, mu: float, alt_m: float, vz_mps: float,

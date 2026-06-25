@@ -51,8 +51,10 @@ PURSUIT_ACTIONS: Dict[int, Tuple[float, float, float]] = {
     2:  (-2.0,  1.0,  0.0),              # p3:  Decelerate straight
     3:  ( 0.0,  2.0, -np.pi / 3.0),      # p4:  Gentle right turn (2G, 60° right)
     4:  ( 0.0,  2.0,  np.pi / 3.0),      # p5:  Gentle left turn (2G, 60° left)
-    5:  ( 0.0,  3.0,  0.0),              # p6:  Gentle climb (3G pull-up)
-    6:  ( 0.0, -2.0,  0.0),              # p7:  Gentle descent (2G push-down)
+    5:  ( 0.0,  1.5,  0.0),              # p6:  Gentle climb (1.5G — was 3G,
+                                          #      unsustainable induced drag)
+    6:  ( 0.0,  0.5,  0.0),              # p7:  Gentle descent (0.5G — was -2G,
+                                          #      too aggressive for energy mgmt)
     7:  ( 1.0,  2.0, -np.pi / 3.0),      # p8:  Accelerating right turn
     8:  ( 1.0,  2.0,  np.pi / 3.0),      # p9:  Accelerating left turn
 }
