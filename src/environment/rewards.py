@@ -87,6 +87,10 @@ class RewardConfig:
     energy_ref_alt: float = 3000.0            # reference altitude (m) for energy normalisation
     energy_ref_spd: float = 200.0             # reference speed (m/s) for energy normalisation
 
+    # Action smoothness / jerk penalty (2026-06-25)
+    action_rate_weight: float = 0.5           # penalty for large action-to-action changes
+    action_rate_discrete_penalty: float = 2.0 # penalty for switching discrete actions too fast
+
 
 # ─── Attacker reward components ────────────────────────────────────────────
 
@@ -288,3 +292,33 @@ def reward_energy_conservation(
     if es_ratio > 0.7:
         return cfg.energy_weight * es_ratio * dt
     return 0.0
+
+
+def reward_action_smoothness(
+    prev_action: tuple, curr_action: tuple, dt: float, cfg: RewardConfig,
+    is_discrete: bool = False,
+) -> float:
+    """Penalise jerky / high-frequency action switching.
+
+    For continuous actions (n_x, n_n, mu): penalises the L2 norm of the
+    action delta, encouraging the agent to make smooth, gradual adjustments
+    rather than thrashing the controls every 0.1 s.
+
+    For discrete actions: penalises any switch at all — the agent should
+    commit to macro-actions and hold them for the full hold time.
+
+    This is the RL equivalent of "pilot smoothness": real pilots don't
+    jerk the stick at 10 Hz; they make deliberate, sustained inputs.
+    """
+    if is_discrete:
+        # Discrete: any change = penalty (macro-action commitment)
+        if prev_action is not None and prev_action != curr_action:
+            return -cfg.action_rate_discrete_penalty * dt
+        return 0.0
+
+    # Continuous: L2 norm of action delta
+    if prev_action is None:
+        return 0.0
+    delta = np.array(curr_action) - np.array(prev_action)
+    jerk = float(np.sqrt(np.sum(delta ** 2)))
+    return -cfg.action_rate_weight * jerk * dt
