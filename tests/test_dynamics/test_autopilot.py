@@ -110,10 +110,13 @@ class TestAileronChannel:
         assert ail < 0.0  # negative to roll left
 
     def test_already_banked_zero_aileron(self, autopilot, dt):
-        """When already at target roll, aileron should be near zero."""
+        """When already at target roll, aileron should be near zero.
+
+        mu = -0.5 rad (BFM: right bank).  JSBSim equivalent = +0.5 rad.
+        """
         thr, elev, ail, rud = autopilot.step(
             0.0, 1.0, -0.5, dt,
-            n_z_g=-1.0, roll_rad=-0.5,  # already at -0.5 rad
+            n_z_g=-1.0, roll_rad=0.5,  # JSBSim: 0.5 rad right bank = target
             airspeed_mps=200.0, beta_deg=0.0,
         )
         assert abs(ail) < 0.2

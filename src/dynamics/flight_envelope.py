@@ -125,7 +125,12 @@ class FlightEnvelope:
         n_x_sm, n_n_sm = self._smooth_g(n_x_cmd, n_n_cmd, dt)
 
         # 4.  Roll P-controller with rate limiting  ─────────────────────────
-        mu_cmd = self._roll_step(target_mu, current_roll_rad, dt)
+        # _roll_step works entirely in JSBSim convention (positive = right).
+        # Negate target_mu from BFM (positive = left) → JSBSim, then negate
+        # the output for the BFMAutopilot which also works in BFM convention.
+        target_mu_jsbsim = -target_mu
+        mu_cmd_jsbsim = self._roll_step(target_mu_jsbsim, current_roll_rad, dt)
+        mu_cmd = -mu_cmd_jsbsim  # back to BFM convention for autopilot
 
         # 5.  GPWS override  (hard safety — runs LAST to guarantee pull-up) ─
         n_n_sm, mu_cmd = self._apply_gpws(n_n_sm, mu_cmd, alt_m, vz_mps,
@@ -175,7 +180,13 @@ class FlightEnvelope:
         return self._n_x_sm, self._n_n_sm
 
     def _roll_step(self, target_mu: float, current_roll: float, dt: float) -> float:
-        """P-controller for roll angle with hard rate limiting."""
+        """P-controller for roll angle with hard rate limiting.
+
+        All computation is done in the aircraft-native JSBSim convention
+        (positive = right bank).  The caller (:meth:`step`) is responsible
+        for the BFM ↔ JSBSim convention bridge before passing the result
+        to the autopilot.
+        """
         error = target_mu - current_roll
         error = (error + np.pi) % (2 * np.pi) - np.pi  # wrap to [-π, π]
 
@@ -184,7 +195,11 @@ class FlightEnvelope:
             -self.cfg.max_roll_rate,
             self.cfg.max_roll_rate,
         )
-        return float(current_roll + roll_rate * dt)
+        raw_output = float(current_roll + roll_rate * dt)
+        # Wrap to [-pi, pi] — keeps the angle bounded even when the aircraft
+        # rolls through multiple revolutions (cosmetic; the PID uses the
+        # wrapped error, so the control action is identical either way).
+        return float((raw_output + np.pi) % (2 * np.pi) - np.pi)
 
     def _apply_gpws(
         self, n_n: float, mu: float, alt_m: float, vz_mps: float,
