@@ -293,6 +293,7 @@ def test_bfm_actions():
             n_x_e, n_n_e, mu_e, dt,
             n_z_g=ps["n_z_g"], roll_rad=roll_rad,
             airspeed_mps=ps["airspeed_mps"], beta_deg=ps["beta_deg"],
+            q_rps=ps["q_rps"],
         )
         return (thr, elev, ail, rud)
 

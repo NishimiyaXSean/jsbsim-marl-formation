@@ -57,7 +57,11 @@ class TrimSchedule:
     """
 
     ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured)
-    ref_elevator: float = -0.0492  # Phase 1 measured trim at 3000 m / 400 kts
+    # Recalibrated 2026-06-25: original -0.0492 was ~correct per 1/V^2 fit
+    # (350 kts level trim ≈ -0.065). Boosted to -0.055 for a modest
+    # nose-up bias that the PID can trim against with positive elevator,
+    # avoiding the region where negative saturation causes windup.
+    ref_elevator: float = -0.0550
     ref_throttle: float = 0.80
     min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
 
@@ -182,10 +186,13 @@ class GainScheduler:
 
     # ── Speed LUT: reference points for 1/V² interpolation ────────────
     ref_speed_mps: float = 206.0     # calibration point (400 kts)
-    kp_ref: float = 0.18             # stable kp at reference speed
+    # Porpoising fix (2026-06-25): kp_ref halved from 0.18 → 0.09.
+    # At 0.18 the Nz channel was under-damped, causing σ=1.55G oscillation
+    # during step commands (see scripts/verify_autopilot_channels.py).
+    kp_ref: float = 0.09             # halved from 0.18 for critical damping
     kd_ref: float = 0.025            # stable kd at reference speed
-    kp_min: float = 0.08             # floor at V_max (avoid vanishing gain)
-    kp_max: float = 0.30             # ceiling at V_min (avoid instability)
+    kp_min: float = 0.04             # halved from 0.08
+    kp_max: float = 0.15             # halved from 0.30
     kd_min: float = 0.010
     kd_max: float = 0.040
 
@@ -228,11 +235,18 @@ class BFMAutopilotConfig:
 
     # ── Nz (elevator) channel ─────────────────────────────────────────
     # JSBSim inner G-load PID: kp=0.3.  Keep outer kp ≤ 0.18 (0.6× margin).
+    # NOTE: When GainScheduler is active, kp/ki/kd are overridden at runtime.
     nz_kp: float = 0.18      # hold at Phase 2 (stable response)
     nz_ki: float = 0.05      # 2.5x from 0.02 — kill steady-state G error
     nz_kd: float = 0.025     # 2x from 0.012 — dampen turn-induced pitch jitter
-    nz_integral_min: float = -0.4
-    nz_integral_max: float = 0.4
+    # Q-damping gain (2026-06-25): inner-loop pitch-rate feedback.
+    # Positive Kq = nose-up rate → elevator push-down, damping the rotation.
+    # Tuned for F-16 at 180–350 m/s: provides critical damping without
+    # fighting the outer Nz loop.
+    nz_kq: float = 0.15
+    # Integral clamping tightened from ±0.4 → ±0.3 (anti-windup, 2026-06-25).
+    nz_integral_min: float = -0.3
+    nz_integral_max: float = 0.3
 
     # ── Roll (aileron) channel ────────────────────────────────────────
     # JSBSim inner roll-rate PID: kp=3.0.  Keep outer kp ≤ 1.5 (0.5× margin).
@@ -310,6 +324,13 @@ class BFMAutopilot:
         # Throttle channel has memory: where we want the speed to be
         self._target_speed_mps: Optional[float] = None
 
+        # Q-damping gain (inner-loop pitch-rate feedback, 2026-06-25)
+        self._kq = cfg.nz_kq
+
+        # Command pre-filter state (low-pass on target_nz to avoid
+        # step shocks that cause integral windup, 2026-06-25)
+        self._filtered_target_nz: Optional[float] = None
+
         # Alpha / G-limiter constants
         self._max_alpha_deg = 25.0
         self._max_nz_g = 9.0
@@ -329,6 +350,7 @@ class BFMAutopilot:
         self._speed_pid.reset()
         self._beta_pid.reset()
         self._target_speed_mps = initial_speed_mps
+        self._filtered_target_nz = None
 
     def step(
         self,
@@ -342,6 +364,7 @@ class BFMAutopilot:
         airspeed_mps: float,
         beta_deg: float,
         alpha_deg: float = 0.0,
+        q_rps: float = 0.0,
     ) -> tuple[float, float, float, float]:
         """One autopilot iteration.
 
@@ -358,6 +381,8 @@ class BFMAutopilot:
             beta_deg:      Sideslip angle (deg).  JSBSim ``aero/beta-deg``.
             alpha_deg:     Angle of attack (deg).  JSBSim ``aero/alpha-deg``.
                            Used for alpha limiter (Phase 3).
+            q_rps:         Body-Y pitch rate (rad/s).  JSBSim ``velocities/q-rad_sec``.
+                           Used for inner-loop Q-damping (2026-06-25).
 
         Returns:
             ``(throttle, elevator, aileron, rudder)`` — all in [-1, 1].
@@ -366,10 +391,22 @@ class BFMAutopilot:
         # 1. Dynamic trim: 1/V² speed-scaling from calibrated reference
         elevator_trim = self._trim.get_elevator_trim(airspeed_mps)
 
-        # 2. Target: BFM n_n → body-Z, with bank feedforward
+        # 2. Target: BFM n_n → body-Z, with bank feedforward + pre-filter
         cos_roll = math.cos(abs(roll_rad))
         bank_extra_g = (1.0 / max(cos_roll, 0.1)) - 1.0
-        target_n_z_g = -(n_n + bank_extra_g)
+        raw_target = -(n_n + bank_extra_g)
+
+        # Command pre-filter (2026-06-25): first-order low-pass prevents
+        # square-wave step shocks from slamming the PID with instantaneous
+        # large errors that cause integral windup and porpoising.
+        # tau ~ dt / (1 - 0.85) = 0.017 / 0.15 ~ 0.11 s smoothing at 60 Hz.
+        if self._filtered_target_nz is None:
+            self._filtered_target_nz = raw_target
+        else:
+            alpha_lpf = 0.15
+            self._filtered_target_nz = ((1.0 - alpha_lpf) * self._filtered_target_nz
+                                        + alpha_lpf * raw_target)
+        target_n_z_g = self._filtered_target_nz
 
         # 3. Gain scheduling (Phase 3.5): adapt Nz gains to speed + target
         if self._scheduler is not None:
@@ -379,9 +416,53 @@ class BFMAutopilot:
             self._nz_pid.ki = ki_s
             self._nz_pid.kd = kd_s
 
-        # 4. Error and PID
+        # 4. Error
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
-        elevator = elevator_trim - self._nz_pid.step(nz_error, dt)
+
+        # 5. Derivative on Nz error (computed BEFORE integral update
+        #    so the D-term reflects the raw error rate of change)
+        derivative = 0.0
+        if self._nz_pid._prev_error is not None and dt > 1e-8:
+            derivative = (nz_error - self._nz_pid._prev_error) / dt
+        self._nz_pid._prev_error = nz_error
+
+        # 6. Q-damping (inner-loop pitch-rate feedback, 2026-06-25)
+        q_damping = self._kq * q_rps
+
+        # 7. Assemble PID output and elevator with back-calculation
+        #    anti-windup (2026-06-25).
+        #
+        #    First compute the full output using the CURRENT integral.
+        #    Then clip the elevator.  If it saturates, solve for the
+        #    integral that would put the elevator exactly at the limit.
+        #    This is the gold-standard "back-calculation" method and
+        #    avoids the chicken-and-egg problem of predicting saturation.
+        pid_out = (self._nz_pid.kp * nz_error
+                   + self._nz_pid.ki * self._nz_pid._integral
+                   + self._nz_pid.kd * derivative
+                   + q_damping)
+        elev_unclipped = elevator_trim - pid_out
+        elevator = float(np.clip(elev_unclipped, -1.0, 1.0))
+
+        if abs(elevator - elev_unclipped) > 1e-8:
+            # Saturation occurred.  Back-calculate integral so that the
+            # controller output is consistent with the achievable limit.
+            # elevator_limit = elevator_trim - (kp*e + ki*integral + kd*de + kq*q)
+            # → ki*integral = elevator_trim - elevator_limit - kp*e - kd*de - kq*q
+            if abs(self._nz_pid.ki) > 1e-8:
+                integral_limit = (elevator_trim - elevator
+                                  - self._nz_pid.kp * nz_error
+                                  - self._nz_pid.kd * derivative
+                                  - q_damping) / self._nz_pid.ki
+                self._nz_pid._integral = float(np.clip(
+                    integral_limit,
+                    self._nz_pid.integral_min, self._nz_pid.integral_max))
+        else:
+            # Not saturated — normal integral update with hard clamp
+            self._nz_pid._integral += nz_error * dt
+            self._nz_pid._integral = float(np.clip(
+                self._nz_pid._integral,
+                self._nz_pid.integral_min, self._nz_pid.integral_max))
 
         # ── Alpha / G-limiter (Phase 3: last safety net) ─────────────
         # Overrides PID output when limits are violated.  The JSBSim
