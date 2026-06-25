@@ -338,6 +338,7 @@ def main():
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
 
+        envelope.reset()  # prevent state leakage between actions (2026-06-25)
         r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
         all_results.append(r)
 

@@ -196,8 +196,11 @@ class GainScheduler:
     kd_max: float = 0.040
 
     # ── Target-Nz boost for integral ──────────────────────────────────
-    ki_base: float = 0.08            # baseline integral — moderate trim-bias correction
-    ki_boost: float = 0.14           # boosted integral for large-G commands
+    # 2026-06-25: ki_base 0.08→0.12 to eliminate 0.39G steady-state
+    # offset in level flight.  With the back-calculation anti-windup
+    # protecting against saturation, we can safely use a higher base ki.
+    ki_base: float = 0.12            # boosted from 0.08 for trim-bias correction
+    ki_boost: float = 0.16           # boosted from 0.14
     nz_boost_threshold: float = 1.5  # |target_nz - 1.0| above this → begin boost
     nz_boost_slope: float = 2.0      # tanh slope for smooth transition
 
@@ -249,9 +252,13 @@ class BFMAutopilotConfig:
 
     # ── Roll (aileron) channel ────────────────────────────────────────
     # JSBSim inner roll-rate PID: kp=3.0.  Keep outer kp ≤ 1.5 (0.5× margin).
-    roll_kp: float = 1.5     # hold at Phase 2 (overshoot acceptable)
-    roll_ki: float = 0.10    # 2x from 0.05 — push through 10° bank shortfall
-    roll_kd: float = 0.10    # slight bump from 0.08 — dampen higher ki
+    # 2026-06-25: roll inertia overshoot fix — doubled kp (1.5→3.0) because
+    # at small errors (~1°) the original kp produced negligible aileron
+    # (<0.04), unable to stop the aircraft's roll momentum past 60° target.
+    # Also boosted ki for faster steady-state convergence.
+    roll_kp: float = 3.0     # doubled from 1.5 for roll momentum arrest
+    roll_ki: float = 0.15    # boosted from 0.10
+    roll_kd: float = 0.15    # boosted from 0.10 for better rate damping
     roll_integral_min: float = -0.4
     roll_integral_max: float = 0.4
 
