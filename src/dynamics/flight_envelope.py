@@ -55,8 +55,8 @@ class EnvelopeConfig:
     # aircraft drifts from the reference altitude.  Prevents the excess-thrust
     # climb that occurs when n_n=1.0G is tracked perfectly but the throttle
     # channel cannot fully compensate for the thrust surplus.
-    alt_hold_kp: float = 0.0002  # ~0.2G correction per 1000m altitude error (gentle)
-    alt_hold_max_correction: float = 0.3  # max G correction from altitude hold
+    alt_hold_kp: float = 0.0003  # ~0.3G correction per 1000m altitude error
+    alt_hold_max_correction: float = 0.2  # max G correction (gentle)
 
     # Roll control
     max_roll_rate: float = np.pi           # 180 deg/s
@@ -231,11 +231,14 @@ class FlightEnvelope:
     def _apply_altitude_hold(self, n_n: float, alt_m: float) -> float:
         """Mild altitude-hold correction on the Nz command (2026-06-25).
 
-        Without altitude feedback, the BFMAutopilot's Nz+speed tracking
-        converges to a steady climb whenever the throttle trim provides
-        excess thrust.  A gentle P-correction based on altitude error
-        nudges the Nz command to maintain the reference altitude.
+        Only activates when the raw Nz command is near 1.0G (level-flight
+        intent).  During climbs, descents, or turns the altitude hold
+        stays quiet to avoid fighting the manoeuvre.
         """
+        # Only correct when level-flight intent (n_n within 0.3G of 1.0)
+        if abs(n_n - 1.0) > 0.3:
+            return n_n
+
         alt_error = self._ref_alt_m - alt_m  # + when below target (need climb)
         correction = alt_error * self.cfg.alt_hold_kp
         correction = float(np.clip(correction, -self.cfg.alt_hold_max_correction,
