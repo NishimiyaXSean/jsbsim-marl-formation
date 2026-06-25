@@ -83,12 +83,12 @@ def _compute_expected_g(n_n: float, mu: float) -> float:
     return n_n + bank_extra
 
 
-def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
-    """Run G-tracking, roll-tracking, and oscillation checks on last STEADY_STATE_S.
+def _check_steady_state(r: dict, use_fc: bool = False) -> tuple[bool, str, dict]:
+    """Run G-tracking (or altitude-hold), roll-tracking, and oscillation checks.
 
-    Oscillation is measured on the *residual* after subtracting the mean — this
-    removes the steady pitch rate needed for a coordinated turn (which is
-    non-zero by design) and only flags true jitter / porpoising.
+    For FlightController actions (use_fc=True), the primary metric is altitude
+    deviation rather than G-tracking, since FC maintains altitude directly rather
+    than tracking an Nz target.
     """
     n_x_raw, n_n_raw, mu_raw = PURSUIT_ACTIONS[r["action"]]
 
@@ -101,17 +101,23 @@ def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
     roll_ss = r["roll"][-n_ss:]
     q_ss = r["q"][-n_ss:]
     p_ss = r["p"][-n_ss:]
+    alt_ss = r["alt"][-n_ss:]
+    spd_ss = r["spd"][-n_ss:]
 
-    # G-tracking: compare mean perceived G against the FILTERED target
-    # (FlightEnvelope may have corrected n_n for altitude hold, etc.)
-    filt_nn_ss = r["filt_nn"][-n_ss:] if "filt_nn" in r else None
-    if filt_nn_ss is not None and len(filt_nn_ss) > 0:
-        # Use the envelope-corrected target, with bank compensation
-        expected_g = float(np.mean(filt_nn_ss)) + (
-            (1.0 / max(np.cos(abs(mu_raw)), 0.1) - 1.0) if abs(mu_raw) > 0.01 else 0.0)
+    # ── Mode-specific primary metric ──────────────────────────────────
+    if use_fc:
+        # FlightController: altitude hold + speed hold
+        alt_error = abs(float(np.mean(alt_ss)) - (INIT_ALT_FT * 0.3048))
+        spd_error = abs(float(np.mean(spd_ss)) - kts_to_mps(INIT_SPEED_KTS))
     else:
-        expected_g = _compute_expected_g(n_n_raw, mu_raw)
-    g_error = abs(float(np.mean(nz_ss)) - expected_g)
+        # BFMAutopilot: G-tracking against filtered target
+        filt_nn_ss = r["filt_nn"][-n_ss:] if "filt_nn" in r else None
+        if filt_nn_ss is not None and len(filt_nn_ss) > 0:
+            expected_g = float(np.mean(filt_nn_ss)) + (
+                (1.0 / max(np.cos(abs(mu_raw)), 0.1) - 1.0) if abs(mu_raw) > 0.01 else 0.0)
+        else:
+            expected_g = _compute_expected_g(n_n_raw, mu_raw)
+        g_error = abs(float(np.mean(nz_ss)) - expected_g)
 
     # Roll-tracking: compare mean |roll| against |mu| (only for banked actions)
     target_roll_deg = abs(np.rad2deg(mu_raw))
@@ -121,23 +127,36 @@ def _check_steady_state(r: dict) -> tuple[bool, str, dict]:
         roll_error = 0.0
 
     # Oscillation: residual std after removing the mean (detrended)
-    # During a steady turn, q is non-zero by design (turn rate × sin(bank)).
-    # We flag only the high-frequency jitter around that steady value.
     q_residual = q_ss - np.mean(q_ss)
     p_residual = p_ss - np.mean(p_ss)
     std_q = float(np.std(q_residual))
     std_p = float(np.std(p_residual))
 
     metrics = {
-        "expected_g": expected_g, "g_error": g_error,
         "target_roll_deg": target_roll_deg, "roll_error": roll_error,
         "std_q": std_q, "std_p": std_p,
-        "mean_q": float(np.mean(q_ss)),  # for diagnostics
+        "mean_q": float(np.mean(q_ss)),
     }
 
     reasons = []
-    if g_error > G_TRACKING_TOLERANCE:
-        reasons.append(f"G-err={g_error:.3f}>{G_TRACKING_TOLERANCE}")
+
+    if use_fc:
+        # Altitude-hold criteria (FlightController mode)
+        ALT_HOLD_TOLERANCE = 30.0  # m
+        SPD_HOLD_TOLERANCE = 10.0  # m/s (~20 kts)
+        metrics["alt_error"] = alt_error
+        metrics["spd_error"] = spd_error
+        if alt_error > ALT_HOLD_TOLERANCE:
+            reasons.append(f"Alt-err={alt_error:.1f}m>{ALT_HOLD_TOLERANCE}m")
+        if spd_error > SPD_HOLD_TOLERANCE:
+            reasons.append(f"Spd-err={spd_error:.1f}m/s>{SPD_HOLD_TOLERANCE}m/s")
+    else:
+        # G-tracking criteria (BFMAutopilot mode)
+        metrics["expected_g"] = expected_g
+        metrics["g_error"] = g_error
+        if g_error > G_TRACKING_TOLERANCE:
+            reasons.append(f"G-err={g_error:.3f}>{G_TRACKING_TOLERANCE}")
+
     if target_roll_deg > 0.5 and roll_error > ROLL_TRACKING_TOLERANCE:
         reasons.append(f"Roll-err={roll_error:.1f}>{ROLL_TRACKING_TOLERANCE}")
     if std_q > OSCILLATION_MAX_STD_Q:
@@ -459,7 +478,7 @@ def main():
             envelope_failures.append(action_idx)
 
         # ── Steady-state tracking + oscillation check ──────────────────
-        ss_ok, ss_reason, ss_metrics = _check_steady_state(r)
+        ss_ok, ss_reason, ss_metrics = _check_steady_state(r, use_fc=use_fc)
         if not ss_ok:
             tracking_failures.append((action_idx, ss_reason))
 
@@ -472,16 +491,22 @@ def main():
             status_bits.append("TRACK")
         status = " | ".join(status_bits) if status_bits else "OK"
 
-        # Envelope clipping: nn_clip_frac * 100 = % of steps where G was clipped
-        clip_str = f"{r['nn_clip_frac']*100:3.0f}%G" if r['nn_clip_frac'] > 0.05 else "clean"
-
-        print(f"    {name:25s} {ss_metrics['g_error']:6.3f} "
-              f"{ss_metrics['roll_error']:6.1f} "
-              f"{ss_metrics['std_q']:7.4f} {ss_metrics['std_p']:7.4f} "
-              f"{clip_str:>8s}  [{status}]")
+        # Print mode-specific metrics
+        mode_tag = "[FC]" if use_fc else ""
+        if use_fc:
+            alt_e = ss_metrics.get("alt_error", 0)
+            spd_e = ss_metrics.get("spd_error", 0)
+            print(f"    {name:25s} {mode_tag} AltErr={alt_e:5.1f}m SpdErr={spd_e:5.1f}m/s "
+                  f"stq={ss_metrics['std_q']:.4f} stp={ss_metrics['std_p']:.4f}  [{status}]")
+        else:
+            clip_str = f"{r['nn_clip_frac']*100:3.0f}%G" if r['nn_clip_frac'] > 0.05 else "clean"
+            print(f"    {name:25s} {mode_tag} G_err={ss_metrics.get('g_error', 0):6.3f} "
+                  f"R_err={ss_metrics['roll_error']:6.1f} "
+                  f"stq={ss_metrics['std_q']:.4f} stp={ss_metrics['std_p']:.4f} "
+                  f"{clip_str:>8s}  [{status}]")
         if not ss_ok:
             print(f"      FAIL: {ss_reason}")
-        if r['nn_clip_frac'] > 0.05:
+        if not use_fc and r['nn_clip_frac'] > 0.05:
             nn_mean = float(np.mean(r['filt_nn']))
             print(f"      Envelope G-clip: raw={n_n_raw:.1f}G → filt_mean={nn_mean:.2f}G "
                   f"({r['nn_clip_frac']*100:.0f}% of steps clipped)")
@@ -589,7 +614,7 @@ def main():
         r = _run_action(ac, ap, envelope, action_idx, 10.0)
         env_ok = (r["alpha_max"] < 28.0 and r["nz_max"] < 9.5
                   and r["alt_min"] > 500.0 and r["alt_max"] < 6000.0)
-        ss_ok, ss_reason, ss_metrics = _check_steady_state(r)
+        ss_ok, ss_reason, ss_metrics = _check_steady_state(r, use_fc=use_fc)
         ok = env_ok and ss_ok
         print(f"  Action {action_idx} ({describe_pursuit_action(action_idx)}): "
               f"G_err={ss_metrics['g_error']:.3f}  "
