@@ -328,16 +328,27 @@ def main():
     envelope_failures = []
     tracking_failures = []
 
+    init_alt_m = INIT_ALT_FT * 0.3048  # 9842 ft -> 3000 m
+
     for action_idx in sorted(PURSUIT_ACTIONS.keys()):
         ap = BFMAutopilot(cfg, trim=trim, scheduler=scheduler)
         ac = Aircraft()
         ac.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=INIT_ALT_FT,
                  heading_deg=INIT_HEADING_DEG, speed_kts=INIT_SPEED_KTS)
-        # Warmup: 3s at 1G (extended from 1s for better PID convergence)
+        # Warmup: 3s at 1G through FlightEnvelope (2026-06-25 fix).
+        # Previously the raw n_n=1.0 step command slammed the PID directly,
+        # causing ~1Hz elevator oscillation that ratcheted pitch from 0->3.6deg
+        # and started an uncontrolled climb.  The envelope's G-smoothing
+        # (tau=0.15s) prevents this transient shock.
+        envelope.reset(ref_alt_m=init_alt_m)
         for _ in range(180):
             s = ac.state
+            nx, nn, mu = envelope.step(0.0, 1.0, 0.0,
+                speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
+                vz_mps=s["h_dot_fps"] * 0.3048,
+                current_roll_rad=np.deg2rad(s["roll_deg"]), dt=DT)
             thr, elev, ail, rud = ap.step(
-                0.0, 1.0, 0.0, DT,
+                nx, nn, mu, DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
                 alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
@@ -345,9 +356,7 @@ def main():
             ac.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             ac.run()
 
-        # Prevent state leakage + set altitude-hold reference
-        init_alt_m = INIT_ALT_FT * 0.3048  # 9842 ft -> 3000 m
-        envelope.reset(ref_alt_m=init_alt_m)
+        # Reset envelope between actions (clears G-smoothing state)
         r = _run_action(ac, ap, envelope, action_idx, ACTION_HOLD_S)
         all_results.append(r)
 
