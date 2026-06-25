@@ -172,6 +172,7 @@ def run_autopilot_verification():
             airspeed_mps=s["airspeed_mps"],
             beta_deg=s["beta_deg"],
             alpha_deg=s["alpha_deg"],
+            q_rps=s["q_rps"],
         )
 
         # --- Apply to aircraft -----------------------------------------

@@ -285,7 +285,7 @@ class BFMPursuitEnv(gym.Env):
                 0.0, 1.0, 0.0, PHYSICS_DT,
                 n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
                 airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"],
+                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
             )
             self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
             self.target_ac.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
