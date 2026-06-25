@@ -57,9 +57,10 @@ class TrimSchedule:
     """
 
     ref_speed_mps: float = 206.0   # calibrated at 400 kts (Phase 1 measured)
-    # Preserving the Phase 1 calibrated value (verified 2026-06-25:
-    # the 1/V^2 fit is correct — trim was NOT the root cause of the
-    # step-response issues; those were PID-tuning problems now fixed).
+    # Phase 1 calibrated value.  With the boosted Ki (0.18) and relaxed
+    # integral clamp (±0.5), the PID now has enough authority to cover
+    # the ~0.04 elevator-unit trim gap without needing the trim schedule
+    # to be perfect.  Keeping the calibrated reference avoids over-trim.
     ref_elevator: float = -0.0492
     ref_throttle: float = 0.80
     min_speed_mps: float = 80.0   # below this, clamp (avoid division by zero)
@@ -196,11 +197,13 @@ class GainScheduler:
     kd_max: float = 0.040
 
     # ── Target-Nz boost for integral ──────────────────────────────────
-    # 2026-06-25: ki_base 0.08→0.12 to eliminate 0.39G steady-state
-    # offset in level flight.  With the back-calculation anti-windup
-    # protecting against saturation, we can safely use a higher base ki.
-    ki_base: float = 0.12            # boosted from 0.08 for trim-bias correction
-    ki_boost: float = 0.16           # boosted from 0.14
+    # 2026-06-25: ki_base 0.08→0.18 — tripled to give the integral enough
+    # authority to overcome gyroscopic precession (left-turn G deficit)
+    # and steady-state trim offsets.  The back-calculation anti-windup
+    # prevents saturation, and the relaxed integral clamp (±0.8) gives
+    # room for the integral to build meaningful correction.
+    ki_base: float = 0.18            # boosted from 0.12 — asymmetric force fighting
+    ki_boost: float = 0.22           # boosted from 0.16
     nz_boost_threshold: float = 1.5  # |target_nz - 1.0| above this → begin boost
     nz_boost_slope: float = 2.0      # tanh slope for smooth transition
 
@@ -246,9 +249,12 @@ class BFMAutopilotConfig:
     # Tuned for F-16 at 180–350 m/s: provides critical damping without
     # fighting the outer Nz loop.
     nz_kq: float = 0.15
-    # Integral clamping tightened from ±0.4 → ±0.3 (anti-windup, 2026-06-25).
-    nz_integral_min: float = -0.3
-    nz_integral_max: float = 0.3
+    # 2026-06-25: balanced from ±0.3 → ±0.5.  ±0.3 was too tight
+    # (couldn't overcome 0.04elev trim offset + gyroscopic precession).
+    # ±0.8 was too loose (caused transient overshoot in level flight).
+    # ±0.5 gives 0.18*0.5=0.09elev authority — enough for both.
+    nz_integral_min: float = -0.5
+    nz_integral_max: float = 0.5
 
     # ── Roll (aileron) channel ────────────────────────────────────────
     # JSBSim inner roll-rate PID: kp=3.0.  Keep outer kp ≤ 1.5 (0.5× margin).
@@ -421,6 +427,16 @@ class BFMAutopilot:
             self._nz_pid.kp = kp_s
             self._nz_pid.ki = ki_s
             self._nz_pid.kd = kd_s
+
+        # 3b. Dynamic integral clamp (2026-06-25): scale with target G.
+        #     More aggressive manoeuvres need more integral authority to
+        #     fight gyroscopic precession and asymmetric aero forces, but
+        #     level flight needs tight clamping to avoid overshoot.
+        #     clamp = 0.5 * min(|target_nz|, 2.0)
+        #     → Level (1G): ±0.5   Turn (3G): ±1.0   Climb (1.5G): ±0.75
+        dyn_clamp = 0.5 * min(abs(target_n_z_g), 2.0)
+        self._nz_pid.integral_min = -dyn_clamp
+        self._nz_pid.integral_max = dyn_clamp
 
         # 4. Error
         nz_error = n_z_g - target_n_z_g   # + → need more negative n_z (more pull)
