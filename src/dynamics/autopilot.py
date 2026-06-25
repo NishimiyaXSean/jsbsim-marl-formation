@@ -320,9 +320,12 @@ class BFMAutopilot:
             output_min=-1.0, output_max=1.0,
             integral_min=cfg.roll_integral_min, integral_max=cfg.roll_integral_max,
         )
+        # Speed PID: symmetric output around zero allows reducing throttle
+        # BELOW the trim bias.  output_min=-0.5 lets the PID cut up to 50%
+        # throttle when speed exceeds target (was 0.0 — could only increase).
         self._speed_pid = PIDController(
             kp=cfg.speed_kp, ki=cfg.speed_ki, kd=cfg.speed_kd,
-            output_min=0.0, output_max=1.0,
+            output_min=-0.5, output_max=0.2,
             integral_min=cfg.speed_integral_min, integral_max=cfg.speed_integral_max,
         )
         self._beta_pid = PIDController(
