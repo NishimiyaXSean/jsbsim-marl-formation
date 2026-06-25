@@ -269,7 +269,7 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
         total_timesteps=total_steps,
         callback=callback,
         tb_log_name="phase1",
-        progress_bar=True,
+        progress_bar=False,
     )
 
     # ── Save ──────────────────────────────────────────────────────────
