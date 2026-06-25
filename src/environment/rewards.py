@@ -72,6 +72,21 @@ class RewardConfig:
     timeout_attacker_penalty: float = 100.0   # light penalty — motivates engagement
     timeout_evader_bonus: float = 0.0
 
+    # ── Air Combat Geometry shaping (2026-06-25) ──────────────────────
+    # ATA Gaussian kernel: smooth reward centred on boresight
+    ata_gaussian_sigma: float = 15.0          # degrees — narrower = more precise tracking
+    ata_gaussian_weight: float = 3.0          # scale factor for Gaussian reward
+
+    # Closure rate gating: prevent head-on suicide intercepts
+    closure_gate_dist: float = 1000.0         # m — below this, penalise closure
+    closure_gate_vc_threshold: float = 50.0   # m/s — above this closing speed triggers penalty
+    closure_gate_weight: float = 1.5          # penalty scale
+
+    # Energy conservation: reward specific energy maintenance
+    energy_weight: float = 0.001              # small per-step reward for energy management
+    energy_ref_alt: float = 3000.0            # reference altitude (m) for energy normalisation
+    energy_ref_spd: float = 200.0             # reference speed (m/s) for energy normalisation
+
 
 # ─── Attacker reward components ────────────────────────────────────────────
 
@@ -205,4 +220,71 @@ def reward_spoofing(cos_ata: float, dt: float, cfg: RewardConfig) -> float:
     """Penalty for being locked by attacker (ATA in forward hemisphere)."""
     if cos_ata > cfg.spoofing_threshold:
         return -(cos_ata ** 2) * cfg.spoofing_weight * dt
+    return 0.0
+
+
+# ─── Air Combat Geometry reward components (2026-06-25) ─────────────────────
+
+
+def reward_ata_gaussian(cos_ata: float, dt: float, cfg: RewardConfig) -> float:
+    """Gaussian-kernel reward for keeping the target in the boresight.
+
+    R_ATA = w * exp(-ATA² / (2*σ²)) * dt
+
+    where ATA = acos(cos_ata) in degrees and σ controls the width.
+    Narrower σ demands more precise nose-pointing; wider σ is more
+    forgiving and suitable for early training.
+
+    This replaces the linear cos_ata reward with a smooth kernel that
+    peaks at ATA=0° (perfect boresight alignment) and falls off
+    gracefully, avoiding the sharp gradient of linear rewards.
+    """
+    ata_deg = np.degrees(np.arccos(np.clip(cos_ata, -1.0, 1.0)))
+    sigma = cfg.ata_gaussian_sigma
+    return cfg.ata_gaussian_weight * np.exp(-0.5 * (ata_deg / sigma) ** 2) * dt
+
+
+def reward_closure_rate_gating(
+    dist_m: float, closing_speed_mps: float, dt: float, cfg: RewardConfig,
+) -> float:
+    """Penalise high closure rate at close range to prevent suicide intercepts.
+
+    When the pursuer is within *closure_gate_dist* and closing faster than
+    *closure_gate_vc_threshold*, a penalty proportional to the excess closure
+    rate is applied.  This teaches the agent to slow down and establish a
+    tail-chase (low Vc at close range) rather than simply charging head-on
+    for a high-speed intercept.
+
+    The penalty is gated: zero when far away or when already slow.
+    """
+    if dist_m < cfg.closure_gate_dist and closing_speed_mps > cfg.closure_gate_vc_threshold:
+        excess_vc = closing_speed_mps - cfg.closure_gate_vc_threshold
+        return -cfg.closure_gate_weight * (excess_vc / 100.0) * dt
+    return 0.0
+
+
+def reward_energy_conservation(
+    alt_m: float, airspeed_mps: float, dt: float, cfg: RewardConfig,
+) -> float:
+    """Small positive reward for maintaining specific energy (Es).
+
+    Es = h + V²/(2g)  (energy height)
+
+    The reward is proportional to how close the current Es is to a
+    reference value (3000 m + (200 m/s)² / (2*9.81) ≈ 5040 m energy height).
+    This gently encourages the agent to preserve altitude and airspeed,
+    enabling sustained manoeuvring rather than bleeding all energy in
+    a single turn.
+
+    The weight is intentionally very small (0.001) — this is a shaping
+    reward that should not dominate the tactical ATA/progress signals.
+    """
+    g = 9.81
+    es_current = alt_m + (airspeed_mps ** 2) / (2.0 * g)
+    es_reference = cfg.energy_ref_alt + (cfg.energy_ref_spd ** 2) / (2.0 * g)
+    # Normalise: 1.0 at reference Es, decays slowly away from it
+    es_ratio = np.clip(es_current / max(es_reference, 1.0), 0.0, 2.0)
+    # Small reward for staying above 70% of reference energy
+    if es_ratio > 0.7:
+        return cfg.energy_weight * es_ratio * dt
     return 0.0
