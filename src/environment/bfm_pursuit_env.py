@@ -68,7 +68,9 @@ LOW_ENERGY_PENALTY = 5.0
 ANTI_STALL_WINDOW = 30
 ANTI_STALL_MIN_VC = 15.0
 ANTI_STALL_MIN_DIST = 300.0
-ANTI_STALL_PENALTY = 200.0
+ANTI_STALL_PENALTY = 500.0         # doubled from 200 — stall MUST be feared
+ANTI_STALL_SPEED_WARN = 160.0      # below this speed, progressive warning penalty
+ANTI_STALL_SPEED_WARN_WEIGHT = 3.0 # per-step penalty when speed < threshold
 
 ZONE_DEATH_DIST_LO = 300.0
 ZONE_DEATH_DIST_HI = 800.0
@@ -452,6 +454,14 @@ class BFMPursuitEnv(gym.Env):
                 boost = REWARD_PROGRESS * delta_dist * 5.0
                 total_reward += boost
                 _r_terminal_boost += boost
+
+            # Progressive low-speed warning (2026-06-26): penalty ramps up
+            # as speed drops below ANTI_STALL_SPEED_WARN, giving the agent
+            # early feedback BEFORE the stall truncation fires.
+            _cur_spd = float(self.pursuer.state["airspeed_mps"])
+            if _cur_spd < ANTI_STALL_SPEED_WARN:
+                spd_deficit = (ANTI_STALL_SPEED_WARN - _cur_spd) / ANTI_STALL_SPEED_WARN
+                total_reward -= ANTI_STALL_SPEED_WARN_WEIGHT * spd_deficit * dt
 
             if not _energy_ok:
                 le_penalty = LOW_ENERGY_PENALTY * dt
