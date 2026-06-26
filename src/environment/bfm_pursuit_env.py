@@ -734,8 +734,10 @@ class BFMPursuitEnv(gym.Env):
             f.write("1,Name=Target\n1,Color=Blue\n")
             for fr in self._tacview_frames:
                 t = fr["time"]
+                # Write timestamp once per frame (Tacview spec: one #time per frame)
+                f.write(f"#{t:.2f}\n")
+                # ACMI T= format: Longitude|Latitude|Altitude|Roll|Pitch|Yaw
                 for obj_id, key in [(0, "pursuer"), (1, "target")]:
                     d = fr[key]
-                    f.write(f"#{t:.2f}\n")
-                    f.write(f"{obj_id},T={d['lat_deg']}|{d['lon_deg']}|{d['alt_m']:.1f}"
+                    f.write(f"{obj_id},T={d['lon_deg']}|{d['lat_deg']}|{d['alt_m']:.1f}"
                             f"|{d['roll_deg']:.1f}|{d['pitch_deg']:.1f}|{d['yaw_deg']:.1f}\n")

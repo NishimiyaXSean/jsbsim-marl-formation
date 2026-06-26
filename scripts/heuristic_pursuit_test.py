@@ -382,13 +382,14 @@ def _save_tacview(rec: dict) -> None:
         for i in range(0, len(t), 3):
             p_lat = ref_lat + p_n[i] / m_per_deg
             p_lon = ref_lon + p_e[i] / m_per_deg
+            # ACMI T= format: Longitude|Latitude|Altitude|Roll|Pitch|Yaw
             f.write(f"#{t[i]:.2f}\n")
-            f.write(f"0,T={p_lat:.6f}|{p_lon:.6f}|{rec['p_alt'][i]:.1f}"
+            f.write(f"0,T={p_lon:.6f}|{p_lat:.6f}|{rec['p_alt'][i]:.1f}"
                     f"|{rec['p_roll'][i]:.1f}|0.0|{rec['p_hdg'][i]:.1f}\n")
             # Target: straight East at constant speed
             t_lat = ref_lat
             t_lon = ref_lon + (kts_to_mps(TARGET_SPD_KTS) * t[i]) / m_per_deg
-            f.write(f"1,T={t_lat:.6f}|{t_lon:.6f}|{rec['t_alt'][i]:.1f}"
+            f.write(f"1,T={t_lon:.6f}|{t_lat:.6f}|{rec['t_alt'][i]:.1f}"
                     f"|0.0|0.0|{TARGET_HDG_DEG:.1f}\n")
 
     print(f"  Tacview saved → {path}")

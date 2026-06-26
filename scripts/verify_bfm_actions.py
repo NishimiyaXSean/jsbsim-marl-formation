@@ -354,7 +354,8 @@ def _save_tacview_single(r: dict, out_dir: str):
 
         for i in range(0, len(t), 5):  # downsample to 12 Hz
             f.write(f"#{t[i]:.2f}\n")
-            f.write(f"0,T={lat_vals[i]:.6f}|{lon_vals[i]:.6f}|{r['alt'][i]:.1f}"
+            # ACMI T= format: Longitude|Latitude|Altitude|Roll|Pitch|Yaw
+            f.write(f"0,T={lon_vals[i]:.6f}|{lat_vals[i]:.6f}|{r['alt'][i]:.1f}"
                     f"|{r['roll'][i]:.1f}|{0.0}|{r['hdg'][i]:.1f}\n")
 
     print(f"  Tacview → {path}")
