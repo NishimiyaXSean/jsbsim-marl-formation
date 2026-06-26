@@ -284,11 +284,9 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
     train_env = VecNormalize(train_env, norm_obs=False, norm_reward=True,
                               clip_reward=100.0)
 
+    # Raw eval env for callback (no VecEnv wrapping — callback does manual loops)
     eval_env = build_env(difficulty=0.15)
     eval_env = Monitor(eval_env)
-    eval_env = DummyVecEnv([lambda: eval_env])
-    eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=True,
-                             clip_reward=100.0)
 
     # ── Model ─────────────────────────────────────────────────────────
     policy_kwargs = dict(
