@@ -60,7 +60,7 @@ LOW_SPEED_THRESHOLD = 100.0
 REWARD_PROGRESS = 1.5              # boosted from 0.5 — stronger closing-distance signal
 REWARD_ATA = 8.0                   # boosted from 5.0 — nose-on-target is the priority
 REWARD_GROUND_WARNING = 2.0
-REWARD_SUCCESS = 3000.0            # boosted from 2000 — massive incentive to finish
+REWARD_SUCCESS = 5000.0            # overwhelming incentive — must dominate risk calculus
 REWARD_CRASH = -200.0
 REWARD_LOST_TARGET = -200.0
 REWARD_TIMEOUT = -500.0            # NEW — running out the clock is a failure
@@ -509,24 +509,25 @@ class BFMPursuitEnv(gym.Env):
                 total_reward -= le_penalty
                 _r_low_speed_penalty -= le_penalty
 
-            ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
+            # ── Distance gating (2026-06-26): staring from afar is useless ──
+            # ATA reward scales linearly with proximity: 100% at 0m, 0% at 3000m+
+            dist_factor = max(0.0, 1.0 - current_dist / 3000.0)
+
+            ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt * dist_factor
             total_reward += ata_r
             _r_ata += ata_r
 
             # Delta-ATA: potential-based reward (2026-06-26)
-            # reward = exp(-|ATA_cur|/30) - exp(-|ATA_prev|/30)
-            # Positive when ATA improves (narrows toward boresight)
             ata_deg_cur = float(np.degrees(np.arccos(np.clip(geo["cos_ata"], -1.0, 1.0))))
             if self._prev_ata_deg is not None:
                 pot_cur = np.exp(-ata_deg_cur / 30.0)
                 pot_prev = np.exp(-self._prev_ata_deg / 30.0)
-                delta_ata = REWARD_DELTA_ATA * (pot_cur - pot_prev) * dt
+                delta_ata = REWARD_DELTA_ATA * (pot_cur - pot_prev) * dt * dist_factor
                 total_reward += delta_ata
                 _r_ata += delta_ata
             self._prev_ata_deg = ata_deg_cur
 
             # Closure-rate reward (2026-06-26)
-            # Positive Vc = closing on target → reward
             closure_rate_ms = (self._prev_dist - current_dist) / dt if dt > 0 else 0.0
             if closure_rate_ms > 0:
                 total_reward += REWARD_CLOSURE_RATE * (closure_rate_ms / CLOSURE_RATE_NORM) * dt
@@ -537,10 +538,12 @@ class BFMPursuitEnv(gym.Env):
                 total_reward += vel_bonus
                 _r_ata += vel_bonus
 
-            time_ratio = self._step_counter / (CTRL_FREQ * MAX_EPISODE_TIME)
-            tp = -0.5 * time_ratio * dt
-            total_reward += tp
-            _r_time_pressure += tp
+            # ── Baseline bleed (2026-06-26): staring = bleeding ──
+            # Every second costs -1.0 regardless of distance.  To break even,
+            # the agent MUST get close enough for distance-gated ATA + progress
+            # to exceed this bleed rate.  Far-away loitering is a losing strategy.
+            total_reward -= 1.0 * dt
+            _r_time_pressure -= 1.0 * dt
 
             if a_pos[2] < 800.0:
                 gw = -REWARD_GROUND_WARNING * dt
