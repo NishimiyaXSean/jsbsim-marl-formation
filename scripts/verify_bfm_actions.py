@@ -344,18 +344,18 @@ def _save_tacview_single(r: dict, out_dir: str):
     lat_vals = ref_lat + n / m_per_deg_lat
     lon_vals = ref_lon + e / m_per_deg_lon
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8-sig") as f:
         f.write("FileType=text/acmi/tacview\n")
         f.write("FileVersion=2.2\n")
         f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
         f.write(f"# Action {action_idx}: {action_name} — 5s hold at 3000m/400kts\n")
-        f.write("0,Name=F-16\n")
-        f.write("0,Color=Red\n")
+        f.write("101,Name=F-16\n")
+        f.write("101,Color=Red\n")
 
         for i in range(0, len(t), 5):  # downsample to 12 Hz
             f.write(f"#{t[i]:.2f}\n")
             # ACMI T= format: Longitude|Latitude|Altitude|Roll|Pitch|Yaw
-            f.write(f"0,T={lon_vals[i]:.6f}|{lat_vals[i]:.6f}|{r['alt'][i]:.1f}"
+            f.write(f"101,T={lon_vals[i]:.6f}|{lat_vals[i]:.6f}|{r['alt'][i]:.1f}"
                     f"|{r['roll'][i]:.1f}|{0.0}|{r['hdg'][i]:.1f}\n")
 
     print(f"  Tacview → {path}")
