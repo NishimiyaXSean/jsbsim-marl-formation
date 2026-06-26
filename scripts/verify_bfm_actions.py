@@ -351,6 +351,7 @@ def _save_tacview_single(r: dict, out_dir: str):
         f.write(f"# Action {action_idx}: {action_name} — 5s hold at 3000m/400kts\n")
         f.write("101,Name=F-16\n")
         f.write("101,Color=Red\n")
+        f.write("101,Type=Air+Fighter\n")
 
         for i in range(0, len(t), 5):  # downsample to 12 Hz
             f.write(f"#{t[i]:.2f}\n")
