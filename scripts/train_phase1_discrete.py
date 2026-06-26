@@ -70,6 +70,9 @@ class Phase1Callback(BaseCallback):
     CONSECUTIVE_ADVANCE_REQUIRED = 1
     COLLAPSE_WIN_RATE = 0.15
 
+    # ── Periodic checkpointing ─────────────────────────────────────────
+    CHECKPOINT_INTERVAL = 200_000  # save model every N steps
+
     def __init__(self, eval_env, log_dir: str, total_steps: int,
                  train_env=None, verbose: int = 0):
         super().__init__(verbose)
@@ -114,6 +117,15 @@ class Phase1Callback(BaseCallback):
         # ── Periodic evaluation ────────────────────────────────────────
         if self.n_calls % EVAL_FREQ == 0 and self.n_calls > 0:
             self._evaluate_and_adjust()
+
+        # ── Periodic checkpointing ─────────────────────────────────────
+        if (self.num_timesteps % self.CHECKPOINT_INTERVAL == 0
+                and self.num_timesteps > 0):
+            ckpt_path = os.path.join(
+                self._log_dir, f"checkpoint_{self.num_timesteps:07d}_steps.zip")
+            self.model.save(ckpt_path)
+            if self.verbose > 0:
+                print(f"[Phase1] Checkpoint saved: {ckpt_path}")
 
         # ── Logging ────────────────────────────────────────────────────
         if self.n_calls % 10_000 == 0:
@@ -248,7 +260,7 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=0.03,  # boosted from 0.01 — more exploration to escape Decelerate-only
         vf_coef=0.5,
         max_grad_norm=0.5,
         policy_kwargs=policy_kwargs,
