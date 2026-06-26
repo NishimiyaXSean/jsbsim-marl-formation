@@ -560,6 +560,7 @@ class BFMPursuitEnv(gym.Env):
 
         info = {
             "reason": reason,
+            "termination_reason": reason,  # standardised for EpisodeTerminationCallback
             "min_dist": min_dist,
             "r_progress": _r_progress,
             "r_terminal_boost": _r_terminal_boost,
