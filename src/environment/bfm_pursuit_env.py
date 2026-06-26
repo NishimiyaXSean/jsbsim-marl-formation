@@ -727,17 +727,21 @@ class BFMPursuitEnv(gym.Env):
         })
 
     def export_tacview(self, path):
-        with open(path, "w") as f:
+        # Object ID 0 is reserved for the global simulation object in
+        # Tacview ACMI.  Aircraft must use IDs >= 1.
+        PURSUER_ID = 101
+        TARGET_ID  = 102
+        with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-            f.write("0,Name=Pursuer\n0,Color=Red\n")
-            f.write("1,Name=Target\n1,Color=Blue\n")
+            f.write(f"{PURSUER_ID},Name=Pursuer\n{PURSUER_ID},Color=Red\n")
+            f.write(f"{TARGET_ID},Name=Target\n{TARGET_ID},Color=Blue\n")
             for fr in self._tacview_frames:
                 t = fr["time"]
                 # Write timestamp once per frame (Tacview spec: one #time per frame)
                 f.write(f"#{t:.2f}\n")
                 # ACMI T= format: Longitude|Latitude|Altitude|Roll|Pitch|Yaw
-                for obj_id, key in [(0, "pursuer"), (1, "target")]:
+                for obj_id, key in [(PURSUER_ID, "pursuer"), (TARGET_ID, "target")]:
                     d = fr[key]
                     f.write(f"{obj_id},T={d['lon_deg']}|{d['lat_deg']}|{d['alt_m']:.1f}"
                             f"|{d['roll_deg']:.1f}|{d['pitch_deg']:.1f}|{d['yaw_deg']:.1f}\n")
