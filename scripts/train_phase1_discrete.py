@@ -32,7 +32,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
-from collections import deque
+from collections import deque, defaultdict
 
 from src.environment.bfm_pursuit_env import BFMPursuitEnv
 from src.environment.ablation_wrappers import (
@@ -90,6 +90,14 @@ class Phase1Callback(BaseCallback):
         self._peak_difficulty = self.MIN_DIFFICULTY
         self._current_smoothness_weight = 0.0
 
+        # ── Termination-rate tracking (2026-06-26) ────────────────────
+        self._term_counts: dict = defaultdict(int)
+        self._term_total = 0
+        self._TERM_CATEGORIES = [
+            "success", "stall", "timeout", "lost_target",
+            "ground_crash", "out_of_bounds", "jsbsim_nan",
+        ]
+
     def _get_smoothness_weight(self) -> float:
         """Compute smoothness weight based on training progress."""
         progress = self.num_timesteps / max(self._total_steps, 1)
@@ -103,6 +111,16 @@ class Phase1Callback(BaseCallback):
             return SMOOTHNESS_FULL_WEIGHT
 
     def _on_step(self) -> bool:
+        # ── Termination-rate tracking ──────────────────────────────────
+        dones = self.locals.get("dones")
+        infos = self.locals.get("infos")
+        if dones is not None and infos is not None:
+            for i, done in enumerate(dones):
+                if done:
+                    self._term_total += 1
+                    reason = infos[i].get("termination_reason", "unknown")
+                    self._term_counts[reason] += 1
+
         # ── Update smoothness weight ───────────────────────────────────
         new_w = self._get_smoothness_weight()
         if abs(new_w - self._current_smoothness_weight) > 1e-6:
@@ -130,14 +148,32 @@ class Phase1Callback(BaseCallback):
         # ── Logging ────────────────────────────────────────────────────
         if self.n_calls % 10_000 == 0:
             progress_pct = 100.0 * self.num_timesteps / self._total_steps
+            # ── Log termination rates ──────────────────────────────
+            if self._term_total > 0:
+                for cat in self._TERM_CATEGORIES:
+                    rate = self._term_counts.get(cat, 0) / self._term_total
+                    self.logger.record(f"termination_rate/{cat}", rate)
+                self.logger.record("termination_rate/total", self._term_total)
+
             self.logger.record("phase1/difficulty", self._difficulty)
             self.logger.record("phase1/smoothness_weight", self._current_smoothness_weight)
             self.logger.record("phase1/progress_pct", progress_pct)
             if self.verbose > 0:
+                # Build termination summary string
+                term_parts = []
+                for cat in self._TERM_CATEGORIES:
+                    c = self._term_counts.get(cat, 0)
+                    if c > 0:
+                        term_parts.append(f"{cat}={c}")
+                term_str = " ".join(term_parts) if term_parts else "no_terms"
                 print(f"[Phase1] step={self.num_timesteps:>8d}  "
                       f"progress={progress_pct:.1f}%  "
                       f"difficulty={self._difficulty:.2f}  "
-                      f"smoothness_w={self._current_smoothness_weight:.3f}")
+                      f"smoothness_w={self._current_smoothness_weight:.3f}  "
+                      f"terms:[{term_str}]")
+            # Reset counters for next interval
+            self._term_counts.clear()
+            self._term_total = 0
 
         return True
 
