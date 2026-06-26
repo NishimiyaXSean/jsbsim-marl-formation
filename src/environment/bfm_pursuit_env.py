@@ -56,22 +56,23 @@ MAX_AOA = 30.0
 MAX_PS = 300.0
 LOW_SPEED_THRESHOLD = 100.0
 
-# Reward weights
-REWARD_PROGRESS = 0.5
-REWARD_ATA = 5.0
+# Reward weights (rebalanced 2026-06-26 for risk-seeking pursuit)
+REWARD_PROGRESS = 1.5              # boosted from 0.5 — stronger closing-distance signal
+REWARD_ATA = 8.0                   # boosted from 5.0 — nose-on-target is the priority
 REWARD_GROUND_WARNING = 2.0
-REWARD_SUCCESS = 2000.0
+REWARD_SUCCESS = 3000.0            # boosted from 2000 — massive incentive to finish
 REWARD_CRASH = -200.0
 REWARD_LOST_TARGET = -200.0
+REWARD_TIMEOUT = -500.0            # NEW — running out the clock is a failure
 REWARD_LOW_SPEED_TURN = 5.0
-STEP_PENALTY = 1.0
-LOW_ENERGY_PENALTY = 5.0
+STEP_PENALTY = 0.25                # reduced from 1.0 — surviving longer is OK
+LOW_ENERGY_PENALTY = 2.0           # reduced from 5.0 — less fear of energy use
 ANTI_STALL_WINDOW = 30
 ANTI_STALL_MIN_VC = 15.0
 ANTI_STALL_MIN_DIST = 300.0
-ANTI_STALL_PENALTY = 500.0         # doubled from 200 — stall MUST be feared
-ANTI_STALL_SPEED_WARN = 160.0      # below this speed, progressive warning penalty
-ANTI_STALL_SPEED_WARN_WEIGHT = 3.0 # per-step penalty when speed < threshold
+ANTI_STALL_PENALTY = 200.0         # softened from 500 — don't paralyze the agent
+ANTI_STALL_SPEED_WARN = 130.0      # lowered from 160 — warn later, allow more manoeuvring
+ANTI_STALL_SPEED_WARN_WEIGHT = 1.0 # reduced from 3.0 — gentler early warning
 
 ZONE_DEATH_DIST_LO = 300.0
 ZONE_DEATH_DIST_HI = 800.0
@@ -604,6 +605,7 @@ class BFMPursuitEnv(gym.Env):
         if not terminated and not truncated and current_time >= MAX_EPISODE_TIME:
             truncated = True
             reason = "timeout"
+            total_reward += REWARD_TIMEOUT  # running out the clock is failure
 
         if self.record_tacview:
             self._record_tacview_frame(current_time)
