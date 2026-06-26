@@ -79,6 +79,11 @@ ZONE_DEATH_PENALTY = 50.0
 VELOCITY_SHAPING_WEIGHT = 3.0
 VELOCITY_SHAPING_ATA_THRESH = 0.95
 
+# Delta-ATA + closure-rate reward shaping (2026-06-26)
+REWARD_DELTA_ATA = 8.0           # potential-based: reward for improving ATA
+REWARD_CLOSURE_RATE = 6.0        # reward for positive closure rate
+CLOSURE_RATE_NORM = 30.0         # normalisation reference (m/s)
+
 PROXIMITY_TIERS = [
     (800.0, 25.0),
     (500.0, 50.0),
@@ -142,8 +147,16 @@ class BFMPursuitEnv(gym.Env):
         )
         self._envelope = FlightEnvelope(EnvelopeConfig())
 
-        # Target altitude stabiliser
-        self._target_alt_stab = AltitudeStabilizer()
+        # Target: same BFMAutopilot + FlightEnvelope as pursuer (2026-06-26)
+        # Fair-fight protocol — both aircraft use identical control laws.
+        # Previously the target used AltitudeStabilizer which gave it an
+        # unfair altitude-hold advantage over the BFMAutopilot-equipped pursuer.
+        self._target_autopilot = BFMAutopilot(
+            BFMAutopilotConfig(),
+            trim=TrimSchedule(),
+            scheduler=GainScheduler(),
+        )
+        self._target_envelope = FlightEnvelope(EnvelopeConfig())
 
         # Observation / action spaces
         self.observation_space = gym.spaces.Dict({
@@ -167,6 +180,7 @@ class BFMPursuitEnv(gym.Env):
         self._closure_rates: deque = deque(maxlen=ANTI_STALL_WINDOW)
         self._zone_death_counter: int = 0
         self._target_profile: Optional[TargetProfile] = None
+        self._prev_ata_deg: Optional[float] = None
 
     # ── Difficulty property ─────────────────────────────────────────────────
 
@@ -273,22 +287,45 @@ class BFMPursuitEnv(gym.Env):
 
         self._autopilot.reset(initial_speed_mps=200.0)
         self._envelope.reset()
-        self._target_alt_stab.reset()
+        self._target_autopilot.reset(initial_speed_mps=160.0)
+        self._target_envelope.reset()
 
         self._step_counter = 0
 
-        # Warmup: 3s at trim
+        # Warmup: 3s at Action 0 (Level Flight) for BOTH aircraft
+        # through FlightEnvelope (2026-06-26 fix).  Without the envelope
+        # the raw n_n=1.0 command slams the PID directly, causing the
+        # 1 Hz elevator oscillation that ratchets pitch and starts a climb.
         warmup_steps = int(3.0 * CTRL_FREQ)
         for _ in range(warmup_steps):
-            s = self.pursuer.state
-            thr, elev, ail, rud = self._autopilot.step(
-                0.0, 1.0, 0.0, PHYSICS_DT,
-                n_z_g=s["n_z_g"], roll_rad=np.deg2rad(s["roll_deg"]),
-                airspeed_mps=s["airspeed_mps"], beta_deg=s["beta_deg"],
-                alpha_deg=s["alpha_deg"], q_rps=s["q_rps"],
-            )
-            self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
-            self.target_ac.set_controls(throttle=0.80, elevator=-0.05, aileron=0.0, rudder=0.0)
+            # Pursuer: Action 0 through envelope
+            ps = self.pursuer.state
+            p_nx, p_nn, p_mu = self._envelope.step(0.0, 1.0, 0.0,
+                speed_mps=ps["airspeed_mps"], alt_m=ps["alt_m"],
+                vz_mps=ps["h_dot_fps"] * 0.3048,
+                current_roll_rad=np.deg2rad(ps["roll_deg"]), dt=PHYSICS_DT)
+            p_thr, p_elev, p_ail, p_rud = self._autopilot.step(
+                p_nx, p_nn, p_mu, PHYSICS_DT,
+                n_z_g=ps["n_z_g"], roll_rad=np.deg2rad(ps["roll_deg"]),
+                airspeed_mps=ps["airspeed_mps"], beta_deg=ps["beta_deg"],
+                alpha_deg=ps["alpha_deg"], q_rps=ps["q_rps"])
+            self.pursuer.set_controls(throttle=p_thr, elevator=p_elev,
+                                      aileron=p_ail, rudder=p_rud)
+
+            # Target: Action 0 through envelope (fair fight!)
+            ts = self.target_ac.state
+            t_nx, t_nn, t_mu = self._target_envelope.step(0.0, 1.0, 0.0,
+                speed_mps=ts["airspeed_mps"], alt_m=ts["alt_m"],
+                vz_mps=ts["h_dot_fps"] * 0.3048,
+                current_roll_rad=np.deg2rad(ts["roll_deg"]), dt=PHYSICS_DT)
+            t_thr, t_elev, t_ail, t_rud = self._target_autopilot.step(
+                t_nx, t_nn, t_mu, PHYSICS_DT,
+                n_z_g=ts["n_z_g"], roll_rad=np.deg2rad(ts["roll_deg"]),
+                airspeed_mps=ts["airspeed_mps"], beta_deg=ts["beta_deg"],
+                alpha_deg=ts["alpha_deg"], q_rps=ts["q_rps"])
+            self.target_ac.set_controls(throttle=t_thr, elevator=t_elev,
+                                        aileron=t_ail, rudder=t_rud)
+
             self.pursuer.run()
             self.target_ac.run()
             self.pursuer.position_ned[0:2] += self.pursuer.velocity_ned[0:2] * PHYSICS_DT
@@ -305,8 +342,7 @@ class BFMPursuitEnv(gym.Env):
         self._prev_airspeed = float(self.pursuer.state["airspeed_mps"])
         self._closure_rates.clear()
         self._zone_death_counter = 0
-        self._target_profile = self._generate_target_profile(rng, target_hdg,
-                                                            spawn_alt_m=float(target_ned[2]))
+        self._prev_ata_deg = None
 
         if self.record_tacview:
             self._record_tacview_frame(0.0)
@@ -364,8 +400,19 @@ class BFMPursuitEnv(gym.Env):
             )
             self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 
-            # Move target
-            self._move_target(dt)
+            # Target: Action 0 (Level Flight) through envelope (fair fight!)
+            ts = self.target_ac.state
+            t_nx, t_nn, t_mu = self._target_envelope.step(0.0, 1.0, 0.0,
+                speed_mps=ts["airspeed_mps"], alt_m=ts["alt_m"],
+                vz_mps=ts["h_dot_fps"] * 0.3048,
+                current_roll_rad=np.deg2rad(ts["roll_deg"]), dt=dt)
+            t_thr, t_elev, t_ail, t_rud = self._target_autopilot.step(
+                t_nx, t_nn, t_mu, dt,
+                n_z_g=ts["n_z_g"], roll_rad=np.deg2rad(ts["roll_deg"]),
+                airspeed_mps=ts["airspeed_mps"], beta_deg=ts["beta_deg"],
+                alpha_deg=ts["alpha_deg"], q_rps=ts["q_rps"])
+            self.target_ac.set_controls(throttle=t_thr, elevator=t_elev,
+                                        aileron=t_ail, rudder=t_rud)
 
             self.pursuer.run()
             self.target_ac.run()
@@ -414,6 +461,24 @@ class BFMPursuitEnv(gym.Env):
             ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt
             total_reward += ata_r
             _r_ata += ata_r
+
+            # Delta-ATA: potential-based reward (2026-06-26)
+            # reward = exp(-|ATA_cur|/30) - exp(-|ATA_prev|/30)
+            # Positive when ATA improves (narrows toward boresight)
+            ata_deg_cur = float(np.degrees(np.arccos(np.clip(geo["cos_ata"], -1.0, 1.0))))
+            if self._prev_ata_deg is not None:
+                pot_cur = np.exp(-ata_deg_cur / 30.0)
+                pot_prev = np.exp(-self._prev_ata_deg / 30.0)
+                delta_ata = REWARD_DELTA_ATA * (pot_cur - pot_prev) * dt
+                total_reward += delta_ata
+                _r_ata += delta_ata
+            self._prev_ata_deg = ata_deg_cur
+
+            # Closure-rate reward (2026-06-26)
+            # Positive Vc = closing on target → reward
+            closure_rate_ms = (self._prev_dist - current_dist) / dt if dt > 0 else 0.0
+            if closure_rate_ms > 0:
+                total_reward += REWARD_CLOSURE_RATE * (closure_rate_ms / CLOSURE_RATE_NORM) * dt
 
             if geo["cos_ata"] > VELOCITY_SHAPING_ATA_THRESH:
                 aspd = float(self.pursuer.state["airspeed_mps"])
