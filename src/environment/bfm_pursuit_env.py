@@ -514,7 +514,10 @@ class BFMPursuitEnv(gym.Env):
 
             self._prev_dist = current_dist
 
-            if current_dist < 200.0:
+            # Success: agent actively closed to <200m from a starting
+            # distance >400m (i.e. earned the kill, not spawned on top).
+            # This prevents warmup proximity from granting free wins.
+            if current_dist < 200.0 and start_dist > 400.0:
                 total_reward += REWARD_SUCCESS
                 terminated = True
                 reason = "success"
