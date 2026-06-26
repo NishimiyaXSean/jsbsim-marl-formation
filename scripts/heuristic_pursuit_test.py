@@ -376,8 +376,8 @@ def _save_tacview(rec: dict) -> None:
         f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
         f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
         f.write("# Heuristic Pure Pursuit Test\n")
-        f.write("101,Name=F-16 Pursuer\n101,Color=Blue\n")
-        f.write("102,Name=F-16 Target\n102,Color=Red\n")
+        f.write("101,Name=F-16 Pursuer\n101,Color=Blue\n101,Type=Air+Fighter\n")
+        f.write("102,Name=F-16 Target\n102,Color=Red\n102,Type=Air+Fighter\n")
 
         for i in range(0, len(t), 3):
             p_lat = ref_lat + p_n[i] / m_per_deg

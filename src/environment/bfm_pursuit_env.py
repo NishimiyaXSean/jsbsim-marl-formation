@@ -734,8 +734,10 @@ class BFMPursuitEnv(gym.Env):
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-            f.write(f"{PURSUER_ID},Name=Pursuer\n{PURSUER_ID},Color=Red\n")
-            f.write(f"{TARGET_ID},Name=Target\n{TARGET_ID},Color=Blue\n")
+            f.write(f"{PURSUER_ID},Name=F-16 Pursuer\n{PURSUER_ID},Color=Red\n")
+            f.write(f"{PURSUER_ID},Type=Air+Fighter\n")
+            f.write(f"{TARGET_ID},Name=F-16 Target\n{TARGET_ID},Color=Blue\n")
+            f.write(f"{TARGET_ID},Type=Air+Fighter\n")
             for fr in self._tacview_frames:
                 t = fr["time"]
                 # Write timestamp once per frame (Tacview spec: one #time per frame)
