@@ -255,12 +255,17 @@ class Phase1Callback(BaseCallback):
                     pass
 
 
-def build_env(difficulty: float = 0.15):
-    """Build the Phase 1 BFM pursuit env chain."""
-    base = BFMPursuitEnv(difficulty_level=difficulty, record_tacview=False)
+def build_env(difficulty: float = 0.15, lock_altitude: bool = True):
+    """Build the Phase 1 BFM pursuit env chain.
+
+    lock_altitude=True (2D mode): both aircraft use FlightController to
+    maintain 3000m.  Agent learns horizontal-plane pursuit without the
+    energy/altitude coupling trap.
+    """
+    base = BFMPursuitEnv(difficulty_level=difficulty, record_tacview=False,
+                         lock_altitude=lock_altitude)
     base = BlendedActionWrapper(base, alpha=0.02)
     base = LeadPursuitRewardWrapper(base)
-    # DECISION_HZ=2 is built into BFMPursuitEnv (DECISION_DT=0.5s)
     return base
 
 
