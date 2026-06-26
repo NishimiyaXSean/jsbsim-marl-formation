@@ -32,6 +32,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
 from collections import deque, defaultdict
 
 from src.environment.bfm_pursuit_env import BFMPursuitEnv
@@ -278,8 +279,16 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
     # ── Build envs ────────────────────────────────────────────────────
     train_env = build_env(difficulty=0.15)
     train_env = Monitor(train_env)
+    # VecNormalize: prevents reward-scale explosions from collapsing entropy
+    train_env = DummyVecEnv([lambda: train_env])
+    train_env = VecNormalize(train_env, norm_obs=False, norm_reward=True,
+                              clip_reward=100.0)
+
     eval_env = build_env(difficulty=0.15)
     eval_env = Monitor(eval_env)
+    eval_env = DummyVecEnv([lambda: eval_env])
+    eval_env = VecNormalize(eval_env, norm_obs=False, norm_reward=True,
+                             clip_reward=100.0)
 
     # ── Model ─────────────────────────────────────────────────────────
     policy_kwargs = dict(
@@ -296,7 +305,7 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS):
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.03,  # boosted from 0.01 — more exploration to escape Decelerate-only
+        ent_coef=0.08,  # heavy exploration — prevents Decelerate-only collapse
         vf_coef=0.5,
         max_grad_norm=0.5,
         policy_kwargs=policy_kwargs,
