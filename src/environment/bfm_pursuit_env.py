@@ -258,6 +258,36 @@ class BFMPursuitEnv(gym.Env):
 
         return mask
 
+    # ── Target control (shared by warmup, step, and child classes) ─────────
+
+    def _control_target(self, dt: float) -> None:
+        """Apply one micro-step of control to the target aircraft.
+
+        In 2D lock_altitude mode the target uses FlightController to hold
+        straight-and-level at 3000m.  In 3D mode it uses the same
+        BFMAutopilot + FlightEnvelope pipeline as the pursuer (fair fight).
+        """
+        ts = self.target_ac.state
+        if self._lock_altitude:
+            t_fc_tgt = FlightControlTargets(
+                heading_deg=self._ref_target_hdg,
+                altitude_m=self._ref_alt_m,
+                speed_mps=kts_to_mps(310),
+            )
+            t_thr, t_elev, t_ail, t_rud = self._target_fc.compute(ts, t_fc_tgt, dt)
+        else:
+            t_nx, t_nn, t_mu = self._target_envelope.step(0.0, 1.0, 0.0,
+                speed_mps=ts["airspeed_mps"], alt_m=ts["alt_m"],
+                vz_mps=ts["h_dot_fps"] * 0.3048,
+                current_roll_rad=np.deg2rad(ts["roll_deg"]), dt=dt)
+            t_thr, t_elev, t_ail, t_rud = self._target_autopilot.step(
+                t_nx, t_nn, t_mu, dt,
+                n_z_g=ts["n_z_g"], roll_rad=np.deg2rad(ts["roll_deg"]),
+                airspeed_mps=ts["airspeed_mps"], beta_deg=ts["beta_deg"],
+                alpha_deg=ts["alpha_deg"], q_rps=ts["q_rps"])
+        self.target_ac.set_controls(throttle=t_thr, elevator=t_elev,
+                                    aileron=t_ail, rudder=t_rud)
+
     # ── Reset ──────────────────────────────────────────────────────────────
 
     def reset(self, *, seed=None, options=None) -> tuple[np.ndarray, dict]:
@@ -276,7 +306,14 @@ class BFMPursuitEnv(gym.Env):
         bearing_max = d * 45.0
         bearing_offset = rng.uniform(-bearing_max, bearing_max)
         alt_offset_max = 50.0 + d * 250.0
-        target_alt_offset = rng.uniform(-alt_offset_max, alt_offset_max)
+        # 2D lock_altitude mode: both aircraft must be co-altitude at 3000m.
+        # Random altitude offsets would force the FlightController to
+        # aggressively pitch-correct at episode start, bleeding energy and
+        # defeating the purpose of "learn horizontal-plane pursuit only".
+        if self._lock_altitude:
+            target_alt_offset = 0.0
+        else:
+            target_alt_offset = rng.uniform(-alt_offset_max, alt_offset_max)
         heading_diff_max = d * 30.0
         heading_diff = rng.uniform(-heading_diff_max, heading_diff_max)
 
@@ -309,39 +346,39 @@ class BFMPursuitEnv(gym.Env):
 
         self._step_counter = 0
 
-        # Warmup: 3s at Action 0 (Level Flight) for BOTH aircraft
-        # through FlightEnvelope (2026-06-26 fix).  Without the envelope
-        # the raw n_n=1.0 command slams the PID directly, causing the
-        # 1 Hz elevator oscillation that ratchets pitch and starts a climb.
+        # Warmup: 3s of level flight to stabilise both aircraft before the
+        # RL agent takes control.  In 2D lock_altitude mode BOTH aircraft use
+        # FlightController so altitude is locked to 3000m from frame zero —
+        # using BFMAutopilot here would cause altitude drift and force violent
+        # pitch corrections when FC takes over at step 1.
         warmup_steps = int(3.0 * CTRL_FREQ)
         for _ in range(warmup_steps):
-            # Pursuer: Action 0 through envelope
             ps = self.pursuer.state
-            p_nx, p_nn, p_mu = self._envelope.step(0.0, 1.0, 0.0,
-                speed_mps=ps["airspeed_mps"], alt_m=ps["alt_m"],
-                vz_mps=ps["h_dot_fps"] * 0.3048,
-                current_roll_rad=np.deg2rad(ps["roll_deg"]), dt=PHYSICS_DT)
-            p_thr, p_elev, p_ail, p_rud = self._autopilot.step(
-                p_nx, p_nn, p_mu, PHYSICS_DT,
-                n_z_g=ps["n_z_g"], roll_rad=np.deg2rad(ps["roll_deg"]),
-                airspeed_mps=ps["airspeed_mps"], beta_deg=ps["beta_deg"],
-                alpha_deg=ps["alpha_deg"], q_rps=ps["q_rps"])
+            ts = self.target_ac.state
+
+            # ── Pursuer warmup ──────────────────────────────────────────
+            if self._lock_altitude:
+                p_fc_tgt = FlightControlTargets(
+                    heading_deg=self._ref_hdg,
+                    altitude_m=self._ref_alt_m,
+                    speed_mps=kts_to_mps(400),
+                )
+                p_thr, p_elev, p_ail, p_rud = self._pursuer_fc.compute(ps, p_fc_tgt, PHYSICS_DT)
+            else:
+                p_nx, p_nn, p_mu = self._envelope.step(0.0, 1.0, 0.0,
+                    speed_mps=ps["airspeed_mps"], alt_m=ps["alt_m"],
+                    vz_mps=ps["h_dot_fps"] * 0.3048,
+                    current_roll_rad=np.deg2rad(ps["roll_deg"]), dt=PHYSICS_DT)
+                p_thr, p_elev, p_ail, p_rud = self._autopilot.step(
+                    p_nx, p_nn, p_mu, PHYSICS_DT,
+                    n_z_g=ps["n_z_g"], roll_rad=np.deg2rad(ps["roll_deg"]),
+                    airspeed_mps=ps["airspeed_mps"], beta_deg=ps["beta_deg"],
+                    alpha_deg=ps["alpha_deg"], q_rps=ps["q_rps"])
             self.pursuer.set_controls(throttle=p_thr, elevator=p_elev,
                                       aileron=p_ail, rudder=p_rud)
 
-            # Target: Action 0 through envelope (fair fight!)
-            ts = self.target_ac.state
-            t_nx, t_nn, t_mu = self._target_envelope.step(0.0, 1.0, 0.0,
-                speed_mps=ts["airspeed_mps"], alt_m=ts["alt_m"],
-                vz_mps=ts["h_dot_fps"] * 0.3048,
-                current_roll_rad=np.deg2rad(ts["roll_deg"]), dt=PHYSICS_DT)
-            t_thr, t_elev, t_ail, t_rud = self._target_autopilot.step(
-                t_nx, t_nn, t_mu, PHYSICS_DT,
-                n_z_g=ts["n_z_g"], roll_rad=np.deg2rad(ts["roll_deg"]),
-                airspeed_mps=ts["airspeed_mps"], beta_deg=ts["beta_deg"],
-                alpha_deg=ts["alpha_deg"], q_rps=ts["q_rps"])
-            self.target_ac.set_controls(throttle=t_thr, elevator=t_elev,
-                                        aileron=t_ail, rudder=t_rud)
+            # ── Target warmup ───────────────────────────────────────────
+            self._control_target(PHYSICS_DT)
 
             self.pursuer.run()
             self.target_ac.run()
@@ -399,24 +436,60 @@ class BFMPursuitEnv(gym.Env):
         start_dist = self._prev_dist
 
         for _ in range(DECISION_STEPS):
-            # ── Hybrid FCS routing (2026-06-26) ──────────────────────
-            # Action 0 (Level Flight) → FlightController (true level)
-            # All other actions → BFMAutopilot via FlightEnvelope
-            # 2D mode (lock_altitude) → FC holds altitude for both
+            # ── Hybrid FCS routing (2026-06-26, fixed 2026-06-27) ──────
+            # Three-mode routing based on action and altitude-lock state:
+            #
+            #  Action 0 (Level Flight)          → FlightController (3-channel)
+            #  BFM actions (1-8) + 2D mode      → BFM roll+thrust + FC elevator lock
+            #  BFM actions (1-8) + 3D mode      → pure BFMAutopilot via FlightEnvelope
+            #
+            # The 2D blended mode (new 2026-06-27) is the critical fix:
+            # without it, every BFM turn bleeds altitude through JSBSim's
+            # 6-DOF coupling, re-introducing the 3D energy/altitude trap
+            # that lock_altitude was supposed to eliminate.
 
             s = self.pursuer.state
             use_fc = (int(action) == 0)  # True level-flight intent
 
             if use_fc:
-                # FlightController: 3-channel stabilisation
+                # Full FlightController: 3-channel stabilisation
                 fc_tgt = FlightControlTargets(
                     heading_deg=self._ref_hdg,
                     altitude_m=self._ref_alt_m,
                     speed_mps=kts_to_mps(400),
                 )
                 thr, elev, ail, rud = self._pursuer_fc.compute(s, fc_tgt, dt)
+            elif self._lock_altitude:
+                # 2D blended mode (2026-06-27 fix): BFMAutopilot provides
+                # tactical roll and throttle, but the elevator channel is
+                # overridden by FlightController's altitude stabiliser.
+                # This preserves the agent's intended horizontal-plane
+                # manoeuvre while keeping altitude locked at 3000m.
+                n_x_env, n_n_env, mu_env = self._envelope.step(
+                    n_x_raw, n_n_raw, mu_raw,
+                    speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
+                    vz_mps=s["h_dot_fps"] * 0.3048,
+                    current_roll_rad=np.deg2rad(s["roll_deg"]), dt=dt,
+                )
+                bfm_thr, bfm_elev, bfm_ail, bfm_rud = self._autopilot.step(
+                    n_x_env, n_n_env, mu_env, dt,
+                    n_z_g=s["n_z_g"],
+                    roll_rad=np.deg2rad(s["roll_deg"]),
+                    airspeed_mps=s["airspeed_mps"],
+                    beta_deg=s["beta_deg"],
+                    alpha_deg=s["alpha_deg"],
+                )
+                # Override elevator: FlightController holds altitude,
+                # BFMAutopilot handles roll (aileron) and thrust.
+                fc_tgt = FlightControlTargets(
+                    heading_deg=0.0,    # unused — we only need elevator
+                    altitude_m=self._ref_alt_m,
+                    speed_mps=0.0,      # unused — BFM handles thrust
+                )
+                _, fc_elev, _, _ = self._pursuer_fc.compute(s, fc_tgt, dt)
+                thr, elev, ail, rud = bfm_thr, fc_elev, bfm_ail, bfm_rud
             else:
-                # BFMAutopilot via FlightEnvelope (tactical manoeuvring)
+                # 3D mode: pure BFMAutopilot via FlightEnvelope
                 n_x_env, n_n_env, mu_env = self._envelope.step(
                     n_x_raw, n_n_raw, mu_raw,
                     speed_mps=s["airspeed_mps"], alt_m=s["alt_m"],
@@ -434,28 +507,7 @@ class BFMPursuitEnv(gym.Env):
             self.pursuer.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
 
             # ── Target control ──────────────────────────────────────
-            ts = self.target_ac.state
-            if self._lock_altitude:
-                # 2D mode: FC holds straight-and-level for target
-                t_fc_tgt = FlightControlTargets(
-                    heading_deg=self._ref_target_hdg,
-                    altitude_m=self._ref_alt_m,
-                    speed_mps=kts_to_mps(310),
-                )
-                t_thr, t_elev, t_ail, t_rud = self._target_fc.compute(ts, t_fc_tgt, dt)
-            else:
-                # Fair fight: BFMAutopilot via FlightEnvelope
-                t_nx, t_nn, t_mu = self._target_envelope.step(0.0, 1.0, 0.0,
-                    speed_mps=ts["airspeed_mps"], alt_m=ts["alt_m"],
-                    vz_mps=ts["h_dot_fps"] * 0.3048,
-                    current_roll_rad=np.deg2rad(ts["roll_deg"]), dt=dt)
-                t_thr, t_elev, t_ail, t_rud = self._target_autopilot.step(
-                    t_nx, t_nn, t_mu, dt,
-                    n_z_g=ts["n_z_g"], roll_rad=np.deg2rad(ts["roll_deg"]),
-                    airspeed_mps=ts["airspeed_mps"], beta_deg=ts["beta_deg"],
-                    alpha_deg=ts["alpha_deg"], q_rps=ts["q_rps"])
-            self.target_ac.set_controls(throttle=t_thr, elevator=t_elev,
-                                        aileron=t_ail, rudder=t_rud)
+            self._control_target(dt)
 
             self.pursuer.run()
             self.target_ac.run()
