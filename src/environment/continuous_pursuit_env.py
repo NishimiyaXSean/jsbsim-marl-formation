@@ -115,6 +115,10 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         # 1.0 = full penalty (late training)
         self._ata_penalty_weight = 0.0
 
+        # ── Progressive time pressure (Phase 3.3) ────────────────────
+        # Accumulates when agent loiters within 1000 m without closing.
+        self._loiter_time = 0.0
+
         # ── Override action space ──────────────────────────────────────
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(2,), dtype=np.float32,
@@ -146,6 +150,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         # CARW at 10 Hz can have start_dist ≈ 400 m on a step that crosses
         # the 200 m kill threshold.
         self._episode_start_dist = self._prev_dist
+        self._loiter_time = 0.0
         return obs, info
 
     # ── Observation (plain array, not Dict) ────────────────────────────────
@@ -345,9 +350,19 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
                 total_reward += vel_bonus
                 _r_ata += vel_bonus
 
-            # ── Reward: baseline bleed ─────────────────────────────────
-            total_reward -= 1.0 * dt
-            _r_time_pressure -= 1.0 * dt
+            # ── Reward: progressive baseline bleed (Phase 3.3) ────────
+            # Base bleed 1.0·dt.  When loitering within 1000 m with low
+            # closure, pressure ramps up: +0.5·dt per second of loitering.
+            # This breaks the "comfort zone" where the agent hovers near
+            # the target without committing to the kill.
+            closure_now = (self._prev_dist - current_dist) / dt if dt > 0 else 0.0
+            if current_dist < 1000.0 and closure_now < 20.0:
+                self._loiter_time += dt
+            else:
+                self._loiter_time = max(0.0, self._loiter_time - dt * 2.0)
+            loiter_pressure = 1.0 + self._loiter_time * 0.5
+            total_reward -= loiter_pressure * dt
+            _r_time_pressure -= loiter_pressure * dt
 
             # ── Reward: ground warning ─────────────────────────────────
             if a_pos[2] < 800.0:
