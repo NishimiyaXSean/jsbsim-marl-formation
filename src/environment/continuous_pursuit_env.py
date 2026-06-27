@@ -87,6 +87,12 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
 
     metadata = {"render_modes": ["human", "tacview"], "name": "continuous_pursuit_v0"}
 
+    # Continuous actions + FlightController give better energy management,
+    # so the pursuer can operate safely closer to the target.  Lowering
+    # the anti-stall floor from 300 m to 200 m eliminates the dead zone
+    # between "not stalling" and "successful intercept".
+    ANTI_STALL_MIN_DIST = 200.0
+
     def __init__(self, **kwargs):
         # ── Parent init — builds aircraft, autopilot, FlightController,
         #    sets up difficulty, lock_altitude, tacview, etc. ────────────
@@ -105,6 +111,17 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         self.observation_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(25,), dtype=np.float32,
         )
+
+    # ── Reset ───────────────────────────────────────────────────────────
+
+    def reset(self, *, seed=None, options=None):
+        obs, info = super().reset(seed=seed, options=options)
+        # Save episode start distance for success check — must use the
+        # episode-global value, not the per-macro-action start_dist, because
+        # CARW at 10 Hz can have start_dist ≈ 400 m on a step that crosses
+        # the 200 m kill threshold.
+        self._episode_start_dist = self._prev_dist
+        return obs, info
 
     # ── Observation (plain array, not Dict) ────────────────────────────────
 
@@ -305,7 +322,10 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
             self._prev_dist = current_dist
 
             # ── Termination checks ─────────────────────────────────────
-            if current_dist < 200.0 and start_dist > 400.0:
+            # Success: episode start > 400 m (not a warmup spawn) AND
+            # current < 200 m.  Uses episode-global start distance so
+            # CARW's per-step start_dist cannot gate the kill.
+            if current_dist < 200.0 and self._episode_start_dist > 400.0:
                 total_reward += REWARD_SUCCESS
                 terminated = True
                 reason = "success"
@@ -325,14 +345,14 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
                 reason = "out_of_bounds"
                 break
 
-        # ── Post-loop: anti-stall + zone-of-death (identical to parent) ──
+        # ── Post-loop: anti-stall + zone-of-death ────────────────────
         _zone_death_hi = ZONE_DEATH_DIST_HI + self.difficulty_level * ZONE_DEATH_DIST_HI_SCALE
         if not terminated:
             end_dist = self._prev_dist
             closure_rate = (start_dist - end_dist) / decision_dt
             self._closure_rates.append(closure_rate)
             if (len(self._closure_rates) >= ANTI_STALL_WINDOW
-                    and end_dist > ANTI_STALL_MIN_DIST
+                    and end_dist > self.ANTI_STALL_MIN_DIST
                     and all(v < ANTI_STALL_MIN_VC for v in self._closure_rates)):
                 truncated = True
                 reason = "stall"
