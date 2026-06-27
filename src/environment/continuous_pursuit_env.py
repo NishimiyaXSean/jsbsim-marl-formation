@@ -93,6 +93,19 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
     # between "not stalling" and "successful intercept".
     ANTI_STALL_MIN_DIST = 200.0
 
+    # Phase 3: relaxed anti-stall for lead-pursuit turn-building.
+    # A lead-pursuit intercept requires a brief energy trade to establish
+    # the lead angle.  30 steps (15 s at 2 Hz) is too strict; 50 steps
+    # (25 s) gives the agent room to build lead, then recover Vc.
+    ANTI_STALL_WINDOW = 50
+
+    # LOS-rate normalisation constant (rad/s).  Typical engagements
+    # produce λ̇ in the range ±0.3 rad/s (±17 °/s).
+    MAX_LOS_RATE = 0.5
+
+    # Observation dimension (Phase 3: +2 for LOS rate and bearing error)
+    OBS_DIM = 27
+
     def __init__(self, **kwargs):
         # ── Parent init — builds aircraft, autopilot, FlightController,
         #    sets up difficulty, lock_altitude, tacview, etc. ────────────
@@ -103,13 +116,17 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
             low=-1.0, high=1.0, shape=(2,), dtype=np.float32,
         )
 
-        # ── Override observation space — plain Box(25), no action_mask ─
+        # ── Override observation space — plain Box(27), no action_mask ─
+        # Phase 3: expanded from 25 to 27 dims.
+        #   [0:25]  — original 25 features (geometry, attitude, energy)
+        #   [25]    — LOS angular rate λ̇  (normalised by 0.5 rad/s)
+        #   [26]    — bearing-to-heading error (normalised by 180°)
         # The parent's Dict obs includes an action_mask key for discrete
         # safety masking.  Continuous policies don't use masks; the
         # FlightController's internal limits (bank compensation, GPWS)
         # provide the safety envelope instead.
         self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(25,), dtype=np.float32,
+            low=-1.0, high=1.0, shape=(self.OBS_DIM,), dtype=np.float32,
         )
 
     # ── Reset ───────────────────────────────────────────────────────────
@@ -126,9 +143,37 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
     # ── Observation (plain array, not Dict) ────────────────────────────────
 
     def _get_obs(self):
-        """Return 25-dim observation array (no action_mask)."""
-        parent_obs = super()._get_obs()
-        return parent_obs["obs"]
+        """Return 27-dim observation array (Phase 3: +LOS rate, +bearing err)."""
+        parent_obs = super()._get_obs()        # Dict with "obs" (25,) + "action_mask"
+        base_obs = parent_obs["obs"]            # (25,) float32
+
+        # ── LOS angular rate (λ̇) in the horizontal plane ──────────────
+        # PN guidance commands turn-rate ∝ λ̇.  Giving the network λ̇
+        # directly provides the core PN "instinct" without needing to
+        # infer it from successive position observations.
+        p_pos = self.pursuer.position_ned
+        t_pos = self.target_ac.position_ned
+        p_vel = self.pursuer.velocity_ned
+        t_vel = self.target_ac.velocity_ned
+
+        r_h = t_pos[:2] - p_pos[:2]
+        dist_h = float(np.linalg.norm(r_h))
+        if dist_h > 1.0:
+            v_rel_h = t_vel[:2] - p_vel[:2]
+            # λ̇ = r_h × v_rel_h / |r_h|²  (rad/s)
+            lambda_dot = float(np.cross(r_h, v_rel_h)) / (dist_h * dist_h)
+            lambda_dot_norm = float(np.clip(lambda_dot / self.MAX_LOS_RATE, -1.0, 1.0))
+        else:
+            lambda_dot_norm = 0.0
+
+        # ── Bearing-to-heading error ──────────────────────────────────
+        # Tells the network which direction to turn to acquire the target.
+        bearing_deg = float(np.degrees(np.arctan2(r_h[1], r_h[0]))) % 360.0
+        heading_deg = float(self.pursuer.state["yaw_deg"]) % 360.0
+        bearing_err = (bearing_deg - heading_deg + 180.0) % 360.0 - 180.0
+        bearing_err_norm = float(np.clip(bearing_err / 180.0, -1.0, 1.0))
+
+        return np.append(base_obs, [lambda_dot_norm, bearing_err_norm]).astype(np.float32)
 
     # ── Step ───────────────────────────────────────────────────────────────
 
@@ -309,15 +354,27 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
                     _r_proximity += bonus
                     self._proximity_awarded.add(threshold)
 
-            # ── Reward: terminal-pull gradient (200–500 m graduated) ────
-            # Linear incentive ramping from 0 at 500 m to 50·dt at 200 m.
-            # Bridges the reward desert between proximity milestones and
-            # the 5000-point success cliff, giving the agent continuous
-            # feedback that "closer is better" during terminal approach.
+            # ── Reward: terminal-pull gradient (200–500 m, ATA-gated) ─
+            # Phase 3: multiplied by cos(ATA)³ — "closer is better" ONLY
+            # when the nose is pointing at the target.  A pure tail-chase
+            # with high ATA earns zero terminal pull regardless of range.
             if 200.0 <= current_dist <= 500.0:
-                terminal_pull = (500.0 - current_dist) / 300.0 * 50.0 * dt
+                ata_gate = max(0.0, float(geo["cos_ata"]) ** 3)
+                terminal_pull = (500.0 - current_dist) / 300.0 * 50.0 * dt * ata_gate
                 total_reward += terminal_pull
                 _r_terminal_boost += terminal_pull
+
+            # ── Reward: ATA degradation penalty (anti-tail-chase) ─────
+            # When the agent is close but badly misaligned, it's in a
+            # tail-chase.  Penalise severely to force immediate correction.
+            # Threshold: dist < 1000 m AND |ATA| > 20°.
+            if current_dist < 1000.0:
+                ata_deg_now = float(np.degrees(
+                    np.arccos(np.clip(geo["cos_ata"], -1.0, 1.0))))
+                if ata_deg_now > 20.0:
+                    ata_penalty = 5.0 * dt
+                    total_reward -= ata_penalty
+                    _r_ata -= ata_penalty  # log under ATA for diagnostics
 
             self._prev_dist = current_dist
 
@@ -351,7 +408,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
             end_dist = self._prev_dist
             closure_rate = (start_dist - end_dist) / decision_dt
             self._closure_rates.append(closure_rate)
-            if (len(self._closure_rates) >= ANTI_STALL_WINDOW
+            if (len(self._closure_rates) >= self.ANTI_STALL_WINDOW
                     and end_dist > self.ANTI_STALL_MIN_DIST
                     and all(v < ANTI_STALL_MIN_VC for v in self._closure_rates)):
                 truncated = True

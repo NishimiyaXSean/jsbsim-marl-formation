@@ -145,9 +145,9 @@ def main():
                         help="Total episodes to attempt (only successes kept)")
     parser.add_argument("--difficulty", type=float, default=None,
                         help="Fixed difficulty (overrides --difficulty-min/max)")
-    parser.add_argument("--difficulty-min", type=float, default=0.0,
+    parser.add_argument("--difficulty-min", type=float, default=0.20,
                         help="Minimum difficulty for uniform sampling")
-    parser.add_argument("--difficulty-max", type=float, default=0.30,
+    parser.add_argument("--difficulty-max", type=float, default=0.50,
                         help="Maximum difficulty for uniform sampling")
     parser.add_argument("--nav-constant", type=float, default=NAV_CONSTANT,
                         help="PN navigation constant")
