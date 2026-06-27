@@ -158,7 +158,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     """
 
     VEL_ALIGN_WEIGHT = 15.0      # velocity alignment — moving toward target
-    LEAD_PREDICT_WEIGHT = 25.0   # lead prediction — pointing at future position
+    LEAD_PREDICT_WEIGHT = 50.0   # Phase 3: boosted 25→50 — lead pursuit is the priority
     LOS_RATE_WEIGHT = 20.0       # LOS-rate damping — maintaining collision course
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
@@ -301,7 +301,11 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
 
         # ── V_c multiplicative coupling ──────────────────────────────────
         r_vel_align = raw_r_vel_align * V_c_norm
-        r_lead_pred = raw_r_lead_pred * V_c_norm
+        # Phase 3 Vc gate: lead reward is ZERO when separating (Vc ≤ 0).
+        # This prevents rewarding lead-pursuit pointing when the agent
+        # is bleeding distance — "lead is only good if you're closing."
+        lead_vc_gate = 1.0 if V_c > 0.0 else 0.0
+        r_lead_pred = raw_r_lead_pred * lead_vc_gate
         r_los_rate  = raw_r_los_rate  * V_c_norm
         reward += r_vel_align + r_lead_pred + r_los_rate
 
