@@ -116,15 +116,18 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
     # ── Step ───────────────────────────────────────────────────────────────
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
-        """Execute one macro-action (0.5 s hold, 30 micro-steps).
+        """Execute one macro-action with adaptive-rate hold.
 
-        The continuous action is held constant for DECISION_STEPS micro-steps.
-        Heading integrates each micro-step::
+        CARW (Close-in Adaptive Rate Window):
+          dist >= 500 m →  2 Hz (0.5 s,  30 micro-steps) — cruise
+          dist <  500 m → 10 Hz (0.1 s,   6 micro-steps) — terminal guidance
 
-            hdg_target += turn_rate * dt
+        Terminal-pull reward: graduated gradient 200–500 m, bridging the
+        reward desert between proximity milestones and the 5000-point kill.
 
-        Speed is a constant target for the full macro-action period.
-        Altitude is always locked to 3000m by FlightController.
+        The continuous action is held constant for the full macro-action.
+        Heading integrates each micro-step; speed is a constant target.
+        Altitude always locked to 3000m by FlightController.
         """
         dt = PHYSICS_DT
 
@@ -158,10 +161,21 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         min_dist = self._prev_dist
         start_dist = self._prev_dist
 
+        # ── CARW: Close-in Adaptive Rate Window ─────────────────────────
+        # 2 Hz (0.5 s hold) at range > 500 m — fuel-efficient cruise.
+        # 10 Hz (0.1 s hold) within 500 m — responsive terminal guidance.
+        # This prevents overshoot when closure rates exceed 100 m/s.
+        if self._prev_dist < 500.0:
+            decision_steps = int(0.1 * CTRL_FREQ)  # 6 micro-steps
+            decision_dt = 0.1
+        else:
+            decision_steps = DECISION_STEPS         # 30 micro-steps
+            decision_dt = DECISION_DT
+
         # ═══════════════════════════════════════════════════════════════════
-        #  Micro-step loop (30 steps @ 60 Hz = 0.5 s macro-action hold)
+        #  Micro-step loop (dynamic hold: 6 or 30 steps @ 60 Hz)
         # ═══════════════════════════════════════════════════════════════════
-        for _ in range(DECISION_STEPS):
+        for _ in range(decision_steps):
             s = self.pursuer.state
 
             # ── Integrate heading target ───────────────────────────────
@@ -271,12 +285,22 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
                 total_reward += gw
                 _r_ground_warning += gw
 
-            # ── Reward: proximity tiers ────────────────────────────────
+            # ── Reward: proximity tiers (one-time milestone bonuses) ────
             for threshold, bonus in PROXIMITY_TIERS:
                 if current_dist < threshold and threshold not in self._proximity_awarded:
                     total_reward += bonus
                     _r_proximity += bonus
                     self._proximity_awarded.add(threshold)
+
+            # ── Reward: terminal-pull gradient (200–500 m graduated) ────
+            # Linear incentive ramping from 0 at 500 m to 50·dt at 200 m.
+            # Bridges the reward desert between proximity milestones and
+            # the 5000-point success cliff, giving the agent continuous
+            # feedback that "closer is better" during terminal approach.
+            if 200.0 <= current_dist <= 500.0:
+                terminal_pull = (500.0 - current_dist) / 300.0 * 50.0 * dt
+                total_reward += terminal_pull
+                _r_terminal_boost += terminal_pull
 
             self._prev_dist = current_dist
 
@@ -305,7 +329,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         _zone_death_hi = ZONE_DEATH_DIST_HI + self.difficulty_level * ZONE_DEATH_DIST_HI_SCALE
         if not terminated:
             end_dist = self._prev_dist
-            closure_rate = (start_dist - end_dist) / DECISION_DT
+            closure_rate = (start_dist - end_dist) / decision_dt
             self._closure_rates.append(closure_rate)
             if (len(self._closure_rates) >= ANTI_STALL_WINDOW
                     and end_dist > ANTI_STALL_MIN_DIST
@@ -336,7 +360,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
             self._record_tacview_frame(current_time)
 
         end_dist = self._prev_dist
-        _closure_rate = (start_dist - end_dist) / DECISION_DT
+        _closure_rate = (start_dist - end_dist) / decision_dt
 
         info = {
             "reason": reason,
@@ -358,5 +382,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
             "cmd_turn_rate_dps": cmd_turn_rate,
             "cmd_speed_mps": cmd_speed,
             "ref_hdg_deg": self._ref_hdg,
+            "decision_hz": 1.0 / decision_dt,
+            "decision_steps": decision_steps,
         }
         return self._get_obs(), total_reward, terminated, truncated, info
