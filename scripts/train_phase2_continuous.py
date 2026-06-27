@@ -214,15 +214,20 @@ def build_env(difficulty: float = 0.0, lock_altitude: bool = True):
     return base
 
 
-def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS, difficulty: float = 0.0):
+def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS, difficulty: float = 0.0,
+          load_ckpt: str | None = None):
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
     run_name = f"phase2_continuous_{timestamp}_s{seed}"
+    if load_ckpt:
+        run_name += "_bc"
     if difficulty != 0.0:
         run_name += f"_d{int(difficulty*100):02d}"
     log_dir = os.path.abspath(f"./marl_runs/{run_name}")
     os.makedirs(log_dir, exist_ok=True)
 
     print(f"[Phase2] Starting continuous Box(2) pursuit training")
+    if load_ckpt:
+        print(f"  BC checkpoint: {load_ckpt}")
     print(f"  Action space: Box(2) → [turn_rate (-15..+15 °/s), speed (150..350 m/s)]")
     print(f"  Total steps: {total_steps:,}")
     print(f"  Difficulty:  {difficulty:.2f}")
@@ -261,6 +266,13 @@ def train(seed: int = 0, total_steps: int = TOTAL_TIMESTEPS, difficulty: float =
         device="auto",
     )
 
+    # ── Load BC-pretrained weights (optional) ────────────────────────
+    if load_ckpt:
+        print(f"  Loading BC-pretrained weights from {load_ckpt} ...")
+        bc_model = PPO.load(load_ckpt, device="cpu")
+        model.policy.load_state_dict(bc_model.policy.state_dict())
+        print(f"  BC weights loaded.  Resuming with PPO fine-tuning.")
+
     # ── Callback ──────────────────────────────────────────────────────
     callback = ContinuousPursuitCallback(
         eval_env, log_dir, total_steps,
@@ -291,10 +303,13 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=TOTAL_TIMESTEPS)
     parser.add_argument("--difficulty", type=float, default=0.0,
                         help="Initial difficulty (0.0 = straight target)")
+    parser.add_argument("--load-ckpt", type=str, default=None,
+                        help="Path to BC-pretrained model .zip for warm-start")
     args = parser.parse_args()
 
     os.environ.setdefault("JSBSIM_DEBUG", "0")
     warnings.filterwarnings("ignore")
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
 
-    train(seed=args.seed, total_steps=args.steps, difficulty=args.difficulty)
+    train(seed=args.seed, total_steps=args.steps, difficulty=args.difficulty,
+          load_ckpt=args.load_ckpt)
