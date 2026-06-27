@@ -40,10 +40,12 @@ DECISION_HZ = 2  # 0.5 s macro-action hold
 
 
 class ContinuousPursuitCallback(BaseCallback):
-    """Auto-curriculum + termination-rate logging for continuous pursuit.
+    """Auto-curriculum + ATA-penalty ramp + termination-rate logging.
 
-    Simpler than Phase1Callback — no smoothness curriculum (the
-    LeadPursuitRewardWrapper handles L2 action smoothness natively).
+    ATA penalty curriculum (Phase 3 recalibrated):
+      steps 0 –  100K:  weight = 0      (explore freely)
+      steps 100K–300K:  weight = 0→1    (linear ramp)
+      steps 300K–end:   weight = 1      (full enforcement)
     """
 
     MIN_STEPS_PER_LEVEL = 20_000
@@ -51,6 +53,9 @@ class ContinuousPursuitCallback(BaseCallback):
     CONSECUTIVE_ADVANCE_REQUIRED = 1
     COLLAPSE_WIN_RATE = 0.15
     CHECKPOINT_INTERVAL = 200_000
+
+    ATA_PENALTY_RAMP_START = 100_000
+    ATA_PENALTY_RAMP_END   = 300_000
 
     def __init__(self, eval_env, log_dir: str, total_steps: int,
                  train_env=None, verbose: int = 0):
@@ -67,6 +72,7 @@ class ContinuousPursuitCallback(BaseCallback):
         self._last_healthy_checkpoint: str | None = None
         self._healthy_params = None
         self._peak_difficulty = self.MIN_DIFFICULTY
+        self._ata_penalty_weight = 0.0
 
         # Termination-rate tracking
         self._term_counts: dict = defaultdict(int)
@@ -77,6 +83,24 @@ class ContinuousPursuitCallback(BaseCallback):
         ]
 
     def _on_step(self) -> bool:
+        # ── ATA penalty weight curriculum ──────────────────────────────
+        progress = self.num_timesteps / max(self._total_steps, 1)
+        if progress < self.ATA_PENALTY_RAMP_START / self._total_steps:
+            new_w = 0.0
+        elif progress < self.ATA_PENALTY_RAMP_END / self._total_steps:
+            frac = (self.num_timesteps - self.ATA_PENALTY_RAMP_START) / (
+                self.ATA_PENALTY_RAMP_END - self.ATA_PENALTY_RAMP_START)
+            new_w = float(np.clip(frac, 0.0, 1.0))
+        else:
+            new_w = 1.0
+        if abs(new_w - self._ata_penalty_weight) > 1e-6:
+            self._ata_penalty_weight = new_w
+            if self._train_env is not None:
+                try:
+                    self._train_env.set_ata_penalty_weight(new_w)
+                except AttributeError:
+                    pass
+
         # ── Termination-rate tracking ──────────────────────────────────
         dones = self.locals.get("dones")
         infos = self.locals.get("infos")
@@ -111,6 +135,7 @@ class ContinuousPursuitCallback(BaseCallback):
 
             self.logger.record("phase2/difficulty", self._difficulty)
             self.logger.record("phase2/progress_pct", progress_pct)
+            self.logger.record("phase2/ata_penalty_w", self._ata_penalty_weight)
             if self.verbose > 0:
                 term_parts = []
                 for cat in self._TERM_CATEGORIES:
