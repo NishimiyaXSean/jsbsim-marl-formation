@@ -45,19 +45,21 @@ PN_DT = 0.5                # PN computation period (matches 2 Hz cruise rate)
 def speed_schedule(current_dist: float) -> float:
     """Speed action ∈ [-1, 1] → [150, 350] m/s.
 
-    Moderate cruise (270 m/s) preserves energy for sustained turning.
-    Gentle ramp-down through terminal phase.
+    High-speed cruise (350 m/s) for rapid closure at high difficulty.
+    Energy-preserving ramp-down through terminal phase.
     """
-    if current_dist > 1000.0:
-        return 0.2                     # ~270 m/s — moderate cruise
+    if current_dist > 1500.0:
+        return 1.0                     # 350 m/s — full speed to close range
+    elif current_dist > 800.0:
+        return 0.7                     # 320 m/s — fast cruise
     elif current_dist > 500.0:
-        frac = (current_dist - 500.0) / 500.0
-        return -0.1 + 0.3 * frac       # 240→270 m/s
+        frac = (current_dist - 500.0) / 300.0
+        return 0.2 + 0.5 * frac        # 270→320 m/s
     elif current_dist > 200.0:
         frac = (current_dist - 200.0) / 300.0
-        return -0.3 + 0.2 * frac       # 220→240 m/s  — gentle terminal
+        return -0.2 + 0.4 * frac       # 230→270 m/s  — terminal
     else:
-        return -0.5                    # ~200 m/s — coast to kill
+        return -0.3                    # ~220 m/s — coast to kill
 
 
 def compute_expert_action(

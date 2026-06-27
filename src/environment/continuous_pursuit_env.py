@@ -95,9 +95,8 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
 
     # Phase 3: relaxed anti-stall for lead-pursuit turn-building.
     # A lead-pursuit intercept requires a brief energy trade to establish
-    # the lead angle.  30 steps (15 s at 2 Hz) is too strict; 50 steps
-    # (25 s) gives the agent room to build lead, then recover Vc.
-    ANTI_STALL_WINDOW = 50
+    # the lead angle.  35 steps (17.5 s at 2 Hz) gives enough room.
+    ANTI_STALL_WINDOW = 35
 
     # LOS-rate normalisation constant (rad/s).  Typical engagements
     # produce λ̇ in the range ±0.3 rad/s (±17 °/s).
@@ -110,6 +109,11 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         # ── Parent init — builds aircraft, autopilot, FlightController,
         #    sets up difficulty, lock_altitude, tacview, etc. ────────────
         super().__init__(**kwargs)
+
+        # ── ATA penalty curriculum weight (Phase 3 recalibrated) ─────
+        # 0.0 = penalty disabled (early training)
+        # 1.0 = full penalty (late training)
+        self._ata_penalty_weight = 0.0
 
         # ── Override action space ──────────────────────────────────────
         self.action_space = gym.spaces.Box(
@@ -128,6 +132,10 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
         self.observation_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(self.OBS_DIM,), dtype=np.float32,
         )
+
+    def set_ata_penalty_weight(self, w: float) -> None:
+        """Set ATA degradation penalty multiplier (0.0–1.0)."""
+        self._ata_penalty_weight = float(np.clip(w, 0.0, 1.0))
 
     # ── Reset ───────────────────────────────────────────────────────────
 
@@ -365,14 +373,13 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
                 _r_terminal_boost += terminal_pull
 
             # ── Reward: ATA degradation penalty (anti-tail-chase) ─────
-            # When the agent is close but badly misaligned, it's in a
-            # tail-chase.  Penalise severely to force immediate correction.
-            # Threshold: dist < 1000 m AND |ATA| > 20°.
-            if current_dist < 1000.0:
+            # Gentle (-1.0·dt) when |ATA| > 20° and close.  Weighted by
+            # curriculum: 0.0 early (explore freely), 1.0 late (enforce).
+            if current_dist < 1000.0 and self._ata_penalty_weight > 0.0:
                 ata_deg_now = float(np.degrees(
                     np.arccos(np.clip(geo["cos_ata"], -1.0, 1.0))))
                 if ata_deg_now > 20.0:
-                    ata_penalty = 5.0 * dt
+                    ata_penalty = 1.0 * dt * self._ata_penalty_weight
                     total_reward -= ata_penalty
                     _r_ata -= ata_penalty  # log under ATA for diagnostics
 
