@@ -36,30 +36,21 @@ import numpy as np
 from src.environment.continuous_pursuit_env import ContinuousPursuitEnv, MAX_TURN_RATE_DPS
 from src.utils.pn_guidance import compute_pn_heading
 
-# ── Expert hyperparameters (validated 2026-06-27: 100% success @ diff=0) ─
-NAV_CONSTANT = 3.0         # PN navigation constant (3 = moderate lead)
-KP_HEADING = 0.7           # P-controller gain: 10° error → ~50% turn
+# ── Expert hyperparameters (Phase 3.4: extreme-geometry tuned) ──────
+NAV_CONSTANT = 5.0         # Aggressive lead for large bearing offsets
+KP_HEADING = 0.8           # Slightly stronger P-controller
 PN_DT = 0.5                # PN computation period (matches 2 Hz cruise rate)
 
 
 def speed_schedule(current_dist: float) -> float:
-    """Speed action ∈ [-1, 1] → [150, 350] m/s.
-
-    High-speed cruise (350 m/s) for rapid closure at high difficulty.
-    Energy-preserving ramp-down through terminal phase.
-    """
-    if current_dist > 1500.0:
-        return 1.0                     # 350 m/s — full speed to close range
-    elif current_dist > 800.0:
-        return 0.7                     # 320 m/s — fast cruise
-    elif current_dist > 500.0:
-        frac = (current_dist - 500.0) / 300.0
-        return 0.2 + 0.5 * frac        # 270→320 m/s
+    """Speed action: full power until terminal, then coast."""
+    if current_dist > 500.0:
+        return 1.0                     # 350 m/s — max closure
     elif current_dist > 200.0:
         frac = (current_dist - 200.0) / 300.0
-        return -0.2 + 0.4 * frac       # 230→270 m/s  — terminal
+        return 0.5 + 0.5 * frac        # 300→350 m/s
     else:
-        return -0.3                    # ~220 m/s — coast to kill
+        return 0.0                     # 250 m/s — coast to kill
 
 
 def compute_expert_action(
@@ -152,9 +143,9 @@ def main():
     parser.add_argument("--difficulty-max", type=float, default=0.50,
                         help="Maximum difficulty for uniform sampling")
     parser.add_argument("--nav-constant", type=float, default=NAV_CONSTANT,
-                        help="PN navigation constant")
+                        help="PN navigation constant (5.0 = aggressive lead)")
     parser.add_argument("--kp", type=float, default=KP_HEADING,
-                        help="P-controller gain for heading")
+                        help="P-controller gain (0.8 = faster correction)")
     parser.add_argument("--output-dir", type=str, default="./data/expert",
                         help="Output directory for .npz files")
     parser.add_argument("--seed", type=int, default=0,
