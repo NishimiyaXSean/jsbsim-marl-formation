@@ -36,23 +36,45 @@ ACTOR_LR_STAGE2 = 1e-5   # very low — gentle fine-tune
 CRITIC_LR = 5e-4         # aggressive — needs to catch up
 
 
+FORMATION_RAMP_START = 50_000   # start when Actor unfreezes
+FORMATION_RAMP_END = 150_000    # full weight by end of Stage 2
+
 class Staged2v1Callback(BaseCallback):
     """Staged training: freeze/train Actor, ramp formation reward."""
 
-    def __init__(self, model: PPO, total_steps: int, verbose: int = 0):
+    def __init__(self, model: PPO, total_steps: int, train_env=None, verbose: int = 0):
         super().__init__(verbose)
         self._model = model
         self._total_steps = total_steps
+        self._train_env = train_env
         self._term_counts = defaultdict(int)
         self._term_total = 0
+        self._formation_weight = 0.0
 
     def _on_step(self) -> bool:
+        # ── Formation weight annealing ───────────────────────────────
+        if self.num_timesteps < FORMATION_RAMP_START:
+            new_fw = 0.0
+        elif self.num_timesteps < FORMATION_RAMP_END:
+            frac = (self.num_timesteps - FORMATION_RAMP_START) / (
+                FORMATION_RAMP_END - FORMATION_RAMP_START)
+            new_fw = float(np.clip(frac, 0.0, 1.0))
+        else:
+            new_fw = 1.0
+        if abs(new_fw - self._formation_weight) > 1e-6:
+            self._formation_weight = new_fw
+            if self._train_env is not None:
+                try:
+                    self._train_env.set_formation_weight(new_fw)
+                except AttributeError:
+                    pass
+
         # ── Stage switching ──────────────────────────────────────────
         if self.num_timesteps == STAGE1_STEPS:
             self._unfreeze_actor()
-            print("\n[2v1] === Stage 2: Actor unfrozen, LR=1e-5 ===")
+            print(f"\n[2v1] === Stage 2: Actor unfrozen, formation_w={new_fw:.2f} ===")
         if self.num_timesteps == STAGE2_STEPS:
-            print("\n[2v1] === Stage 3: Full training ===")
+            print(f"\n[2v1] === Stage 3: Full training, formation_w={new_fw:.2f} ===")
 
         # ── Termination logging ──────────────────────────────────────
         dones = self.locals.get("dones")
@@ -145,7 +167,7 @@ def train(seed: int = 42, total_steps: int = TOTAL_TIMESTEPS, difficulty: float 
     print(f"           Critic active ({sum(p.numel() for p in value_params):,} params, LR={CRITIC_LR})")
 
     # ── Train ───────────────────────────────────────────────────────
-    callback = Staged2v1Callback(model, total_steps, verbose=1)
+    callback = Staged2v1Callback(model, total_steps, train_env=env, verbose=1)
     model.learn(total_timesteps=total_steps, callback=callback,
                 tb_log_name="formation_2v1", progress_bar=False)
 
