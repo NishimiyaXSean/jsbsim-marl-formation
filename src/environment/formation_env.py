@@ -660,12 +660,13 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
-        LINE_ID = 301  # green: nearest pursuer → target + distance label
+        LINE_ID = 301
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
             f.write(f"{LINE_ID},Name=Engagement Range\n")
             f.write(f"{LINE_ID},Color=Green\n")
+            f.write(f"{LINE_ID},Type=Static+Minor\n")
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
                     if frame == self._tacview_frames[0]:
@@ -674,10 +675,11 @@ class FormationEnv(gym.Env):
                         f.write(f"{ac['id']},Color={color}\n")
                         f.write(f"{ac['id']},Type=Air+Fighter\n")
                 f.write(f"#{frame['time']:.2f}\n")
+                # Aircraft positions
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
-                # Green line: nearest pursuer → target
+                # Native target lock: nearest pursuer → target
                 pursuers = [a for a in frame["aircraft"] if "Pursuer" in a["name"]]
                 targets = [a for a in frame["aircraft"] if "Target" in a["name"]]
                 if pursuers and targets:
@@ -686,14 +688,9 @@ class FormationEnv(gym.Env):
                     def _d(a, b):
                         return np.sqrt(((a["lat_deg"]-b["lat_deg"])*111320)**2 +
                                        ((a["lon_deg"]-b["lon_deg"])*111320*coslat)**2)
-                    nearest = min(pursuers, key=lambda p: _d(p, tgt))
-                    d = _d(nearest, tgt)
-                    f.write(f"{LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
-                            f"|{tgt['lon_deg']}|{tgt['lat_deg']}|{tgt['alt_m']:.1f}\n")
-                    mid_lon = (nearest['lon_deg'] + tgt['lon_deg']) / 2
-                    mid_lat = (nearest['lat_deg'] + tgt['lat_deg']) / 2
-                    f.write(f"{LINE_ID},Text={d:.0f}m\n")
-                    f.write(f"{LINE_ID},TextLocation={mid_lon}|{mid_lat}|{(nearest['alt_m']+tgt['alt_m'])/2:.1f}\n")
+                    nearest_id = min(pursuers, key=lambda p: _d(p, tgt))["id"]
+                    for p in pursuers:
+                        f.write(f"{p['id']},Target={'201' if p['id'] == nearest_id else ''}\n")
 
     # ── Properties ──────────────────────────────────────────────────────
 
