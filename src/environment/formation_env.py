@@ -75,14 +75,20 @@ ATA_DEGRADATION_THRESH = 20.0     # |ATA| above this triggers penalty
 ATA_DEGRADATION_WEIGHT = 1.0      # -1.0·dt per micro-step when degraded
 TERMINAL_PULL_MAX = 50.0          # max per-micro-step terminal pull at 200m
 
-# ── Formation-specific ────────────────────────────────────────────────────
-FORMATION_SPACING_IDEAL = 1000.0  # ideal pursuer-pursuer separation (m)
-FORMATION_SPACING_MIN = 300.0     # below this: penalty
-FORMATION_SPACING_MAX = 2000.0    # above this: penalty (too spread)
-FORMATION_SPACING_WEIGHT = 2.0    # reward per micro-step for good spacing
+# ── Formation-specific (Phase 4.1: piecewise spacing + weight annealing) ─────
 FORMATION_COLLISION_DIST = 50.0   # below this: terminate episode
 FORMATION_COLLISION_PENALTY = -3000.0
-TARGET_ASSIGNMENT_MODE = "nearest"  # or "fixed"
+
+# Piecewise spacing zones (metres between pursuers)
+SPACING_DANGER = 50.0     # < this: strong fixed penalty, terminate
+SPACING_REPEL_MAX = 200.0  # 50–200: linear repulsion (Coulomb-like)
+SPACING_IDEAL_LO = 200.0   # 200–500: small positive, gated on closing
+SPACING_IDEAL_HI = 500.0
+SPACING_REWARD_CAP = 2.0   # max ideal-zone reward per micro-step
+SPACING_DANGER_PENALTY = -5.0  # penalty per micro-step in danger zone
+
+# Weight annealing
+FORMATION_WEIGHT = 0.0      # current dynamic weight (0→1 via annealing)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -162,6 +168,7 @@ class FormationEnv(gym.Env):
         self._ref_lla = (30.0, 120.0, 3000.0)
         self._tacview_frames: List[dict] = []
         self._ata_penalty_weight = 0.0
+        self._formation_weight = FORMATION_WEIGHT
 
         # ── Build aircraft + controllers ──────────────────────────────
         self.pursuers: List[PursuerState] = []
@@ -454,18 +461,27 @@ class FormationEnv(gym.Env):
             if terminated:
                 break
 
-            # ── Formation spacing reward (conditioned on closing) ─────
-            if self.N >= 2 and all_closing:
-                for i in range(self.N):
-                    for j in range(i + 1, self.N):
-                        pi = self.pursuers[i].aircraft.position_ned
-                        pj = self.pursuers[j].aircraft.position_ned
-                        mate_dist = float(np.linalg.norm(pi - pj))
-                        if FORMATION_SPACING_MIN <= mate_dist <= FORMATION_SPACING_MAX:
-                            # Reward proximity to ideal spacing
-                            spacing_score = 1.0 - abs(mate_dist - FORMATION_SPACING_IDEAL) / \
-                                (FORMATION_SPACING_MAX - FORMATION_SPACING_MIN)
-                            total_reward += FORMATION_SPACING_WEIGHT * spacing_score * dt
+            # ── Formation spacing (Phase 4.1: piecewise + gated) ────
+            if self.N >= 2 and self._formation_weight > 0.0:
+                pi = self.pursuers[0].aircraft.position_ned
+                pj = self.pursuers[1].aircraft.position_ned
+                mate_dist = float(np.linalg.norm(pi - pj))
+
+                if mate_dist < SPACING_DANGER:
+                    # Danger zone: strong fixed penalty
+                    total_reward += SPACING_DANGER_PENALTY * self._formation_weight * dt
+                elif mate_dist < SPACING_REPEL_MAX:
+                    # Repulsion buffer: linear decay from max penalty to zero
+                    frac = (mate_dist - SPACING_DANGER) / (SPACING_REPEL_MAX - SPACING_DANGER)
+                    penalty = SPACING_DANGER_PENALTY * (1.0 - frac)
+                    total_reward += penalty * self._formation_weight * dt
+                elif mate_dist <= SPACING_IDEAL_HI and all_closing:
+                    # Ideal zone: small positive reward, GATED on both closing
+                    frac = 1.0 - abs(mate_dist - (SPACING_IDEAL_LO + SPACING_IDEAL_HI) / 2.0) / \
+                        ((SPACING_IDEAL_HI - SPACING_IDEAL_LO) / 2.0)
+                    bonus = SPACING_REWARD_CAP * max(0.0, frac)
+                    total_reward += bonus * self._formation_weight * dt
+                # d > 500m: no reward/penalty (spread too far)
 
             # ── Ground / ceiling checks ───────────────────────────────
             for ps in self.pursuers:
@@ -667,3 +683,7 @@ class FormationEnv(gym.Env):
 
     def set_ata_penalty_weight(self, w: float) -> None:
         self._ata_penalty_weight = float(np.clip(w, 0.0, 1.0))
+
+    def set_formation_weight(self, w: float) -> None:
+        """Dynamic formation spacing weight (0→1 via annealing)."""
+        self._formation_weight = float(np.clip(w, 0.0, 1.0))
