@@ -660,13 +660,9 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
-        LINE_ID = 301
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-            f.write(f"{LINE_ID},Name=Engagement Range\n")
-            f.write(f"{LINE_ID},Color=Green\n")
-            f.write(f"{LINE_ID},Type=Static+Minor\n")
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
                     if frame == self._tacview_frames[0]:
@@ -675,24 +671,9 @@ class FormationEnv(gym.Env):
                         f.write(f"{ac['id']},Color={color}\n")
                         f.write(f"{ac['id']},Type=Air+Fighter\n")
                 f.write(f"#{frame['time']:.2f}\n")
-                # Aircraft positions
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
-                # Target locks nearest pursuer (blue line)
-                pursuers = [a for a in frame["aircraft"] if "Pursuer" in a["name"]]
-                targets = [a for a in frame["aircraft"] if "Target" in a["name"]]
-                if pursuers and targets:
-                    tgt = targets[0]
-                    coslat = np.cos(np.radians(tgt["lat_deg"]))
-                    def _d(a, b):
-                        return np.sqrt(((a["lat_deg"]-b["lat_deg"])*111320)**2 +
-                                       ((a["lon_deg"]-b["lon_deg"])*111320*coslat)**2)
-                    nearest_id = min(pursuers, key=lambda p: _d(p, tgt))["id"]
-                    # 201→nearest pursuer; clear pursuer locks
-                    f.write(f"201,Target={nearest_id}\n")
-                    for p in pursuers:
-                        f.write(f"{p['id']},Target=\n")
 
     # ── Properties ──────────────────────────────────────────────────────
 
