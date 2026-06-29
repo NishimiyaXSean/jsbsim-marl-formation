@@ -145,12 +145,16 @@ def train(seed: int = 42, total_steps: int = TOTAL_TIMESTEPS, difficulty: float 
                 policy_kwargs=policy_kwargs, tensorboard_log=log_dir,
                 verbose=1, seed=seed, device="auto")
 
-    # ── Load tiled Phase 3.6 weights ────────────────────────────────
+    # ── Load checkpoint weights (policy only, skip optimizer) ─────────
     if tiled_model:
-        print(f"  Loading tiled weights: {tiled_model}")
-        src = PPO.load(tiled_model, device="cpu")
-        model.policy.load_state_dict(src.policy.state_dict())
-        print("  Tiled weights loaded.")
+        print(f"  Loading checkpoint: {tiled_model}")
+        import zipfile, io
+        with zipfile.ZipFile(tiled_model, 'r') as zf:
+            with zf.open('policy.pth') as f:
+                policy_state = torch.load(io.BytesIO(f.read()), map_location='cpu',
+                                          weights_only=True)
+        model.policy.load_state_dict(policy_state)
+        print("  Policy weights loaded (optimizer fresh).")
 
     # ── Stage 1: Freeze Actor ───────────────────────────────────────
     for name, param in model.policy.named_parameters():
