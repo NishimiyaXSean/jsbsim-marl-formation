@@ -660,15 +660,12 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
-        ENGAGE_LINE_ID = 301   # green: nearest pursuer → target (+ distance label)
-        SPACING_LINE_ID = 302  # yellow: pursuer ↔ pursuer spacing
+        LINE_ID = 301  # green: nearest pursuer → target + distance label
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-            f.write(f"{ENGAGE_LINE_ID},Name=Engagement Range\n")
-            f.write(f"{ENGAGE_LINE_ID},Color=Green\n")
-            f.write(f"{SPACING_LINE_ID},Name=Formation Spacing\n")
-            f.write(f"{SPACING_LINE_ID},Color=Yellow\n")
+            f.write(f"{LINE_ID},Name=Engagement Range\n")
+            f.write(f"{LINE_ID},Color=Green\n")
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
                     if frame == self._tacview_frames[0]:
@@ -680,30 +677,23 @@ class FormationEnv(gym.Env):
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
-                # Lines
+                # Green line: nearest pursuer → target
                 pursuers = [a for a in frame["aircraft"] if "Pursuer" in a["name"]]
                 targets = [a for a in frame["aircraft"] if "Target" in a["name"]]
                 if pursuers and targets:
                     tgt = targets[0]
                     coslat = np.cos(np.radians(tgt["lat_deg"]))
-                    def _dist_2d(a, b):
+                    def _d(a, b):
                         return np.sqrt(((a["lat_deg"]-b["lat_deg"])*111320)**2 +
                                        ((a["lon_deg"]-b["lon_deg"])*111320*coslat)**2)
-                    nearest = min(pursuers, key=lambda p: _dist_2d(p, tgt))
-                    engage_dist = _dist_2d(nearest, tgt)
-                    # Green line: nearest pursuer → target
-                    f.write(f"{ENGAGE_LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
+                    nearest = min(pursuers, key=lambda p: _d(p, tgt))
+                    d = _d(nearest, tgt)
+                    f.write(f"{LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
                             f"|{tgt['lon_deg']}|{tgt['lat_deg']}|{tgt['alt_m']:.1f}\n")
-                    # Distance label at midpoint
                     mid_lon = (nearest['lon_deg'] + tgt['lon_deg']) / 2
                     mid_lat = (nearest['lat_deg'] + tgt['lat_deg']) / 2
-                    f.write(f"{ENGAGE_LINE_ID},Text={engage_dist:.0f}m\n")
-                    f.write(f"{ENGAGE_LINE_ID},TextLocation={mid_lon}|{mid_lat}|{(nearest['alt_m']+tgt['alt_m'])/2:.1f}\n")
-                # Yellow spacing line
-                if len(pursuers) >= 2:
-                    p0, p1 = pursuers[0], pursuers[1]
-                    f.write(f"{SPACING_LINE_ID},T={p0['lon_deg']}|{p0['lat_deg']}|{p0['alt_m']:.1f}"
-                            f"|{p1['lon_deg']}|{p1['lat_deg']}|{p1['alt_m']:.1f}\n")
+                    f.write(f"{LINE_ID},Text={d:.0f}m\n")
+                    f.write(f"{LINE_ID},TextLocation={mid_lon}|{mid_lat}|{(nearest['alt_m']+tgt['alt_m'])/2:.1f}\n")
 
     # ── Properties ──────────────────────────────────────────────────────
 
