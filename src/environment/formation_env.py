@@ -660,7 +660,7 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
-        ENGAGE_LINE_ID = 301   # green: nearest pursuer → target
+        ENGAGE_LINE_ID = 301   # green: nearest pursuer → target (+ distance label)
         SPACING_LINE_ID = 302  # yellow: pursuer ↔ pursuer spacing
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
@@ -686,13 +686,20 @@ class FormationEnv(gym.Env):
                 if pursuers and targets:
                     tgt = targets[0]
                     coslat = np.cos(np.radians(tgt["lat_deg"]))
-                    nearest = min(pursuers, key=lambda p:
-                        ((p["lat_deg"]-tgt["lat_deg"])*111320)**2 +
-                        ((p["lon_deg"]-tgt["lon_deg"])*111320*coslat)**2)
-                    # Green: nearest pursuer → target
+                    def _dist_2d(a, b):
+                        return np.sqrt(((a["lat_deg"]-b["lat_deg"])*111320)**2 +
+                                       ((a["lon_deg"]-b["lon_deg"])*111320*coslat)**2)
+                    nearest = min(pursuers, key=lambda p: _dist_2d(p, tgt))
+                    engage_dist = _dist_2d(nearest, tgt)
+                    # Green line: nearest pursuer → target
                     f.write(f"{ENGAGE_LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
                             f"|{tgt['lon_deg']}|{tgt['lat_deg']}|{tgt['alt_m']:.1f}\n")
-                # Yellow: pursuer ↔ pursuer spacing
+                    # Distance label at midpoint
+                    mid_lon = (nearest['lon_deg'] + tgt['lon_deg']) / 2
+                    mid_lat = (nearest['lat_deg'] + tgt['lat_deg']) / 2
+                    f.write(f"{ENGAGE_LINE_ID},Text={engage_dist:.0f}m\n")
+                    f.write(f"{ENGAGE_LINE_ID},TextLocation={mid_lon}|{mid_lat}|{(nearest['alt_m']+tgt['alt_m'])/2:.1f}\n")
+                # Yellow spacing line
                 if len(pursuers) >= 2:
                     p0, p1 = pursuers[0], pursuers[1]
                     f.write(f"{SPACING_LINE_ID},T={p0['lon_deg']}|{p0['lat_deg']}|{p0['alt_m']:.1f}"
