@@ -679,7 +679,7 @@ class FormationEnv(gym.Env):
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
-                # Target locks nearest pursuer (blue line)
+                # Green line + distance: nearest pursuer → target
                 pursuers = [a for a in frame["aircraft"] if "Pursuer" in a["name"]]
                 targets = [a for a in frame["aircraft"] if "Target" in a["name"]]
                 if pursuers and targets:
@@ -688,11 +688,15 @@ class FormationEnv(gym.Env):
                     def _d(a, b):
                         return np.sqrt(((a["lat_deg"]-b["lat_deg"])*111320)**2 +
                                        ((a["lon_deg"]-b["lon_deg"])*111320*coslat)**2)
-                    nearest_id = min(pursuers, key=lambda p: _d(p, tgt))["id"]
-                    # 201→nearest pursuer; clear pursuer locks
-                    f.write(f"201,Target={nearest_id}\n")
-                    for p in pursuers:
-                        f.write(f"{p['id']},Target=\n")
+                    nearest = min(pursuers, key=lambda p: _d(p, tgt))
+                    dist = _d(nearest, tgt)
+                    mid_lon = (nearest["lon_deg"] + tgt["lon_deg"]) / 2
+                    mid_lat = (nearest["lat_deg"] + tgt["lat_deg"]) / 2
+                    mid_alt = (nearest["alt_m"] + tgt["alt_m"]) / 2
+                    f.write(f"{LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
+                            f"|{tgt['lon_deg']}|{tgt['lat_deg']}|{tgt['alt_m']:.1f}\n")
+                    f.write(f"{LINE_ID},Text={int(dist)}m\n")
+                    f.write(f"{LINE_ID},TextLocation={mid_lon}|{mid_lat}|{mid_alt:.1f}\n")
 
     # ── Properties ──────────────────────────────────────────────────────
 
