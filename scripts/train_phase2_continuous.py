@@ -40,12 +40,17 @@ DECISION_HZ = 2  # 0.5 s macro-action hold
 
 
 class ContinuousPursuitCallback(BaseCallback):
-    """Auto-curriculum + ATA-penalty ramp + termination-rate logging.
+    """Auto-curriculum + ATA-penalty ramp + smoothness ramp + termination logging.
 
     ATA penalty curriculum (Phase 3 recalibrated):
       steps 0 –  100K:  weight = 0      (explore freely)
       steps 100K–300K:  weight = 0→1    (linear ramp)
       steps 300K–end:   weight = 1      (full enforcement)
+
+    Smoothness curriculum (Phase 3.6):
+      steps 0 –   50K:  weight = 2.0    (gentle — allow exploration)
+      steps  50K–150K:  weight = 2→8   (linear ramp)
+      steps 150K–end:   weight = 8.0    (full enforcement — suppress dither)
     """
 
     MIN_STEPS_PER_LEVEL = 20_000
@@ -56,6 +61,11 @@ class ContinuousPursuitCallback(BaseCallback):
 
     ATA_PENALTY_RAMP_START = 100_000
     ATA_PENALTY_RAMP_END   = 300_000
+
+    SMOOTHNESS_RAMP_START = 50_000
+    SMOOTHNESS_RAMP_END   = 150_000
+    SMOOTHNESS_MIN = 2.0
+    SMOOTHNESS_MAX = 8.0
 
     def __init__(self, eval_env, log_dir: str, total_steps: int,
                  train_env=None, verbose: int = 0):
@@ -73,6 +83,7 @@ class ContinuousPursuitCallback(BaseCallback):
         self._healthy_params = None
         self._peak_difficulty = self.MIN_DIFFICULTY
         self._ata_penalty_weight = 0.0
+        self._smoothness_weight = self.SMOOTHNESS_MIN
 
         # Termination-rate tracking
         self._term_counts: dict = defaultdict(int)
@@ -98,6 +109,23 @@ class ContinuousPursuitCallback(BaseCallback):
             if self._train_env is not None:
                 try:
                     self._train_env.set_ata_penalty_weight(new_w)
+                except AttributeError:
+                    pass
+
+        # ── Smoothness weight curriculum ──────────────────────────────
+        if self.num_timesteps < self.SMOOTHNESS_RAMP_START:
+            new_sw = self.SMOOTHNESS_MIN
+        elif self.num_timesteps < self.SMOOTHNESS_RAMP_END:
+            frac = (self.num_timesteps - self.SMOOTHNESS_RAMP_START) / (
+                self.SMOOTHNESS_RAMP_END - self.SMOOTHNESS_RAMP_START)
+            new_sw = self.SMOOTHNESS_MIN + (self.SMOOTHNESS_MAX - self.SMOOTHNESS_MIN) * frac
+        else:
+            new_sw = self.SMOOTHNESS_MAX
+        if abs(new_sw - self._smoothness_weight) > 1e-6:
+            self._smoothness_weight = new_sw
+            if self._train_env is not None:
+                try:
+                    self._train_env.set_smoothness_weight(new_sw)
                 except AttributeError:
                     pass
 
@@ -136,6 +164,7 @@ class ContinuousPursuitCallback(BaseCallback):
             self.logger.record("phase2/difficulty", self._difficulty)
             self.logger.record("phase2/progress_pct", progress_pct)
             self.logger.record("phase2/ata_penalty_w", self._ata_penalty_weight)
+            self.logger.record("phase2/smoothness_w", self._smoothness_weight)
             if self.verbose > 0:
                 term_parts = []
                 for cat in self._TERM_CATEGORIES:

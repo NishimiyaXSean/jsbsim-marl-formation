@@ -162,7 +162,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     LOS_RATE_WEIGHT = 20.0       # LOS-rate damping — maintaining collision course
     LOS_RATE_SCALE = 5.0         # sensitivity: higher = sharper decay around λ̇≈0
     LEAD_TIME_SEC = 1.0          # look-ahead time for lead point
-    SMOOTHNESS_WEIGHT = 4.0      # action-rate penalty weight (doubled for V9 — enforces smooth control)
+    SMOOTHNESS_WEIGHT = 8.0      # Phase 3.6: doubled 4→8 — suppress PN dithering in cruise
     ACTION_MAG_WEIGHT = 1.0      # L2 penalty on raw action magnitude — discourages unnecessary maneuvers
     VZ_PENALTY_WEIGHT = 15.0     # penalty on normalised vertical speed |V_z/50| — suppresses porpoising
     ALT_DELTA_WEIGHT = 30.0      # quadratic penalty weight (Δh/1000)² — gravity well against diving
@@ -173,6 +173,11 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
     def __init__(self, env: gym.Env):
         super().__init__(env)
         self._last_action: np.ndarray | None = None
+        self._smoothness_weight = self.SMOOTHNESS_WEIGHT
+
+    def set_smoothness_weight(self, w: float) -> None:
+        """Dynamic smoothness weight for curriculum ramping."""
+        self._smoothness_weight = float(w)
 
     # ── Property delegation ──────────────────────────────────────────
     @property
@@ -199,7 +204,7 @@ class LeadPursuitRewardWrapper(gym.Wrapper):
         action_arr = np.asarray(action, dtype=np.float32)
         if self._last_action is not None:
             action_diff = action_arr - self._last_action
-            r_smoothness = -self.SMOOTHNESS_WEIGHT * float(np.sum(action_diff ** 2))
+            r_smoothness = -self._smoothness_weight * float(np.sum(action_diff ** 2))
             reward += r_smoothness
         self._last_action = action_arr.copy()
 
