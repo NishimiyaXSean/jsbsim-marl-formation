@@ -660,9 +660,13 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
+        SPACING_LINE_ID = 301  # virtual object for pursuer spacing line
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
+            # Spacing line object header
+            f.write(f"{SPACING_LINE_ID},Name=Formation Spacing\n")
+            f.write(f"{SPACING_LINE_ID},Color=Green\n")
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
                     if frame == self._tacview_frames[0]:
@@ -674,6 +678,12 @@ class FormationEnv(gym.Env):
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
+                # Draw green spacing line between pursuers: two-coordinate T= polyline
+                if len(frame["aircraft"]) >= 2:
+                    p0 = frame["aircraft"][0]
+                    p1 = frame["aircraft"][1]
+                    f.write(f"{SPACING_LINE_ID},T={p0['lon_deg']}|{p0['lat_deg']}|{p0['alt_m']:.1f}"
+                            f"|{p1['lon_deg']}|{p1['lat_deg']}|{p1['alt_m']:.1f}\n")
 
     # ── Properties ──────────────────────────────────────────────────────
 
