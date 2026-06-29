@@ -105,10 +105,18 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
     # Observation dimension (Phase 3: +2 for LOS rate and bearing error)
     OBS_DIM = 27
 
-    def __init__(self, **kwargs):
+    def __init__(self, max_episode_time: float | None = None, **kwargs):
         # ── Parent init — builds aircraft, autopilot, FlightController,
         #    sets up difficulty, lock_altitude, tacview, etc. ────────────
         super().__init__(**kwargs)
+
+        # ── Overridable episode timeout (Phase 3.4) ──────────────────
+        # Allow BC data generation to extend the time limit for
+        # large-bearing-offset scenarios that need longer to close.
+        if max_episode_time is not None:
+            self._max_episode_time = max_episode_time
+        else:
+            self._max_episode_time = MAX_EPISODE_TIME
 
         # ── ATA penalty curriculum weight (Phase 3 recalibrated) ─────
         # 0.0 = penalty disabled (early training)
@@ -449,7 +457,7 @@ class ContinuousPursuitEnv(BFMPursuitEnv):
 
         # ── Timeout ────────────────────────────────────────────────────
         current_time = self._step_counter / CTRL_FREQ
-        if not terminated and not truncated and current_time >= MAX_EPISODE_TIME:
+        if not terminated and not truncated and current_time >= self._max_episode_time:
             truncated = True
             reason = "timeout"
             total_reward += REWARD_TIMEOUT
