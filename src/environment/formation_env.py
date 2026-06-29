@@ -660,13 +660,15 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
-        SPACING_LINE_ID = 301  # virtual object for pursuer spacing line
+        ENGAGE_LINE_ID = 301   # green: nearest pursuer → target
+        SPACING_LINE_ID = 302  # yellow: pursuer ↔ pursuer spacing
         with open(path, "w", encoding="utf-8-sig") as f:
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
-            # Spacing line object header
+            f.write(f"{ENGAGE_LINE_ID},Name=Engagement Range\n")
+            f.write(f"{ENGAGE_LINE_ID},Color=Green\n")
             f.write(f"{SPACING_LINE_ID},Name=Formation Spacing\n")
-            f.write(f"{SPACING_LINE_ID},Color=Green\n")
+            f.write(f"{SPACING_LINE_ID},Color=Yellow\n")
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
                     if frame == self._tacview_frames[0]:
@@ -678,10 +680,21 @@ class FormationEnv(gym.Env):
                 for ac in frame["aircraft"]:
                     f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
-                # Draw green spacing line between pursuers: two-coordinate T= polyline
-                if len(frame["aircraft"]) >= 2:
-                    p0 = frame["aircraft"][0]
-                    p1 = frame["aircraft"][1]
+                # Lines
+                pursuers = [a for a in frame["aircraft"] if "Pursuer" in a["name"]]
+                targets = [a for a in frame["aircraft"] if "Target" in a["name"]]
+                if pursuers and targets:
+                    tgt = targets[0]
+                    coslat = np.cos(np.radians(tgt["lat_deg"]))
+                    nearest = min(pursuers, key=lambda p:
+                        ((p["lat_deg"]-tgt["lat_deg"])*111320)**2 +
+                        ((p["lon_deg"]-tgt["lon_deg"])*111320*coslat)**2)
+                    # Green: nearest pursuer → target
+                    f.write(f"{ENGAGE_LINE_ID},T={nearest['lon_deg']}|{nearest['lat_deg']}|{nearest['alt_m']:.1f}"
+                            f"|{tgt['lon_deg']}|{tgt['lat_deg']}|{tgt['alt_m']:.1f}\n")
+                # Yellow: pursuer ↔ pursuer spacing
+                if len(pursuers) >= 2:
+                    p0, p1 = pursuers[0], pursuers[1]
                     f.write(f"{SPACING_LINE_ID},T={p0['lon_deg']}|{p0['lat_deg']}|{p0['alt_m']:.1f}"
                             f"|{p1['lon_deg']}|{p1['lat_deg']}|{p1['alt_m']:.1f}\n")
 
