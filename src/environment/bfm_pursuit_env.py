@@ -807,20 +807,42 @@ class BFMPursuitEnv(gym.Env):
     # ── Tacview (identical to SinglePursuitEnv) ────────────────────────────
 
     def _record_tacview_frame(self, t):
+        """Record one Tacview frame.
+
+        Lat/lon are derived from the manually-tracked NED position,
+        NOT from JSBSim's internal state.  JSBSim starts at the
+        reference LLA and integrates its own position, but our code
+        manually sets and updates position_ned for both aircraft.
+        Using JSBSim's lat_deg/lon_deg would show aircraft stuck
+        at the origin instead of their actual flight paths.
+        """
         ps = self.pursuer.state
         ts = self.target_ac.state
+        ref_lat, ref_lon, ref_alt = self._ref_lla
+
+        def _ned_to_latlon(ned):
+            """Convert NED metres to (lat_deg, lon_deg)."""
+            lat = ref_lat + ned[0] / 111320.0
+            lon = ref_lon + ned[1] / (111320.0 * np.cos(np.radians(ref_lat)))
+            return float(lat), float(lon)
+
+        p_lat, p_lon = _ned_to_latlon(self.pursuer.position_ned)
+        t_lat, t_lon = _ned_to_latlon(self.target_ac.position_ned)
+
         self._tacview_frames.append({
             "time": t,
             "pursuer": {
-                "lat_deg": ps["lat_deg"], "lon_deg": ps["lon_deg"],
-                "alt_m": ps["alt_m"], "roll_deg": ps["roll_deg"],
+                "lat_deg": p_lat, "lon_deg": p_lon,
+                "alt_m": self.pursuer.position_ned[2],
+                "roll_deg": ps["roll_deg"],
                 "pitch_deg": ps["pitch_deg"], "yaw_deg": ps["yaw_deg"],
                 "airspeed_mps": ps["airspeed_mps"], "n_z_g": ps["n_z_g"],
                 "alpha_deg": ps["alpha_deg"], "thrust_lbs": ps["thrust_lbs"],
             },
             "target": {
-                "lat_deg": ts["lat_deg"], "lon_deg": ts["lon_deg"],
-                "alt_m": ts["alt_m"], "roll_deg": ts["roll_deg"],
+                "lat_deg": t_lat, "lon_deg": t_lon,
+                "alt_m": self.target_ac.position_ned[2],
+                "roll_deg": ts["roll_deg"],
                 "pitch_deg": ts["pitch_deg"], "yaw_deg": ts["yaw_deg"],
                 "airspeed_mps": ts["airspeed_mps"],
             },
