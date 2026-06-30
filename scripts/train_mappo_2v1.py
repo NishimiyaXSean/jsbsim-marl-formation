@@ -275,7 +275,7 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device, epochs=PP
 #  Training
 # ═══════════════════════════════════════════════════════════════════════════
 
-def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None):
+def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None, load_ckpt=None):
     ts = datetime.datetime.now().strftime("%m%d_%H%M")
     log_dir = f"./marl_runs/mappo_2v1_{ts}_s{seed}"; os.makedirs(log_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -283,6 +283,10 @@ def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None):
 
     actor = Actor2v1().to(device); critic = Critic2v1().to(device)
     if sb3_ckpt: actor = load_sb3_2v1(actor, sb3_ckpt)
+    if load_ckpt:
+        ck = torch.load(load_ckpt, map_location='cpu')
+        actor.load_state_dict(ck['actor']); critic.load_state_dict(ck['critic'])
+        print(f'  Loaded MAPPO checkpoint: {load_ckpt}')
     actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR_WARMUP, eps=1e-5)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR_WARMUP, eps=1e-5)
     warmup_done = False
@@ -320,8 +324,9 @@ if __name__ == "__main__":
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sb3", type=str, default=None)
+    parser.add_argument("--load", type=str, default=None, help="Resume from MAPPO checkpoint .pth")
     args = parser.parse_args()
     os.environ.setdefault("JSBSIM_DEBUG", "0")
     warnings.filterwarnings("ignore")
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
-    train(args.steps, args.difficulty, args.seed, args.sb3)
+    train(args.steps, args.difficulty, args.seed, args.sb3, args.load)
