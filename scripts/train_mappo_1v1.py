@@ -1,13 +1,10 @@
 """1v1 MAPPO validation — pure PyTorch CTDE with GAE + PPO clip.
 
-Verifies the hand-rolled MAPPO training loop against the known SB3
-baseline (~30% success from scratch at 100K steps on diff=0.0).
-
-Bug fixes applied (2026-06-30):
-  1. log_std init = 0.0 (std=1.0, not 0.6)
-  2. GAE: timeout → bootstrap V(s_T); crash/kill → value=0
-  3. Data alignment: obs/act/rew/next_obs strictly paired across episode boundaries
-  4. 1v1 mode: Actor and Critic both see 33-dim local obs (no global state)
+Four SB3-verified optimizations (2026-06-30):
+  P1: Orthogonal init (gain=1.414 hidden, 0.01 actor out, 1.0 critic out)
+  P2: Asymmetric LR (actor=1e-4, critic=5e-4, Adam eps=1e-5)
+  P3: Per-minibatch advantage normalization
+  P4: Linear LR + ent_coef annealing over training
 
 Usage:
     python scripts/train_mappo_1v1.py
@@ -30,14 +27,21 @@ from src.environment.formation_env import FormationEnv
 
 # ── Hyperparameters ─────────────────────────────────────────────────────
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
-VF_COEF = 0.5; ENT_COEF = 0.02; MAX_GRAD_NORM = 0.5; LR = 3e-4
+VF_COEF = 0.5; ENT_COEF_INIT = 0.02; MAX_GRAD_NORM = 0.5
+ACTOR_LR = 1e-4; CRITIC_LR = 5e-4  # P2: asymmetric
 MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
-LOG_STD_INIT = 0.0  # Fix 1: std=1.0 (was -0.5)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Networks (1v1: same 33-dim input for both Actor and Critic)
+#  P1: Orthogonal initialization (SB3's secret sauce)
 # ═══════════════════════════════════════════════════════════════════════════
+
+def ortho_init(m: nn.Module, gain: float = 1.0):
+    if isinstance(m, nn.Linear):
+        nn.init.orthogonal_(m.weight, gain=gain)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0.0)
+
 
 class Actor1v1(nn.Module):
     def __init__(self, obs_dim=33, act_dim=2, hidden=256):
@@ -45,13 +49,15 @@ class Actor1v1(nn.Module):
         self.net = nn.Sequential(nn.Linear(obs_dim, hidden), nn.Tanh(),
                                   nn.Linear(hidden, hidden), nn.Tanh())
         self.mean = nn.Linear(hidden, act_dim)
-        self.log_std = nn.Parameter(torch.ones(act_dim) * LOG_STD_INIT)
+        self.log_std = nn.Parameter(torch.zeros(act_dim))
+
+        # P1: orthogonal init
+        self.net.apply(lambda m: ortho_init(m, gain=np.sqrt(2)))
+        ortho_init(self.mean, gain=0.01)  # actor output: tiny gain
 
     def forward(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
-        feat = self.net(obs)
-        loc = torch.tanh(self.mean(feat))
+        if isinstance(obs, np.ndarray): obs = torch.as_tensor(obs, dtype=torch.float32)
+        loc = torch.tanh(self.mean(self.net(obs)))
         scale = torch.exp(self.log_std).expand_as(loc)
         return loc, scale
 
@@ -60,25 +66,27 @@ class Critic1v1(nn.Module):
     def __init__(self, obs_dim=33, hidden=256):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(obs_dim, hidden), nn.Tanh(),
-                                  nn.Linear(hidden, hidden), nn.Tanh(),
-                                  nn.Linear(hidden, 1))
+                                  nn.Linear(hidden, hidden), nn.Tanh())
+        self.v_out = nn.Linear(hidden, 1)
+
+        # P1: orthogonal init
+        self.net.apply(lambda m: ortho_init(m, gain=np.sqrt(2)))
+        ortho_init(self.v_out, gain=1.0)  # critic output: normal gain
 
     def forward(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
+        if isinstance(obs, np.ndarray): obs = torch.as_tensor(obs, dtype=torch.float32)
         if obs.dim() == 1: obs = obs.unsqueeze(0)
-        return self.net(obs).squeeze(-1)
+        return self.v_out(self.net(obs)).squeeze(-1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Rollout + GAE (with Fix 2 + Fix 3)
+#  Rollout + GAE
 # ═══════════════════════════════════════════════════════════════════════════
 
 @torch.no_grad()
 def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
-    """Collect trajectory with correct obs/act/rew/next_obs alignment."""
     obs_list, act_list, rew_list, done_list = [], [], [], []
-    val_list, logp_list, term_list = [], [], []  # term_list: True=bootstrap, False=zero
+    val_list, logp_list, term_list = [], [], []
 
     obs, _ = env.reset()
     ep_rew = 0.0; ep_count = 0
@@ -97,46 +105,34 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
         logp_list.append(logp.item())
 
         next_obs, rew, term, trunc, info = env.step(act.cpu().squeeze(0).numpy())
-        done = term or trunc
-        ep_rew += rew
+        done = term or trunc; ep_rew += rew
 
         rew_list.append(rew)
-        done_list.append(1.0 if done else 0.0)
-        # Fix 2: timeout/truncation → bootstrap; crash/success → zero
-        is_terminal = term and not trunc  # true termination (crash, kill)
-        term_list.append(0.0 if is_terminal else 1.0)  # 1=bootstrap, 0=zero-value
+        done_list.append(float(done))
+        is_terminal = term and not trunc
+        term_list.append(0.0 if is_terminal else 1.0)
 
         if done:
             ep_count += 1
             next_obs, _ = env.reset()
-            # Fix 3: don't overwrite obs until AFTER storing this step's data
-            # (next_obs for GAE comes from the NEXT iteration's obs_list)
+        obs = next_obs
 
-        obs = next_obs  # Fix 3: s_{t+1} → next iteration's s_t
-
-    # Final value for GAE bootstrap (last s_{t+1})
     o_final = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
     final_val = critic(o_final).item()
 
-    # ── GAE computation ──────────────────────────────────────────────
     n = len(rew_list)
     advantages = np.zeros(n, dtype=np.float32)
     returns = np.zeros(n, dtype=np.float32)
     gae = 0.0
 
     for t in reversed(range(n)):
-        if t == n - 1:
-            next_val = final_val * term_list[t]  # Fix 2: bootstrap only if not terminal
-            next_adv = 0.0
-        else:
-            next_val = val_list[t + 1] * term_list[t] + 0.0 * (1.0 - term_list[t])
-            next_adv = advantages[t + 1]
-
+        next_val = (final_val if t == n - 1 else val_list[t + 1]) * term_list[t]
         delta = rew_list[t] + GAMMA * next_val * (1.0 - done_list[t]) - val_list[t]
         gae = delta + GAMMA * GAE_LAMBDA * (1.0 - done_list[t]) * gae
         advantages[t] = gae
         returns[t] = advantages[t] + val_list[t]
 
+    # Global normalization (once, after GAE)
     adv_tensor = torch.tensor(advantages, dtype=torch.float32)
     adv_tensor = (adv_tensor - adv_tensor.mean()) / (adv_tensor.std() + 1e-8)
 
@@ -152,10 +148,11 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  PPO Update
+#  PPO Update (with P2 async optimizers, P3 per-minibatch norm, P4 annealing)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def ppo_update(actor, critic, optim, data, device, epochs=PPO_EPOCHS):
+def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
+               ent_coef, epochs=PPO_EPOCHS):
     actor.train(); critic.train()
     n = len(data["obs"])
     total_loss = 0.0
@@ -172,32 +169,39 @@ def ppo_update(actor, critic, optim, data, device, epochs=PPO_EPOCHS):
             batch_ret = data["ret"][idx].to(device)
             batch_logp = data["logp"][idx].to(device)
 
+            # P3: per-minibatch advantage normalization
+            mb_adv = (batch_adv - batch_adv.mean()) / (batch_adv.std() + 1e-8)
+
             loc, scale = actor(batch_obs)
             dist = Independent(Normal(loc, scale), 1)
             new_logp = dist.log_prob(batch_act).sum(-1)
             ratio = torch.exp(new_logp - batch_logp)
 
-            surr1 = ratio * batch_adv
-            surr2 = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * batch_adv
+            surr1 = ratio * mb_adv
+            surr2 = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * mb_adv
             actor_loss = -torch.min(surr1, surr2).mean()
             entropy = dist.entropy().sum(-1).mean()
 
             val_pred = critic(batch_obs)
             critic_loss = VF_COEF * ((val_pred - batch_ret) ** 2).mean()
 
-            loss = actor_loss - ENT_COEF * entropy + critic_loss
+            actor_opt.zero_grad()
+            (actor_loss - ent_coef * entropy).backward()
+            nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM)
+            actor_opt.step()
 
-            optim.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(list(actor.parameters()) + list(critic.parameters()), MAX_GRAD_NORM)
-            optim.step()
-            total_loss += loss.item()
+            critic_opt.zero_grad()
+            critic_loss.backward()
+            nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
+            critic_opt.step()
+
+            total_loss += (actor_loss + critic_loss).item()
 
     return total_loss
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Training loop
+#  Training loop (with P4: linear annealing)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
@@ -206,42 +210,48 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
     os.makedirs(log_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"[MAPPO 1v1] Steps={total_steps:,} diff={difficulty:.2f} seed={seed}")
-    print(f"  Fixes: log_std=0, GAE bootstrap, data alignment, 1v1 global=local")
+    print(f"[MAPPO 1v1] Steps={total_steps:,} diff={difficulty:.2f}")
+    print(f"  P1: Ortho init (gain=1.414/0.01/1.0)")
+    print(f"  P2: Asym LR (actor={ACTOR_LR}, critic={CRITIC_LR})")
+    print(f"  P3: Per-minibatch adv norm")
+    print(f"  P4: Linear LR + ent_coef annealing")
 
     actor = Actor1v1().to(device); critic = Critic1v1().to(device)
-    optim = torch.optim.Adam(list(actor.parameters()) + list(critic.parameters()), lr=LR)
+    # P2: separate optimizers with Adam eps=1e-5
+    actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
+    critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
 
     env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
 
-    total_steps_done = 0; epoch = 0
-    best_reward = -float("inf")
-    rew_window = deque(maxlen=10)
+    total = 0; epoch = 0; best_rew = -float("inf"); rew_win = deque(maxlen=10)
 
-    while total_steps_done < total_steps:
+    while total < total_steps:
+        # P4: linear annealing
+        frac = 1.0 - total / total_steps
+        actor_opt.param_groups[0]["lr"] = ACTOR_LR * frac
+        critic_opt.param_groups[0]["lr"] = CRITIC_LR * frac
+        ent_coef = ENT_COEF_INIT * frac
+
         data, avg_rew, n_ep = collect_rollout(env, actor, critic, device, ROLLOUT_STEPS)
-        total_steps_done += ROLLOUT_STEPS
-        rew_window.append(avg_rew)
-
-        loss = ppo_update(actor, critic, optim, data, device)
+        total += ROLLOUT_STEPS; rew_win.append(avg_rew)
+        ppo_update(actor, critic, actor_opt, critic_opt, data, device, ent_coef)
 
         if epoch % 5 == 0:
-            avg10 = np.mean(rew_window) if rew_window else avg_rew
-            entropy = Independent(Normal(actor(torch.zeros(1, 33).to(device))[0],
-                                         actor(torch.zeros(1, 33).to(device))[1]), 1).entropy().sum(-1).mean().item()
-            print(f"[MAPPO] step={total_steps_done:>7d}  rew={avg_rew:8.1f}  "
-                  f"avg10={avg10:8.1f}  entropy={entropy:.3f}  eps={n_ep}")
-
-            if avg10 > best_reward:
-                best_reward = avg10
+            avg10 = np.mean(rew_win) if rew_win else avg_rew
+            with torch.no_grad():
+                loc, scale = actor(torch.zeros(1, 33).to(device))
+                ent = Independent(Normal(loc, scale), 1).entropy().sum(-1).mean().item()
+            print(f"[MAPPO] step={total:>7d}  rew={avg_rew:8.1f}  "
+                  f"avg10={avg10:8.1f}  ent={ent:.3f}  lr_a={actor_opt.param_groups[0]['lr']:.1e}  eps={n_ep}")
+            if avg10 > best_rew:
+                best_rew = avg10
                 torch.save({"actor": actor.state_dict(), "critic": critic.state_dict()},
                            os.path.join(log_dir, "best_policy.pth"))
-
         epoch += 1
 
     final = os.path.join(log_dir, "final_policy.pth")
     torch.save({"actor": actor.state_dict(), "critic": critic.state_dict()}, final)
-    print(f"[MAPPO] Done. Best avg10 reward: {best_reward:.1f}. Saved: {final}")
+    print(f"[MAPPO] Done. Best avg10: {best_rew:.1f}. {final}")
 
 
 if __name__ == "__main__":
