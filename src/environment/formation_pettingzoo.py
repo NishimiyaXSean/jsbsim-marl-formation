@@ -69,7 +69,12 @@ class FormationPettingZooEnv(ParallelEnv):
             start = i * self._obs_per_agent
             observations[aid] = obs_concat[start:start + self._obs_per_agent].copy()
 
+        self._last_obs = observations
+        self._last_rew = {aid: 0.0 for aid in self.agents}
+        self._last_term = {aid: False for aid in self.agents}
+        self._last_trunc = {aid: False for aid in self.agents}
         infos = {aid: {"global_state": self._build_global_state()} for aid in self.agents}
+        self._last_info = infos
         return observations, infos
 
     def step(self, actions: dict):
@@ -101,6 +106,12 @@ class FormationPettingZooEnv(ParallelEnv):
             infos_out[aid] = {"global_state": global_state,
                               "reason": info.get("reason", "unknown")}
 
+        self._last_obs = observations
+        self._last_rew = rewards
+        self._last_term = terminations
+        self._last_trunc = truncations
+        self._last_info = infos_out
+
         if terminated or truncated:
             self.agents = []
 
@@ -111,6 +122,22 @@ class FormationPettingZooEnv(ParallelEnv):
 
     def close(self):
         pass
+
+    # ── AEC API compatibility (for Tianshou 0.5.x PettingZooEnv) ─────────
+
+    def last(self, agent=None):
+        """Return (obs, rew, term, trunc, info) for AEC-compatible API."""
+        # After step(), return the last observation for each agent
+        if not hasattr(self, '_last_obs'):
+            return None, 0.0, True, True, {}
+        aid = agent if agent else self.possible_agents[0]
+        return (
+            self._last_obs.get(aid, np.zeros(self._obs_per_agent, dtype=np.float32)),
+            self._last_rew.get(aid, 0.0),
+            self._last_term.get(aid, False),
+            self._last_trunc.get(aid, False),
+            self._last_info.get(aid, {}),
+        )
 
     # ── Global state (centralized critic input) ──────────────────────────
 
