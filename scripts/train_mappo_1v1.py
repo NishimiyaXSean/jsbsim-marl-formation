@@ -185,11 +185,12 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
             new_logp = dist.log_prob(batch_act).sum(-1)
             ratio = torch.exp(new_logp - batch_logp)
 
-            # P6: KL early stopping — protect SB3 weights from drift
-            with torch.no_grad():
-                approx_kl = ((ratio - 1) - ratio.log()).mean().item()
-            if approx_kl > KL_TARGET:
-                break  # skip remaining minibatches in this epoch
+            # P6: KL early stopping (only after 1st epoch to avoid cold-start issues)
+            if _ > 0:  # _ is the epoch counter in ppo_update's for loop
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1) - ratio.log()).mean().item()
+                if approx_kl > KL_TARGET:
+                    continue  # skip this minibatch
 
             surr1 = ratio * mb_adv
             surr2 = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * mb_adv
@@ -268,7 +269,7 @@ def train(total_steps: int = 200000, difficulty: float = 0.0, seed: int = 42,
 
     print(f"[MAPPO 1v1] Steps={total_steps:,} diff={difficulty:.2f}")
     print(f"  P1: Ortho init (gain=1.414/0.01/1.0)")
-    print(f"  P2: Asym LR (actor={ACTOR_LR}, critic={CRITIC_LR})")
+    print(f"  P2: 2-stage LR (warmup: actor=0, critic={CRITIC_LR_WARMUP}; fine: actor={ACTOR_LR_FINE}, critic={CRITIC_LR_FINE})")
     print(f"  P3: Per-minibatch adv norm")
     print(f"  P4: Linear LR + ent_coef annealing")
 
