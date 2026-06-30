@@ -30,6 +30,7 @@ GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
 VF_COEF = 0.5; ENT_COEF_INIT = 0.02; MAX_GRAD_NORM = 0.5
 ACTOR_LR = 1e-4; CRITIC_LR = 5e-4  # P2: asymmetric
 MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
+REWARD_SCALE = 100.0  # P0: scale rewards to ~[-1,1] for Critic stability
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -107,7 +108,7 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
         next_obs, rew, term, trunc, info = env.step(act.cpu().squeeze(0).numpy())
         done = term or trunc; ep_rew += rew
 
-        rew_list.append(rew)
+        rew_list.append(rew / REWARD_SCALE)  # P0: scale to ~[-1,1]
         done_list.append(float(done))
         is_terminal = term and not trunc
         term_list.append(0.0 if is_terminal else 1.0)
@@ -143,8 +144,9 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
         "val": torch.tensor(val_list, dtype=torch.float32),
         "adv": adv_tensor,
         "ret": torch.tensor(returns, dtype=torch.float32),
+        "old_val": torch.tensor(val_list, dtype=torch.float32),  # P1: Value Clipping
     }
-    return data, ep_rew / max(ep_count, 1), ep_count
+    return data, ep_rew / max(ep_count, 1) * REWARD_SCALE, ep_count  # unscale for logging
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -156,6 +158,7 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
     actor.train(); critic.train()
     n = len(data["obs"])
     total_loss = 0.0
+    all_vals = []; all_rets = []
 
     for _ in range(epochs):
         indices = torch.randperm(n)
@@ -168,10 +171,12 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
             batch_adv = data["adv"][idx].to(device)
             batch_ret = data["ret"][idx].to(device)
             batch_logp = data["logp"][idx].to(device)
+            batch_old_val = data["old_val"][idx].to(device)
 
             # P3: per-minibatch advantage normalization
             mb_adv = (batch_adv - batch_adv.mean()) / (batch_adv.std() + 1e-8)
 
+            # ── Actor ──────────────────────────────────────────────
             loc, scale = actor(batch_obs)
             dist = Independent(Normal(loc, scale), 1)
             new_logp = dist.log_prob(batch_act).sum(-1)
@@ -182,22 +187,33 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
             actor_loss = -torch.min(surr1, surr2).mean()
             entropy = dist.entropy().sum(-1).mean()
 
-            val_pred = critic(batch_obs)
-            critic_loss = VF_COEF * ((val_pred - batch_ret) ** 2).mean()
-
             actor_opt.zero_grad()
             (actor_loss - ent_coef * entropy).backward()
             nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM)
             actor_opt.step()
 
+            # ── Critic with Value Clipping (P1) ───────────────────
+            val_pred = critic(batch_obs)
+            v_clipped = batch_old_val + torch.clamp(val_pred - batch_old_val,
+                                                     -CLIP_EPS, CLIP_EPS)
+            v_loss_1 = (val_pred - batch_ret) ** 2
+            v_loss_2 = (v_clipped - batch_ret) ** 2
+            critic_loss = 0.5 * torch.max(v_loss_1, v_loss_2).mean()
+
             critic_opt.zero_grad()
-            critic_loss.backward()
+            (VF_COEF * critic_loss).backward()
             nn.utils.clip_grad_norm_(critic.parameters(), MAX_GRAD_NORM)
             critic_opt.step()
 
             total_loss += (actor_loss + critic_loss).item()
+            all_vals.append(val_pred.detach())
+            all_rets.append(batch_ret)
 
-    return total_loss
+    # P0: Explained Variance
+    all_v = torch.cat(all_vals)
+    all_r = torch.cat(all_rets)
+    ev = 1.0 - torch.var(all_r - all_v) / (torch.var(all_r) + 1e-8)
+    return total_loss, float(ev)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -234,7 +250,7 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
 
         data, avg_rew, n_ep = collect_rollout(env, actor, critic, device, ROLLOUT_STEPS)
         total += ROLLOUT_STEPS; rew_win.append(avg_rew)
-        ppo_update(actor, critic, actor_opt, critic_opt, data, device, ent_coef)
+        _, ev = ppo_update(actor, critic, actor_opt, critic_opt, data, device, ent_coef)
 
         if epoch % 5 == 0:
             avg10 = np.mean(rew_win) if rew_win else avg_rew
@@ -242,7 +258,8 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
                 loc, scale = actor(torch.zeros(1, 33).to(device))
                 ent = Independent(Normal(loc, scale), 1).entropy().sum(-1).mean().item()
             print(f"[MAPPO] step={total:>7d}  rew={avg_rew:8.1f}  "
-                  f"avg10={avg10:8.1f}  ent={ent:.3f}  lr_a={actor_opt.param_groups[0]['lr']:.1e}  eps={n_ep}")
+                  f"avg10={avg10:8.1f}  ev={ev:5.3f}  ent={ent:.3f}  "
+                  f"lr_a={actor_opt.param_groups[0]['lr']:.1e}  eps={n_ep}")
             if avg10 > best_rew:
                 best_rew = avg10
                 torch.save({"actor": actor.state_dict(), "critic": critic.state_dict()},
@@ -256,7 +273,7 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=100000)
+    parser.add_argument("--steps", type=int, default=500000)
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
