@@ -30,8 +30,8 @@ from src.environment.formation_env import FormationEnv
 
 # ── Hyperparameters ─────────────────────────────────────────────────────
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
-VF_COEF = 0.5; ENT_COEF = 0.05; MAX_GRAD_NORM = 0.5; LR = 3e-4
-MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 2048
+VF_COEF = 0.5; ENT_COEF = 0.02; MAX_GRAD_NORM = 0.5; LR = 3e-4
+MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
 LOG_STD_INIT = 0.0  # Fix 1: std=1.0 (was -0.5)
 
 
