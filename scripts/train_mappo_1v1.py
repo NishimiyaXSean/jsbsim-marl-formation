@@ -27,8 +27,11 @@ from src.environment.formation_env import FormationEnv
 
 # ── Hyperparameters ─────────────────────────────────────────────────────
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
-VF_COEF = 0.5; ENT_COEF_INIT = 0.02; MAX_GRAD_NORM = 0.5
-ACTOR_LR = 1e-4; CRITIC_LR = 5e-4  # P2: asymmetric
+VF_COEF = 0.5; ENT_COEF_INIT = 0.0; MAX_GRAD_NORM = 0.5   # P5: ent=0, SB3 weights don't need exploration
+ACTOR_LR_WARMUP = 0.0; ACTOR_LR_FINE = 1e-5  # P6: frozen warmup, then gentle
+CRITIC_LR_WARMUP = 5e-4; CRITIC_LR_FINE = 1e-4
+WARMUP_STEPS = 50_000  # Critic-only phase
+KL_TARGET = 0.015  # P6: early stopping if KL exceeds this
 MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
 REWARD_SCALE = 100.0  # P0: scale rewards to ~[-1,1] for Critic stability
 
@@ -182,6 +185,12 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
             new_logp = dist.log_prob(batch_act).sum(-1)
             ratio = torch.exp(new_logp - batch_logp)
 
+            # P6: KL early stopping — protect SB3 weights from drift
+            with torch.no_grad():
+                approx_kl = ((ratio - 1) - ratio.log()).mean().item()
+            if approx_kl > KL_TARGET:
+                break  # skip remaining minibatches in this epoch
+
             surr1 = ratio * mb_adv
             surr2 = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * mb_adv
             actor_loss = -torch.min(surr1, surr2).mean()
@@ -266,20 +275,30 @@ def train(total_steps: int = 200000, difficulty: float = 0.0, seed: int = 42,
     actor = Actor1v1().to(device); critic = Critic1v1().to(device)
     if sb3_ckpt:
         actor, critic = load_sb3_weights(actor, critic, sb3_ckpt)
-    # P2: separate optimizers with Adam eps=1e-5
-    actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
-    critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
+    # P2/P6: two-stage LR — warmup (Critic only), then fine-tune
+    actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR_WARMUP, eps=1e-5)
+    critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR_WARMUP, eps=1e-5)
+    warmup_done = False
 
     env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
 
     total = 0; epoch = 0; best_rew = -float("inf"); rew_win = deque(maxlen=10)
 
     while total < total_steps:
-        # P4: linear annealing
-        frac = 1.0 - total / total_steps
-        actor_opt.param_groups[0]["lr"] = ACTOR_LR * frac
-        critic_opt.param_groups[0]["lr"] = CRITIC_LR * frac
-        ent_coef = ENT_COEF_INIT * frac
+        # P6: two-stage LR switch
+        if total >= WARMUP_STEPS and not warmup_done:
+            actor_opt.param_groups[0]["lr"] = ACTOR_LR_FINE
+            critic_opt.param_groups[0]["lr"] = CRITIC_LR_FINE
+            warmup_done = True
+            print(f"\n[MAPPO] === Step {total}: Actor unfrozen (LR={ACTOR_LR_FINE}), "
+                  f"Critic LR={CRITIC_LR_FINE} ===\n")
+
+        # P4: linear annealing (only after warmup)
+        if warmup_done:
+            frac = 1.0 - (total - WARMUP_STEPS) / (total_steps - WARMUP_STEPS)
+            actor_opt.param_groups[0]["lr"] = ACTOR_LR_FINE * max(frac, 0.1)
+            critic_opt.param_groups[0]["lr"] = CRITIC_LR_FINE * max(frac, 0.1)
+        ent_coef = ENT_COEF_INIT  # P5: no entropy needed with SB3 weights
 
         data, avg_rew, n_ep = collect_rollout(env, actor, critic, device, ROLLOUT_STEPS)
         total += ROLLOUT_STEPS; rew_win.append(avg_rew)
