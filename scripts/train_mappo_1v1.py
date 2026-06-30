@@ -146,7 +146,7 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
         "ret": torch.tensor(returns, dtype=torch.float32),
         "old_val": torch.tensor(val_list, dtype=torch.float32),  # P1: Value Clipping
     }
-    return data, ep_rew / max(ep_count, 1) * REWARD_SCALE, ep_count  # unscale for logging
+    return data, ep_rew / max(ep_count, 1), ep_count
 
 
 # ═══════════════════════════════════════════════════════════════════════════
