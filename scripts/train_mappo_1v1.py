@@ -220,7 +220,38 @@ def ppo_update(actor, critic, actor_opt, critic_opt, data, device,
 #  Training loop (with P4: linear annealing)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
+def load_sb3_weights(actor, critic, sb3_path: str):
+    """Hot-start MAPPO networks from Phase 3.6 SB3 checkpoint."""
+    import zipfile, io
+    from stable_baselines3 import PPO
+    sb3 = PPO.load(sb3_path, device='cpu')
+    src = sb3.policy.state_dict()
+
+    # Actor: pad first layer [256,27] → [256,33] (extra 6 cols = mate features, always 0)
+    w = src['mlp_extractor.policy_net.0.weight']  # [256, 27]
+    actor.net[0].weight.data[:, :27] = w
+    actor.net[0].bias.data.copy_(src['mlp_extractor.policy_net.0.bias'])
+    actor.net[2].weight.data.copy_(src['mlp_extractor.policy_net.2.weight'])
+    actor.net[2].bias.data.copy_(src['mlp_extractor.policy_net.2.bias'])
+    actor.mean.weight.data.copy_(src['action_net.weight'])
+    actor.mean.bias.data.copy_(src['action_net.bias'])
+    # log_std: SB3 uses state-dependent (not loaded), keep our init
+
+    # Critic: same padding
+    w_v = src['mlp_extractor.value_net.0.weight']  # [256, 27]
+    critic.net[0].weight.data[:, :27] = w_v
+    critic.net[0].bias.data.copy_(src['mlp_extractor.value_net.0.bias'])
+    critic.net[2].weight.data.copy_(src['mlp_extractor.value_net.2.weight'])
+    critic.net[2].bias.data.copy_(src['mlp_extractor.value_net.2.bias'])
+    critic.v_out.weight.data.copy_(src['value_net.weight'])
+    critic.v_out.bias.data.copy_(src['value_net.bias'])
+
+    print(f'  Loaded Phase 3.6 weights: {sb3_path}')
+    return actor, critic
+
+
+def train(total_steps: int = 200000, difficulty: float = 0.0, seed: int = 42,
+          sb3_ckpt: str | None = None):
     ts = datetime.datetime.now().strftime("%m%d_%H%M")
     log_dir = f"./marl_runs/mappo_1v1_{ts}_s{seed}"
     os.makedirs(log_dir, exist_ok=True)
@@ -233,6 +264,8 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
     print(f"  P4: Linear LR + ent_coef annealing")
 
     actor = Actor1v1().to(device); critic = Critic1v1().to(device)
+    if sb3_ckpt:
+        actor, critic = load_sb3_weights(actor, critic, sb3_ckpt)
     # P2: separate optimizers with Adam eps=1e-5
     actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
@@ -273,11 +306,14 @@ def train(total_steps: int = 100000, difficulty: float = 0.0, seed: int = 42):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=500000)
+    parser.add_argument("--steps", type=int, default=200000)
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--sb3", type=str, default=None,
+                        help="Path to SB3 Phase 3.6 checkpoint for hot-start")
     args = parser.parse_args()
     os.environ.setdefault("JSBSIM_DEBUG", "0")
     warnings.filterwarnings("ignore")
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
-    train(total_steps=args.steps, difficulty=args.difficulty, seed=args.seed)
+    train(total_steps=args.steps, difficulty=args.difficulty, seed=args.seed,
+          sb3_ckpt=args.sb3)
