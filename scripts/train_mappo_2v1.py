@@ -78,9 +78,9 @@ class Critic2v1(nn.Module):
 def load_sb3_2v1(actor, sb3_path):
     """Tile SB3 [256,66]→[256,33] and [4,256]→[2,256]."""
     import zipfile, io
-    from stable_baselines3 import PPO
-    sb3 = PPO.load(sb3_path, device='cpu')
-    src = sb3.policy.state_dict()
+    with zipfile.ZipFile(sb3_path, 'r') as zf:
+        with zf.open('policy.pth') as f:
+            src = torch.load(io.BytesIO(f.read()), map_location='cpu', weights_only=True)
 
     w = src['mlp_extractor.policy_net.0.weight']  # [256, 66]
     actor.net[0].weight.data.copy_(w[:, :33])  # pursuer 0 features
