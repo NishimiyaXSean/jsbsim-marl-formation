@@ -150,9 +150,41 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS):
         next_obs, rew, term, trunc, info = env.step(concat_act)
         done = term or trunc; ep_rew += rew
 
+        # Per-pursuer distances + rubber band
+        p_dists = []
+        t_pos = env.targets[0].aircraft.position_ned
+        for i in range(N_PURSUERS):
+            p_dists.append(float(np.linalg.norm(env.pursuers[i].aircraft.position_ned - t_pos)))
+
+        # Rubber band penalty: spacing > 1500m
+        if N_PURSUERS >= 2:
+            spacing = float(np.linalg.norm(env.pursuers[0].aircraft.position_ned -
+                                            env.pursuers[1].aircraft.position_ned))
+            rubber_band = 0.0
+            if spacing > 1500.0:
+                rubber_band = -0.01 * (spacing - 1500.0) / REWARD_SCALE
+
         for i in range(N_PURSUERS):
             k = f'p{i}'
-            buf[k]['rew'].append(rew / REWARD_SCALE / N_PURSUERS)  # split reward
+            # Base: split env reward + individual progress (proportional to distance)
+            base_r = rew / REWARD_SCALE / N_PURSUERS
+            # Individual delta-distance (positive = closing)
+            if hasattr(env.pursuers[i], 'prev_dist'):
+                delta = env.pursuers[i].prev_dist - p_dists[i]
+                base_r += 0.5 * delta / REWARD_SCALE  # individual progress bonus
+            env.pursuers[i].prev_dist = p_dists[i]
+
+            # Engagement zone gate: only nearby pursuers get kill bonus
+            if info.get('reason') == 'success':
+                kd = p_dists[i]
+                if kd < 1500.0:
+                    base_r += (3000.0 if i == info.get('kill_agent_idx', 0) else 2000.0) / REWARD_SCALE
+
+            # Rubber band (shared penalty)
+            if N_PURSUERS >= 2:
+                base_r += rubber_band / N_PURSUERS
+
+            buf[k]['rew'].append(base_r)
             buf[k]['done'][-1] = float(done)
             is_terminal = term and not trunc
             buf[k]['term'][-1] = 0.0 if is_terminal else 1.0
