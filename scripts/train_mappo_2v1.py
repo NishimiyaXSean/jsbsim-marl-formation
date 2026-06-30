@@ -27,7 +27,9 @@ GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
 VF_COEF = 0.5; ENT_COEF = 0.0; MAX_GRAD_NORM = 0.5
 ACTOR_LR_WARMUP = 0.0; ACTOR_LR_FINE = 1e-5
 CRITIC_LR_WARMUP = 5e-4; CRITIC_LR_FINE = 1e-4
-WARMUP_STEPS = 50_000; KL_TARGET = 0.015
+WARMUP_STEPS = 150_000  # extended: let Critic fully converge
+EV_UNFREEZE_THRESHOLD = 0.6  # only unfreeze Actor when Critic is confident
+KL_TARGET = 0.015
 MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
 REWARD_SCALE = 100.0
 OBS_PER_AGENT = 33; GLOBAL_DIM = 21; ACT_DIM = 2; N_PURSUERS = 2
@@ -294,12 +296,17 @@ def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None, load_ckpt=
     env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
     total = 0; epoch = 0; rew_win = deque(maxlen=10)
 
+    last_ev = 0.0
     while total < total_steps:
         if total >= WARMUP_STEPS and not warmup_done:
-            actor_opt.param_groups[0]["lr"] = ACTOR_LR_FINE
-            critic_opt.param_groups[0]["lr"] = CRITIC_LR_FINE
-            warmup_done = True
-            print(f"\n[MAPPO] === Actor unfrozen (LR={ACTOR_LR_FINE}) ===\n")
+            # EV gating: only unfreeze if Critic is confident
+            if last_ev >= EV_UNFREEZE_THRESHOLD:
+                actor_opt.param_groups[0]["lr"] = ACTOR_LR_FINE
+                critic_opt.param_groups[0]["lr"] = CRITIC_LR_FINE
+                warmup_done = True
+                print(f"\n[MAPPO] === Actor unfrozen (EV={last_ev:.3f} >= {EV_UNFREEZE_THRESHOLD}) ===\n")
+            else:
+                print(f"\n[MAPPO] === Step {total}: EV={last_ev:.3f} < {EV_UNFREEZE_THRESHOLD}, extending warmup ===\n")
         if warmup_done:
             frac = 1.0 - (total - WARMUP_STEPS) / (total_steps - WARMUP_STEPS)
             actor_opt.param_groups[0]["lr"] = ACTOR_LR_FINE * max(frac, 0.1)
@@ -307,7 +314,7 @@ def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None, load_ckpt=
 
         all_data, avg_rew, n_ep = collect_rollout(env, actor, critic, device)
         total += ROLLOUT_STEPS; rew_win.append(avg_rew)
-        ev = ppo_update(actor, critic, actor_opt, critic_opt, all_data, device)
+        ev = ppo_update(actor, critic, actor_opt, critic_opt, all_data, device); last_ev = ev
 
         if epoch % 5 == 0:
             avg10 = np.mean(rew_win) if rew_win else avg_rew
@@ -320,7 +327,7 @@ def train(total_steps=200000, difficulty=0.0, seed=42, sb3_ckpt=None, load_ckpt=
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=200000)
+    parser.add_argument("--steps", type=int, default=300000)
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sb3", type=str, default=None)
