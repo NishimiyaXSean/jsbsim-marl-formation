@@ -230,7 +230,7 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device, epochs=PP
 # ═══════════════════════════════════════════════════════════════════════════
 
 def compute_attention_stats(actor, device):
-    """Sample attention weights to monitor learning progress."""
+    """Sample attention weights + entropy to monitor collapse/emergence."""
     actor.eval()
     with torch.no_grad():
         dummy = torch.randn(16, 33).to(device)
@@ -245,11 +245,17 @@ def compute_attention_stats(actor, device):
         pool_self = pool[:, 0].mean().item()
         pool_target = pool[:, 1].mean().item()
         pool_mate = pool[:, 2].mean().item()
+
+        # Entropy-based collapse detection
+        eps = 1e-8
+        mha_entropy = -(attn * (attn + eps).log()).sum(-1).mean().item()
+        pool_entropy = -(pool * (pool + eps).log()).sum(-1).mean().item()
     actor.train()
     return {
         'attn_self2mate': self_to_mate, 'attn_self2target': self_to_target,
         'attn_mate2self': mate_to_self,
         'pool_self': pool_self, 'pool_target': pool_target, 'pool_mate': pool_mate,
+        'mha_entropy': mha_entropy, 'pool_entropy': pool_entropy,
     }
 
 
@@ -344,10 +350,19 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
         # Attention statistics (periodic)
         if epoch % log_attn_every == 0 and n_pursuers >= 2:
             attn_stats = compute_attention_stats(actor, device)
-            print(f"  [Attn] self2target={attn_stats['attn_self2target']:.3f}  "
-                  f"self2mate={attn_stats['attn_self2mate']:.3f}  "
-                  f"mate2self={attn_stats['attn_mate2self']:.3f}  |  "
-                  f"pool(S/T/M)={attn_stats['pool_self']:.3f}/{attn_stats['pool_target']:.3f}/{attn_stats['pool_mate']:.3f}")
+            mha_e = attn_stats['mha_entropy']; pool_e = attn_stats['pool_entropy']
+            # Collapse detection
+            collapse_flags = []
+            if mha_e < 0.3: collapse_flags.append(f"MHA_COLLAPSE(H={mha_e:.2f})")
+            if pool_e < 0.3: collapse_flags.append(f"POOL_COLLAPSE(H={pool_e:.2f})")
+            if mha_e > 1.05: collapse_flags.append(f"MHA_UNIFORM(H={mha_e:.2f})")
+            status = " | ".join(collapse_flags) if collapse_flags else "HEALTHY"
+            print(f"  [Attn] S2T={attn_stats['attn_self2target']:.3f}  "
+                  f"S2M={attn_stats['attn_self2mate']:.3f}  "
+                  f"M2S={attn_stats['attn_mate2self']:.3f}  |  "
+                  f"H_mha={mha_e:.3f} H_pool={pool_e:.3f}  |  "
+                  f"pool(S/T/M)={attn_stats['pool_self']:.2f}/{attn_stats['pool_target']:.2f}/{attn_stats['pool_mate']:.2f}  |  "
+                  f"[{status}]")
 
         # Save best
         avg10 = np.mean(rew_win) if rew_win else avg_rew

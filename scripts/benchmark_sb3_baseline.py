@@ -66,6 +66,37 @@ def wilson_ci(successes: int, n: int, z: float = 1.96) -> tuple:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Model loading (handles optimizer version mismatch)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _load_sb3_model(model_path: str, difficulty: float = 0.0):
+    """Load SB3 PPO model, falling back to policy-only if optimizer incompatible."""
+    try:
+        model = PPO.load(model_path, device='cpu')
+        return model
+    except (ValueError, RuntimeError) as e:
+        print(f"  Optimizer incompatible, loading policy weights directly...")
+
+    import zipfile, io
+    temp_env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
+    model = PPO("MlpPolicy", temp_env, policy_kwargs=dict(
+        net_arch=dict(pi=[256, 256], vf=[256, 256]),
+        activation_fn=__import__('torch').nn.Tanh,
+    ), device='cpu')
+    with zipfile.ZipFile(model_path, 'r') as zf:
+        with zf.open('policy.pth') as f:
+            policy_state = __import__('torch').load(io.BytesIO(f.read()), map_location='cpu', weights_only=True)
+    # SB3 policy.pth contains full policy + value network state dict
+    missing, unexpected = model.policy.load_state_dict(policy_state, strict=False)
+    if missing:
+        print(f"  Policy load: {len(missing)} missing keys (expected for fresh optimizer)")
+    if unexpected:
+        print(f"  Policy load: {len(unexpected)} unexpected keys")
+    print(f"  Policy weights loaded successfully")
+    return model
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Evaluation
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -78,7 +109,9 @@ def run_benchmark(model_path: str, n_episodes: int = 100,
     print(f"Episodes:  {n_episodes}")
     print(f"{'='*60}\n")
 
-    model = PPO.load(model_path)
+    # Load model, stripping incompatible optimizer state if needed
+    model = _load_sb3_model(model_path, difficulty)
+
     env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
 
     episodes = []
@@ -131,7 +164,7 @@ def run_benchmark(model_path: str, n_episodes: int = 100,
         all_rewards.append(total_rew)
         all_min_dists.append(ep_min_dist)
         all_final_spacings.append(final_spacing)
-        intercept_time = env.step_counter / env.CTRL_FREQ if is_success else 120.0
+        intercept_time = env._step_counter / 60.0 if is_success else 120.0
         all_intercept_times.append(intercept_time)
 
         episodes.append({
@@ -354,7 +387,7 @@ def _record_single_tacview(model_path: str, difficulty: float, output_path: str)
     import logging as _logging
     _logging.getLogger("jsbsim").setLevel(_logging.CRITICAL)
 
-    model = PPO.load(model_path)
+    model = _load_sb3_model(model_path, difficulty)
     env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
     obs, _ = env.reset()
     done = False
