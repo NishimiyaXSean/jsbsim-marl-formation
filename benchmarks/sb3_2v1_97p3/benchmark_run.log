@@ -1,0 +1,101 @@
+
+============================================================
+Benchmark: SB3 Phase 4.1 (2v1, difficulty=0.0)
+Model:     benchmarks/sb3_2v1_97p3/model.zip
+Episodes:  100
+============================================================
+
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+  [  1/100]  success_rate=100.00%  95%CI=[20.65%,100.00%]  avg_rew=+6364  avg_spacing=3731m
+  [ 20/100]  success_rate=100.00%  95%CI=[83.89%,100.00%]  avg_rew=+6361  avg_spacing=3721m
+  [ 40/100]  success_rate=90.00%  95%CI=[76.95%,96.04%]  avg_rew=+4936  avg_spacing=3511m
+  [ 60/100]  success_rate=91.67%  95%CI=[81.93%,96.39%]  avg_rew=+5671  avg_spacing=3180m
+  [ 80/100]  success_rate=92.50%  95%CI=[84.59%,96.52%]  avg_rew=+6076  avg_spacing=3090m
+  [100/100]  success_rate=94.00%  95%CI=[87.52%,97.22%]  avg_rew=+6247  avg_spacing=3186m
+
+============================================================
+RESULTS (difficulty=0.0)
+  Capture rate:  94.00%  95%CI=[87.52%, 97.22%]
+  Avg reward:    +6247 ¡À 3925
+  Avg min dist:  231 ¡À 138 m
+  Avg intercept: 30.7 ¡À 24.0 s
+  Avg spacing:   3186 ¡À 2278 m
+============================================================
+
+  Metrics saved: benchmarks/sb3_2v1_97p3\metrics_diff0.0.json
+  Plot saved: benchmarks/sb3_2v1_97p3\trajectory_best_diff0.0.png
+
+  Recording Tacview for best episode (ep 36)...
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+    ¡ú benchmarks/sb3_2v1_97p3\tacview_best_diff0.0.txt.acmi
+
+============================================================
+Benchmark: SB3 Phase 4.1 (2v1, difficulty=0.3)
+Model:     benchmarks/sb3_2v1_97p3/model.zip
+Episodes:  100
+============================================================
+
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+  [  1/100]  success_rate=100.00%  95%CI=[20.65%,100.00%]  avg_rew=+4276  avg_spacing=6991m
+  [ 20/100]  success_rate=70.00%  95%CI=[48.10%,85.45%]  avg_rew=+2291  avg_spacing=6841m
+  [ 40/100]  success_rate=65.00%  95%CI=[49.51%,77.87%]  avg_rew=+2228  avg_spacing=5435m
+  [ 60/100]  success_rate=73.33%  95%CI=[60.99%,82.87%]  avg_rew=+4068  avg_spacing=4422m
+  [ 80/100]  success_rate=72.50%  95%CI=[61.86%,81.08%]  avg_rew=+4578  avg_spacing=4117m
+  [100/100]  success_rate=75.00%  95%CI=[65.70%,82.45%]  avg_rew=+5158  avg_spacing=3703m
+
+============================================================
+RESULTS (difficulty=0.3)
+  Capture rate:  75.00%  95%CI=[65.70%, 82.45%]
+  Avg reward:    +5158 ¡À 5212
+  Avg min dist:  300 ¡À 261 m
+  Avg intercept: 58.9 ¡À 36.8 s
+  Avg spacing:   3703 ¡À 2823 m
+============================================================
+
+  Metrics saved: benchmarks/sb3_2v1_97p3\metrics_diff0.3.json
+  Plot saved: benchmarks/sb3_2v1_97p3\trajectory_best_diff0.3.png
+
+  Recording Tacview for best episode (ep 55)...
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+    ¡ú benchmarks/sb3_2v1_97p3\tacview_best_diff0.3.txt.acmi
+
+============================================================
+Benchmark: SB3 Phase 4.1 (2v1, difficulty=0.6)
+Model:     benchmarks/sb3_2v1_97p3/model.zip
+Episodes:  100
+============================================================
+
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+  [  1/100]  success_rate=100.00%  95%CI=[20.65%,100.00%]  avg_rew=+8156  avg_spacing=3492m
+  [ 20/100]  success_rate=40.00%  95%CI=[21.88%,61.34%]  avg_rew=-750  avg_spacing=5054m
+  [ 40/100]  success_rate=32.50%  95%CI=[20.08%,47.98%]  avg_rew=+117  avg_spacing=4189m
+  [ 60/100]  success_rate=31.67%  95%CI=[21.31%,44.23%]  avg_rew=+1002  avg_spacing=3793m
+  [ 80/100]  success_rate=31.25%  95%CI=[22.15%,42.07%]  avg_rew=+1517  avg_spacing=3698m
+  [100/100]  success_rate=28.00%  95%CI=[20.14%,37.49%]  avg_rew=+1688  avg_spacing=3506m
+
+============================================================
+RESULTS (difficulty=0.6)
+  Capture rate:  28.00%  95%CI=[20.14%, 37.49%]
+  Avg reward:    +1688 ¡À 5180
+  Avg min dist:  565 ¡À 450 m
+  Avg intercept: 98.5 ¡À 35.3 s
+  Avg spacing:   3506 ¡À 2525 m
+============================================================
+
+  Metrics saved: benchmarks/sb3_2v1_97p3\metrics_diff0.6.json
+  Plot saved: benchmarks/sb3_2v1_97p3\trajectory_best_diff0.6.png
+
+  Recording Tacview for best episode (ep 75)...
+  Optimizer incompatible, loading policy weights directly...
+  Policy weights loaded successfully
+    ¡ú benchmarks/sb3_2v1_97p3\tacview_best_diff0.6.txt.acmi
+
+============================================================
+Benchmark complete. Manifest: benchmarks/sb3_2v1_97p3\manifest.json
+All artifacts in: benchmarks/sb3_2v1_97p3/
+============================================================
