@@ -259,33 +259,37 @@ def compute_attention_stats(actor, device):
     }
 
 
-def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
-          load_ckpt=None, log_attn_every=50):
-    """Main training loop.
+def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
+          load_ckpt=None, load_bc=None, log_attn_every=50,
+          critic_warmup_steps=50_000, actor_frozen_lr=0.0,
+          critic_warmup_lr=5e-4, actor_fine_lr=1e-5, critic_fine_lr=1e-4):
+    """Two-stage MAPPO fine-tuning for Attention Actor.
+
+    Stage 1 (Critic Warmup): Actor frozen at BC weights, Critic learns V(s).
+    Stage 2 (Joint Fine-tune): Actor unfrozen with tiny LR, PPO policy gradient.
 
     Args:
-        mode: "1v1", "2v1", or "curriculum" (1v1 pre-train → 2v1 fine-tune)
+        mode: "1v1" or "2v1" or "curriculum"
         total_steps: Total environment steps
-        difficulty: Initial difficulty level
-        seed: Random seed
-        load_ckpt: Resume from checkpoint .pth
-        log_attn_every: Log attention statistics every N epochs
+        load_ckpt: Resume from MAPPO checkpoint .pth (actor + critic)
+        load_bc: Load BC-pretrained Actor weights only (.pth from train_attention_bc.py)
+        critic_warmup_steps: Steps to keep Actor frozen while Critic learns
     """
     ts = datetime.datetime.now().strftime("%m%d_%H%M")
-    run_name = f"attn_{mode}_{ts}_s{seed}"
+    stage_label = "bc_finetune" if load_bc else "cold"
+    run_name = f"attn_{mode}_{stage_label}_{ts}_s{seed}"
     log_dir = f"./marl_runs/{run_name}"; os.makedirs(log_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"{'='*60}")
-    print(f"Self-Attention MAPPO Cold-Start Training")
-    print(f"  Mode:      {mode}")
-    print(f"  Steps:     {total_steps:,}")
-    print(f"  Difficulty: {difficulty:.2f}")
-    print(f"  Device:    {device}")
+    print(f"Self-Attention MAPPO Training")
+    print(f"  Mode:      {mode}  |  Stages: {total_steps:,} steps")
+    print(f"  BC init:   {load_bc is not None}")
+    print(f"  Difficulty: {difficulty:.2f}  |  Device: {device}")
     print(f"  Log dir:   {log_dir}")
     print(f"{'='*60}\n")
 
-    # ── Environment (created first to determine dimensions) ──────────────
+    # ── Environment ────────────────────────────────────────────────────
     if mode == "1v1":
         env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
         n_pursuers = 1
@@ -293,7 +297,6 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
         env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
         n_pursuers = 2
 
-    # Compute dynamic global_dim: (N pursuers + M targets) × 7 features each
     global_dim = (n_pursuers + len(env.targets)) * 7
     print(f"  Global dim: {global_dim} ({n_pursuers}P + {len(env.targets)}T × 7)")
 
@@ -301,40 +304,69 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
     actor = AttentionFormationActor(mate_scale=0.0 if mode == "1v1" else MATE_SCALE_RAMP_START).to(device)
     critic = AttentionCritic(global_dim=global_dim).to(device)
 
+    # Load BC-pretrained Actor weights
+    if load_bc:
+        bc = torch.load(load_bc, map_location='cpu')
+        actor.load_state_dict(bc['actor_state'])
+        vl = bc.get('val_loss', None)
+        vl_str = f"val_loss={vl:.6f}" if isinstance(vl, float) else ""
+        print(f"  BC Actor loaded: {load_bc}  {vl_str}")
+
+    # Load full MAPPO checkpoint (resume)
     if load_ckpt:
         ck = torch.load(load_ckpt, map_location='cpu')
         actor.load_state_dict(ck['actor']); critic.load_state_dict(ck['critic'])
-        print(f'Loaded checkpoint: {load_ckpt}')
+        print(f'  MAPPO checkpoint loaded: {load_ckpt}')
 
+    # ── Optimisers ─────────────────────────────────────────────────────
     actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
-    critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
+    critic_opt = torch.optim.Adam(critic.parameters(), lr=critic_warmup_lr, eps=1e-5)
 
     # ── Training loop ──────────────────────────────────────────────────
     total = 0; epoch = 0; rew_win = deque(maxlen=10)
     best_rew = -float('inf')
+    stage = "WARMUP"  # "WARMUP" → "FINE_TUNE"
+
+    if not load_bc:
+        critic_warmup_steps = 0  # skip warmup for cold-start
+        stage = "FINE_TUNE"
 
     while total < total_steps:
-        # Mate-scale curriculum (ramp mate_scale from start → 1.0)
+        # ── Stage transition ───────────────────────────────────────────
+        if total >= critic_warmup_steps and stage == "WARMUP":
+            stage = "FINE_TUNE"
+            actor_opt.param_groups[0]["lr"] = actor_fine_lr
+            critic_opt.param_groups[0]["lr"] = critic_fine_lr
+            print(f"\n[MAPPO] === Stage 2: Actor unfrozen (lr={actor_fine_lr:.1e}) ===\n")
+
+        # ── Actor frozen during warmup ─────────────────────────────────
+        if stage == "WARMUP":
+            actor_opt.param_groups[0]["lr"] = actor_frozen_lr
+            critic_opt.param_groups[0]["lr"] = critic_warmup_lr
+            actor.eval()  # no grad needed for frozen actor
+        else:
+            actor.train()
+
+        # ── Mate-scale curriculum (2v1 / curriculum modes) ─────────────
         if mode in ("2v1", "curriculum") and n_pursuers >= 2:
             if total < MATE_SCALE_RAMP_END:
                 frac = total / MATE_SCALE_RAMP_END
-                # Smooth ramp with cosine schedule
                 mate_scale = MATE_SCALE_RAMP_START + (1.0 - MATE_SCALE_RAMP_START) * (1 - np.cos(np.pi * frac)) / 2
             else:
                 mate_scale = 1.0
             actor.mate_scale = mate_scale
 
-        # LR annealing
-        if total > 0:
-            frac = 1.0 - total / total_steps
-            actor_opt.param_groups[0]["lr"] = ACTOR_LR * max(frac, 0.1)
-            critic_opt.param_groups[0]["lr"] = CRITIC_LR * max(frac, 0.1)
+        # ── LR annealing (fine-tune stage only) ────────────────────────
+        if stage == "FINE_TUNE" and total > critic_warmup_steps:
+            frac = 1.0 - (total - critic_warmup_steps) / (total_steps - critic_warmup_steps)
+            actor_opt.param_groups[0]["lr"] = actor_fine_lr * max(frac, 0.1)
+            critic_opt.param_groups[0]["lr"] = critic_fine_lr * max(frac, 0.1)
 
         all_data, avg_rew, n_ep = collect_rollout(env, actor, critic, device, n_pursuers=n_pursuers)
         total += ROLLOUT_STEPS; rew_win.append(avg_rew)
         ev = ppo_update(actor, critic, actor_opt, critic_opt, all_data, device)
 
-        # Logging
+        # ── Logging ────────────────────────────────────────────────────
         if epoch % 5 == 0:
             avg10 = np.mean(rew_win) if rew_win else avg_rew
             parts = [
@@ -344,29 +376,29 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
                 f"ev={ev:5.3f}",
                 f"lr_a={actor_opt.param_groups[0]['lr']:.1e}",
                 f"eps={n_ep}",
+                f"[{stage[:4]}]",
             ]
             if n_pursuers >= 2:
                 parts.append(f"mate_s={actor.mate_scale:.2f}")
             print("  ".join(parts), flush=True)
 
-        # Attention statistics (periodic)
-        if epoch % log_attn_every == 0 and n_pursuers >= 2:
+        # ── Attention statistics (periodic, all modes) ─────────────────
+        if epoch % log_attn_every == 0:
             attn_stats = compute_attention_stats(actor, device)
             mha_e = attn_stats['mha_entropy']; pool_e = attn_stats['pool_entropy']
-            # Collapse detection
             collapse_flags = []
             if mha_e < 0.3: collapse_flags.append(f"MHA_COLLAPSE(H={mha_e:.2f})")
             if pool_e < 0.3: collapse_flags.append(f"POOL_COLLAPSE(H={pool_e:.2f})")
             if mha_e > 1.05: collapse_flags.append(f"MHA_UNIFORM(H={mha_e:.2f})")
             status = " | ".join(collapse_flags) if collapse_flags else "HEALTHY"
+            mate_str = f"S2M={attn_stats['attn_self2mate']:.3f}  M2S={attn_stats['attn_mate2self']:.3f}  |  " if n_pursuers >= 2 else ""
             print(f"  [Attn] S2T={attn_stats['attn_self2target']:.3f}  "
-                  f"S2M={attn_stats['attn_self2mate']:.3f}  "
-                  f"M2S={attn_stats['attn_mate2self']:.3f}  |  "
+                  f"{mate_str}"
                   f"H_mha={mha_e:.3f} H_pool={pool_e:.3f}  |  "
                   f"pool(S/T/M)={attn_stats['pool_self']:.2f}/{attn_stats['pool_target']:.2f}/{attn_stats['pool_mate']:.2f}  |  "
-                  f"[{status}]")
+                  f"[{status}]", flush=True)
 
-        # Save best
+        # ── Save best ──────────────────────────────────────────────────
         avg10 = np.mean(rew_win) if rew_win else avg_rew
         if avg10 > best_rew and len(rew_win) >= 5:
             best_rew = avg10
@@ -375,6 +407,7 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
                 "critic": critic.state_dict(),
                 "epoch": epoch, "total_steps": total,
                 "mode": mode, "mate_scale": actor.mate_scale,
+                "stage": stage,
             }, os.path.join(log_dir, "best_policy.pth"))
 
         epoch += 1
@@ -386,6 +419,7 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
         "critic": critic.state_dict(),
         "epoch": epoch, "total_steps": total,
         "mode": mode, "mate_scale": actor.mate_scale,
+        "stage": stage,
     }, final_path)
     print(f"\n[Done] {final_path}")
     print(f"  Best avg10 rew: {best_rew:.1f}")
@@ -407,7 +441,17 @@ if __name__ == "__main__":
                         help="Initial difficulty level")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--load", type=str, default=None,
-                        help="Resume from checkpoint .pth")
+                        help="Resume from MAPPO checkpoint .pth (actor + critic)")
+    parser.add_argument("--load-bc", type=str, default=None,
+                        help="Load BC-pretrained Actor weights (.pth from train_attention_bc.py)")
+    parser.add_argument("--warmup", type=int, default=50_000,
+                        help="Critic warmup steps with Actor frozen (default: 50000)")
+    parser.add_argument("--critic-warmup-lr", type=float, default=5e-4,
+                        help="Critic LR during warmup (default: 5e-4)")
+    parser.add_argument("--actor-fine-lr", type=float, default=1e-5,
+                        help="Actor LR after unfreeze (default: 1e-5)")
+    parser.add_argument("--critic-fine-lr", type=float, default=1e-4,
+                        help="Critic LR after warmup (default: 1e-4)")
     args = parser.parse_args()
 
     os.environ.setdefault("JSBSIM_DEBUG", "0")
@@ -419,6 +463,9 @@ if __name__ == "__main__":
     sys.stderr = open(os.devnull, 'w')
 
     try:
-        train(args.mode, args.steps, args.difficulty, args.seed, args.load)
+        train(args.mode, args.steps, args.difficulty, args.seed, args.load,
+              load_bc=args.load_bc, critic_warmup_steps=args.warmup,
+              actor_frozen_lr=0.0, critic_warmup_lr=args.critic_warmup_lr,
+              actor_fine_lr=args.actor_fine_lr, critic_fine_lr=args.critic_fine_lr)
     finally:
         sys.stderr = _stderr_backup
