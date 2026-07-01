@@ -298,36 +298,133 @@ class AttentionFormationActor(nn.Module):
 
 
 class AttentionCritic(nn.Module):
-    """Standard centralized critic — unchanged from baseline.
+    """Tokenized Attention Critic — Self-Attention over entity sequence.
 
-    Global state (21-dim) → MLP → scalar value.
-    The critic doesn't need attention because it already sees the full global state.
+    Global state is reshaped from flat 21-dim to sequence of 3 entities
+    (Self, Mate, Target), each with 7 features (pos xyz, vel xyz, heading).
+
+    Architecture:
+      (B, 3, 7) → Linear(7, d_model) → + TypeEmbed(3, d_model)
+      → MultiHeadSelfAttention → LayerNorm + Residual
+      → Learned Pooling Query → (B, d_model)
+      → Value Head [256, 1] → scalar value
+
+    The attention mechanism lets the Critic dynamically focus on different
+    entities — attending to Mate when proximity risks collision, attending
+    to Target when estimating pursuit progress.
     """
 
-    def __init__(self, global_dim: int = 21, hidden: int = 256):
+    def __init__(self, token_dim: int = 7, d_model: int = 128, n_heads: int = 4,
+                 mlp_hidden: int = 256):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(global_dim, hidden), nn.Tanh(),
-            nn.Linear(hidden, hidden), nn.Tanh(),
-            nn.Linear(hidden, 1),
+        assert d_model % n_heads == 0
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+
+        # 1. Token projection: 7-dim entity state → d_model
+        self.input_proj = nn.Linear(token_dim, d_model)
+
+        # 2. Type embeddings: tell the network which entity is Self/Mate/Target
+        self.type_embeddings = nn.Embedding(3, d_model)
+        nn.init.normal_(self.type_embeddings.weight, std=0.02)
+
+        # 3. Multi-head self-attention over 3 entities
+        self.attention = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=n_heads, batch_first=True,
+        )
+        self.layer_norm = nn.LayerNorm(d_model)
+
+        # 4. Learned pooling query — aggregates 3 tokens into one
+        self.pool_query = nn.Parameter(torch.randn(1, 1, d_model) * 0.1)
+
+        # 5. Value head
+        self.value_net = nn.Sequential(
+            nn.Linear(d_model, mlp_hidden),
+            nn.Tanh(),
+            nn.Linear(mlp_hidden, 1),
         )
         self._init_weights()
 
     def _init_weights(self):
-        for mod in self.net:
-            if isinstance(mod, nn.Linear):
-                nn.init.orthogonal_(mod.weight, gain=np.sqrt(2))
-                if mod.bias is not None:
-                    nn.init.constant_(mod.bias, 0.0)
-        # Output layer: gain=1.0 for value
-        nn.init.orthogonal_(self.net[4].weight, gain=1.0)
+        # Orthogonal init for value head
+        for m in self.value_net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+        # Output layer: gain=1.0 for stable initial value predictions
+        nn.init.orthogonal_(self.value_net[-1].weight, gain=1.0)
 
-    def forward(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
-        if obs.dim() == 1:
-            obs = obs.unsqueeze(0)
-        return self.net(obs).squeeze(-1)
+    def forward(self, global_state, return_attention: bool = False):
+        """
+        Args:
+            global_state: (B, 3, 7) tensor — [Self, Mate, Target] tokens
+            return_attention: if True, return (value, attn_weights_dict)
+
+        Returns:
+            value: (B,) tensor of scalar state-values
+        """
+        if isinstance(global_state, np.ndarray):
+            global_state = torch.as_tensor(global_state, dtype=torch.float32)
+        if global_state.dim() == 2:
+            global_state = global_state.unsqueeze(0)
+
+        batch_size = global_state.size(0)
+
+        # 1. Project to d_model
+        x = self.input_proj(global_state)  # (B, 3, d_model)
+
+        # 2. Inject type embeddings: token 0=Self, 1=Mate, 2=Target
+        device = global_state.device
+        types = torch.arange(3, device=device).unsqueeze(0).expand(batch_size, 3)
+        x = x + self.type_embeddings(types)
+
+        # 3. Self-Attention with residual + LayerNorm
+        attn_out, attn_weights = self.attention(x, x, x)
+        x = self.layer_norm(x + attn_out)  # (B, 3, d_model)
+
+        # 4. Learned pooling: query attends to all 3 token outputs
+        q = self.pool_query.expand(batch_size, -1, -1)  # (B, 1, d_model)
+        pooled_out, pool_weights = self.attention(q, x, x)  # (B, 1, d_model)
+        pooled = pooled_out.squeeze(1)  # (B, d_model)
+
+        # 5. Value head
+        value = self.value_net(pooled).squeeze(-1)  # (B,)
+
+        if return_attention:
+            return value, {
+                'mha_weights': attn_weights,      # (B, 3, 3)
+                'pool_weights': pool_weights,      # (B, 1, 3)
+            }
+        return value
+
+    def critic_attention_entropy(self, global_state) -> dict:
+        """Monitor attention entropy for collapse detection."""
+        if isinstance(global_state, np.ndarray):
+            global_state = torch.as_tensor(global_state, dtype=torch.float32)
+        if global_state.dim() == 2:
+            global_state = global_state.unsqueeze(0)
+
+        with torch.no_grad():
+            _, attn = self.forward(global_state, return_attention=True)
+            mha = attn['mha_weights']   # (B, 3, 3)
+            pool = attn['pool_weights']  # (B, 1, 3)
+
+            eps = 1e-8
+            mha_entropy = -(mha * (mha + eps).log()).sum(-1).mean().item()
+            pool_entropy = -(pool * (pool + eps).log()).sum(-1).mean().item()
+
+            # Attention to mate token (column 1 in MHA, column 1 in pool)
+            mha_mate = mha[:, :, 1].mean().item()
+            pool_mate = pool[:, 0, 1].mean().item()
+
+        return {
+            'mha_entropy': float(mha_entropy),
+            'pool_entropy': float(pool_entropy),
+            'mha_mate_attn': float(mha_mate),
+            'pool_mate_attn': float(pool_mate),
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

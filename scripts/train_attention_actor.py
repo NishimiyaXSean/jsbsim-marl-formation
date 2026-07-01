@@ -38,42 +38,58 @@ from src.models.attention_actor import AttentionFormationActor, AttentionCritic
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
 VF_COEF = 0.5; ENT_COEF = 0.0; MAX_GRAD_NORM = 0.5
 ACTOR_LR_WARMUP = 0.0; ACTOR_LR_FINE = 1e-5
-CRITIC_LR_WARMUP = 5e-4; CRITIC_LR_FINE = 1e-4
-MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
+CRITIC_LR_WARMUP = 1e-3; CRITIC_LR_FINE = 5e-4  # Attention Critic needs high LR + big batch
+MINI_BATCH_SIZE = 128; PPO_EPOCHS = 10; ROLLOUT_STEPS = 8192  # big batch for stable attention gradients
 REWARD_SCALE = 100.0
-OBS_PER_AGENT = 33; GLOBAL_DIM = 21; ACT_DIM = 2; N_PURSUERS = 2
-EV_UNFREEZE_THRESHOLD = 0.5  # only unfreeze Actor when Critic has meaningful value estimates
-KL_TARGET = 0.015            # skip minibatch if approx KL exceeds this
-
-# Curriculum ramp (only used for cold-start, not BC 2v1)
-MATE_SCALE_RAMP_START = 0.0
-MATE_SCALE_RAMP_END = 200_000
+OBS_PER_AGENT = 33; TOKEN_DIM = 7; ACT_DIM = 2; N_PURSUERS = 2
+EV_UNFREEZE_THRESHOLD = 0.6  # higher bar with better Critic
+KL_TARGET = 0.015
+TOKEN_ORDER_SELF = 0; TOKEN_ORDER_MATE = 1; TOKEN_ORDER_TARGET = 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Rollout + GAE
 # ═══════════════════════════════════════════════════════════════════════════
 
-def build_global_state(env):
-    """N pursuers + M targets: pos(3)+vel(3)+heading(1) each = (N+M)*7 dims."""
+def build_global_tokens(env, pursuer_idx: int):
+    """Build per-pursuer tokenized global state: (3, 7) = [Self, Mate, Target].
+
+    Each token: pos(3) + vel(3) + heading(1), normalized to [-1, 1].
+    Token order is view-relative — P0 sees [P0, P1, Target], P1 sees [P1, P0, Target].
+    This view-relative tokenization lets the Critic output values aligned with
+    the Actor's perspective, dramatically reducing fitting difficulty.
+    """
     MAX_D, MAX_H, MAX_V = 10000.0, 5000.0, 400.0
-    vec = []
-    for ps in env.pursuers:
-        p = ps.aircraft.position_ned / np.array([MAX_D, MAX_D, MAX_H])
-        v = ps.aircraft.velocity_ned / MAX_V
-        h = np.array([float(ps.aircraft.state["yaw_deg"]) / 180.0])
-        vec.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
-    for ts in env.targets:
-        p = ts.aircraft.position_ned / np.array([MAX_D, MAX_D, MAX_H])
-        v = ts.aircraft.velocity_ned / MAX_V
-        h = np.array([float(ts.aircraft.state["yaw_deg"]) / 180.0])
-        vec.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
-    return np.array(vec, dtype=np.float32)
+
+    def entity_features(aircraft):
+        p = aircraft.position_ned / np.array([MAX_D, MAX_D, MAX_H])
+        v = aircraft.velocity_ned / MAX_V
+        h = np.array([float(aircraft.state["yaw_deg"]) / 180.0])
+        return np.clip(np.concatenate([p, v, h]), -1, 1).astype(np.float32)
+
+    n_pursuers = len(env.pursuers)
+    n_targets = len(env.targets)
+
+    # Self token
+    self_feat = entity_features(env.pursuers[pursuer_idx].aircraft)
+
+    # Mate token: the OTHER pursuer (or self if only 1 pursuer)
+    if n_pursuers >= 2:
+        mate_idx = 1 if pursuer_idx == 0 else 0
+        mate_feat = entity_features(env.pursuers[mate_idx].aircraft)
+    else:
+        mate_feat = np.zeros(TOKEN_DIM, dtype=np.float32)
+
+    # Target token
+    target_feat = entity_features(env.targets[0].aircraft)
+
+    tokens = np.stack([self_feat, mate_feat, target_feat], axis=0)  # (3, 7)
+    return tokens
 
 
 @torch.no_grad()
 def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuers=2):
-    """Collect rollout data for N pursuers."""
+    """Collect rollout data for N pursuers with per-pursuer tokenized global state."""
     buf = {f'p{i}': {'obs':[],'act':[],'rew':[],'val':[],'logp':[],
                       'done':[],'term':[],'gs':[]} for i in range(n_pursuers)}
     obs, _ = env.reset()
@@ -81,9 +97,13 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
 
     for _ in range(n_steps):
         actions = {}
-        gs = build_global_state(env)
-        gs_t = torch.as_tensor(gs, dtype=torch.float32).unsqueeze(0).to(device)
-        val = critic(gs_t).item()
+        # Per-pursuer view-relative tokenized global state + value
+        gs_tokens = {}; vals = {}
+        for i in range(n_pursuers):
+            gs_i = build_global_tokens(env, i)  # (3, 7) view-relative
+            gs_tokens[i] = gs_i
+            gs_t = torch.as_tensor(gs_i, dtype=torch.float32).unsqueeze(0).to(device)
+            vals[i] = critic(gs_t).item()
 
         for i in range(n_pursuers):
             start = i * OBS_PER_AGENT
@@ -96,11 +116,11 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
             k = f'p{i}'
             buf[k]['obs'].append(obs[start:start+OBS_PER_AGENT].copy())
             buf[k]['act'].append(act.cpu().squeeze(0).numpy())
-            buf[k]['val'].append(val)
+            buf[k]['val'].append(vals[i])
             buf[k]['logp'].append(logp.item())
             buf[k]['done'].append(0.0)
             buf[k]['term'].append(1.0)
-            buf[k]['gs'].append(gs.copy())
+            buf[k]['gs'].append(gs_tokens[i].copy())
             actions[f'p{i}'] = act.cpu().squeeze(0).numpy()
 
         concat_act = np.concatenate([actions[f'p{i}'] for i in range(n_pursuers)])
@@ -150,16 +170,20 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
             next_obs, _ = env.reset()
         obs = next_obs
 
-    # GAE per agent
-    gs_final = build_global_state(env)
-    final_val = critic(torch.as_tensor(gs_final, dtype=torch.float32).unsqueeze(0).to(device)).item()
+    # GAE per agent (per-pursuer tokenized final values)
+    final_vals = {}
+    for i in range(n_pursuers):
+        gs_final_i = build_global_tokens(env, i)
+        gs_t = torch.as_tensor(gs_final_i, dtype=torch.float32).unsqueeze(0).to(device)
+        final_vals[i] = critic(gs_t).item()
 
     all_data = []
     for i in range(n_pursuers):
         k = f'p{i}'; n = len(buf[k]['rew'])
         adv = np.zeros(n, dtype=np.float32); ret = np.zeros(n, dtype=np.float32); gae = 0.0
+        fv = final_vals[i]
         for t in reversed(range(n)):
-            nv = (final_val if t == n-1 else buf[k]['val'][t+1]) * buf[k]['term'][t]
+            nv = (fv if t == n-1 else buf[k]['val'][t+1]) * buf[k]['term'][t]
             delta = buf[k]['rew'][t] + GAMMA * nv * (1 - buf[k]['done'][t]) - buf[k]['val'][t]
             gae = delta + GAMMA * GAE_LAMBDA * (1 - buf[k]['done'][t]) * gae
             adv[t] = gae; ret[t] = adv[t] + buf[k]['val'][t]
@@ -172,7 +196,7 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
             'val': torch.tensor(buf[k]['val'], dtype=torch.float32),
             'adv': a_t, 'ret': torch.tensor(ret, dtype=torch.float32),
             'old_val': torch.tensor(buf[k]['val'], dtype=torch.float32),
-            'gs': torch.tensor(np.array(buf[k]['gs']), dtype=torch.float32),
+            'gs': torch.tensor(np.array(buf[k]['gs']), dtype=torch.float32),  # (n, 3, 7)
         })
     return all_data, ep_rew / max(ep_count, 1), ep_count
 
@@ -243,33 +267,42 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
 #  Training
 # ═══════════════════════════════════════════════════════════════════════════
 
-def compute_attention_stats(actor, device):
-    """Sample attention weights + entropy to monitor collapse/emergence."""
-    actor.eval()
+def compute_attention_stats(actor, critic, device, n_pursuers=2):
+    """Sample attention weights + entropy for both Actor and Critic."""
+    actor.eval(); critic.eval()
     with torch.no_grad():
-        dummy = torch.randn(16, 33).to(device)
-        (_, _), info = actor(dummy, return_attention=True)
+        dummy_obs = torch.randn(16, 33).to(device)
+        (_, _), info = actor(dummy_obs, return_attention=True)
         attn = info['attn_weights']  # [16, 3, 3]
-        # attn[i, j, k]: token i attends to token k
-        # Row 0 = Self token, Row 1 = Target token, Row 2 = Mate token
-        self_to_mate = attn[:, 0, 2].mean().item()   # Self attends to Mate
-        self_to_target = attn[:, 0, 1].mean().item()  # Self attends to Target
-        mate_to_self = attn[:, 2, 0].mean().item()    # Mate attends to Self
-        pool = info['pool_weights'].squeeze(1)  # [16, 3]
+        self_to_mate = attn[:, 0, 2].mean().item()
+        self_to_target = attn[:, 0, 1].mean().item()
+        mate_to_self = attn[:, 2, 0].mean().item()
+        pool = info['pool_weights'].squeeze(1)
         pool_self = pool[:, 0].mean().item()
         pool_target = pool[:, 1].mean().item()
         pool_mate = pool[:, 2].mean().item()
-
-        # Entropy-based collapse detection
         eps = 1e-8
         mha_entropy = -(attn * (attn + eps).log()).sum(-1).mean().item()
         pool_entropy = -(pool * (pool + eps).log()).sum(-1).mean().item()
-    actor.train()
+
+        # Critic attention
+        dummy_gs = torch.randn(16, 3, 7).to(device)
+        _, crit_attn = critic(dummy_gs, return_attention=True)
+        crit_mha = crit_attn['mha_weights']   # [16, 3, 3]
+        crit_pool = crit_attn['pool_weights']  # [16, 1, 3]
+        crit_mha_ent = -(crit_mha * (crit_mha + eps).log()).sum(-1).mean().item()
+        crit_pool_ent = -(crit_pool * (crit_pool + eps).log()).sum(-1).mean().item()
+        # Critic mate attention: column 1 = Mate token
+        crit_mate_mha = crit_mha[:, :, 1].mean().item()
+        crit_mate_pool = crit_pool[:, 0, 1].mean().item()
+    actor.train(); critic.train()
     return {
         'attn_self2mate': self_to_mate, 'attn_self2target': self_to_target,
         'attn_mate2self': mate_to_self,
         'pool_self': pool_self, 'pool_target': pool_target, 'pool_mate': pool_mate,
         'mha_entropy': mha_entropy, 'pool_entropy': pool_entropy,
+        'critic_mha_ent': crit_mha_ent, 'critic_pool_ent': crit_pool_ent,
+        'critic_mate_mha': crit_mate_mha, 'critic_mate_pool': crit_mate_pool,
     }
 
 
@@ -311,13 +344,13 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
         env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
         n_pursuers = 2
 
-    global_dim = (n_pursuers + len(env.targets)) * 7
-    print(f"  Global dim: {global_dim} ({n_pursuers}P + {len(env.targets)}T x 7)")
-
     # ── Build networks ─────────────────────────────────────────────────
     init_mate_scale = 0.0 if (mode == "1v1" or use_mate_ramp) else 1.0
     actor = AttentionFormationActor(mate_scale=init_mate_scale).to(device)
-    critic = AttentionCritic(global_dim=global_dim).to(device)
+    critic = AttentionCritic().to(device)  # tokenized: (3, 7) → scalar
+    print(f"  Tokenized global: 3 entities x 7 features (view-relative per-pursuer)")
+    print(f"  Actor: {sum(p.numel() for p in actor.parameters()):,} params")
+    print(f"  Critic: {sum(p.numel() for p in critic.parameters()):,} params")
 
     if load_bc:
         bc = torch.load(load_bc, map_location='cpu')
@@ -406,21 +439,21 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
                 parts.append(f"kl_skip={kl_skips}")
             print("  ".join(parts), flush=True)
 
-        # ── Attention statistics ───────────────────────────────────────
+        # ── Attention statistics (Actor + Critic) ──────────────────────
         if epoch % log_attn_every == 0 and n_pursuers >= 2:
-            attn_stats = compute_attention_stats(actor, device)
+            attn_stats = compute_attention_stats(actor, critic, device)
             mha_e = attn_stats['mha_entropy']; pool_e = attn_stats['pool_entropy']
             collapse_flags = []
             if mha_e < 0.3: collapse_flags.append(f"MHA_COLLAPSE(H={mha_e:.2f})")
             if pool_e < 0.3: collapse_flags.append(f"POOL_COLLAPSE(H={pool_e:.2f})")
             if mha_e > 1.05: collapse_flags.append(f"MHA_UNIFORM(H={mha_e:.2f})")
             status = " | ".join(collapse_flags) if collapse_flags else "HEALTHY"
-            print(f"  [Attn] S2T={attn_stats['attn_self2target']:.3f}  "
+            print(f"  [Actor Attn] S2T={attn_stats['attn_self2target']:.3f}  "
                   f"S2M={attn_stats['attn_self2mate']:.3f}  "
-                  f"M2S={attn_stats['attn_mate2self']:.3f}  |  "
-                  f"H_mha={mha_e:.3f} H_pool={pool_e:.3f}  |  "
-                  f"pool(S/T/M)={attn_stats['pool_self']:.2f}/{attn_stats['pool_target']:.2f}/{attn_stats['pool_mate']:.2f}  |  "
-                  f"[{status}]", flush=True)
+                  f"H_mha={mha_e:.3f} H_pool={pool_e:.3f}  |  pool={attn_stats['pool_self']:.2f}/{attn_stats['pool_target']:.2f}/{attn_stats['pool_mate']:.2f}  [{status}]", flush=True)
+            print(f"  [Crit Attn] mate_mha={attn_stats['critic_mate_mha']:.3f}  "
+                  f"mate_pool={attn_stats['critic_mate_pool']:.3f}  |  "
+                  f"H_mha={attn_stats['critic_mha_ent']:.3f} H_pool={attn_stats['critic_pool_ent']:.3f}", flush=True)
 
         # ── Save best ──────────────────────────────────────────────────
         avg10 = np.mean(rew_win) if rew_win else avg_rew
