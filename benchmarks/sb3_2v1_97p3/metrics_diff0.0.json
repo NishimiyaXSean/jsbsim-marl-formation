@@ -1,0 +1,17 @@
+{
+  "model_path": "benchmarks/sb3_2v1_97p3/model.zip",
+  "difficulty": 0.0,
+  "n_episodes": 100,
+  "successes": 92,
+  "capture_rate": 0.92,
+  "ci_95_low": 0.8500173312059693,
+  "ci_95_high": 0.9589070305141891,
+  "avg_reward": 5907.567884191269,
+  "std_reward": 4827.435361103101,
+  "avg_min_dist_m": 250.60178857684522,
+  "std_min_dist_m": 197.79390234621707,
+  "avg_intercept_time_s": 31.4725,
+  "std_intercept_time_s": 27.069935288577582,
+  "avg_final_spacing_m": 3296.5580664681675,
+  "std_final_spacing_m": 2580.3293672954524
+}

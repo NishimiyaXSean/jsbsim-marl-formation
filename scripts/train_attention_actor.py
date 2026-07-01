@@ -347,7 +347,7 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
             ]
             if n_pursuers >= 2:
                 parts.append(f"mate_s={actor.mate_scale:.2f}")
-            print("  ".join(parts))
+            print("  ".join(parts), flush=True)
 
         # Attention statistics (periodic)
         if epoch % log_attn_every == 0 and n_pursuers >= 2:
@@ -414,4 +414,11 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
 
-    train(args.mode, args.steps, args.difficulty, args.seed, args.load)
+    # Suppress JSBSIM C-level stderr (massive aircraft config dump)
+    _stderr_backup = sys.stderr
+    sys.stderr = open(os.devnull, 'w')
+
+    try:
+        train(args.mode, args.steps, args.difficulty, args.seed, args.load)
+    finally:
+        sys.stderr = _stderr_backup

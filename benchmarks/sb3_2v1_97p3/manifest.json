@@ -1,0 +1,84 @@
+{
+  "benchmark_name": "SB3 Phase 4.1 \u2014 2v1 Shared Policy (97.3% baseline)",
+  "model_source": "marl_runs/formation_2v1_0629_1721_s42/formation_2v1_final.zip",
+  "model_archived": "benchmarks/sb3_2v1_97p3/model.zip",
+  "architecture": {
+    "policy": "MlpPolicy (shared, 66-dim obs \u2192 Box(4) action)",
+    "net_arch": {
+      "pi": [
+        256,
+        256
+      ],
+      "vf": [
+        256,
+        256
+      ]
+    },
+    "activation": "Tanh",
+    "algorithm": "PPO (Stable-Baselines3)",
+    "training_steps": 200000
+  },
+  "environment": {
+    "num_pursuers": 2,
+    "num_targets": 1,
+    "obs_dim": 66,
+    "action_dim": 4,
+    "decision_hz": 2,
+    "max_episode_s": 120
+  },
+  "results": {
+    "difficulty_0.0": {
+      "model_path": "benchmarks/sb3_2v1_97p3/model.zip",
+      "difficulty": 0.0,
+      "n_episodes": 100,
+      "successes": 94,
+      "capture_rate": 0.94,
+      "ci_95_low": 0.8752303146877748,
+      "ci_95_high": 0.9722142547333433,
+      "avg_reward": 6246.817699869629,
+      "std_reward": 3925.1110146533965,
+      "avg_min_dist_m": 231.0037457067514,
+      "std_min_dist_m": 137.8619351487696,
+      "avg_intercept_time_s": 30.708166666666667,
+      "std_intercept_time_s": 24.04819449159449,
+      "avg_final_spacing_m": 3185.802990979732,
+      "std_final_spacing_m": 2277.9438002477964
+    },
+    "difficulty_0.3": {
+      "model_path": "benchmarks/sb3_2v1_97p3/model.zip",
+      "difficulty": 0.3,
+      "n_episodes": 100,
+      "successes": 75,
+      "capture_rate": 0.75,
+      "ci_95_low": 0.6569535362992417,
+      "ci_95_high": 0.8245490599627573,
+      "avg_reward": 5158.276059976231,
+      "std_reward": 5211.9789737750725,
+      "avg_min_dist_m": 300.0279431947995,
+      "std_min_dist_m": 261.36832300388267,
+      "avg_intercept_time_s": 58.9305,
+      "std_intercept_time_s": 36.76635698381214,
+      "avg_final_spacing_m": 3703.380019429158,
+      "std_final_spacing_m": 2823.1806691054176
+    },
+    "difficulty_0.6": {
+      "model_path": "benchmarks/sb3_2v1_97p3/model.zip",
+      "difficulty": 0.6,
+      "n_episodes": 100,
+      "successes": 28,
+      "capture_rate": 0.28,
+      "ci_95_low": 0.2013955916759837,
+      "ci_95_high": 0.37488212361345724,
+      "avg_reward": 1687.8800260132004,
+      "std_reward": 5180.155225512754,
+      "avg_min_dist_m": 564.6412199178344,
+      "std_min_dist_m": 450.1112041952685,
+      "avg_intercept_time_s": 98.5215,
+      "std_intercept_time_s": 35.267229303561685,
+      "avg_final_spacing_m": 3506.0107570102327,
+      "std_final_spacing_m": 2524.7609197546
+    }
+  },
+  "evaluated_at": "2026-07-01 15:09:10",
+  "episodes_per_difficulty": 100
+}
