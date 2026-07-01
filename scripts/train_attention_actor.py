@@ -52,7 +52,7 @@ MATE_SCALE_RAMP_END = 200_000  # steps over which to ramp mate_scale to 1.0
 # ═══════════════════════════════════════════════════════════════════════════
 
 def build_global_state(env):
-    """21-dim: 2 pursuers + 1 target: pos(3)+vel(3)+heading(1) each."""
+    """N pursuers + M targets: pos(3)+vel(3)+heading(1) each = (N+M)*7 dims."""
     MAX_D, MAX_H, MAX_V = 10000.0, 5000.0, 400.0
     vec = []
     for ps in env.pursuers:
@@ -285,9 +285,21 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
     print(f"  Log dir:   {log_dir}")
     print(f"{'='*60}\n")
 
+    # ── Environment (created first to determine dimensions) ──────────────
+    if mode == "1v1":
+        env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
+        n_pursuers = 1
+    else:
+        env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
+        n_pursuers = 2
+
+    # Compute dynamic global_dim: (N pursuers + M targets) × 7 features each
+    global_dim = (n_pursuers + len(env.targets)) * 7
+    print(f"  Global dim: {global_dim} ({n_pursuers}P + {len(env.targets)}T × 7)")
+
     # ── Build networks ─────────────────────────────────────────────────
     actor = AttentionFormationActor(mate_scale=0.0 if mode == "1v1" else MATE_SCALE_RAMP_START).to(device)
-    critic = AttentionCritic().to(device)
+    critic = AttentionCritic(global_dim=global_dim).to(device)
 
     if load_ckpt:
         ck = torch.load(load_ckpt, map_location='cpu')
@@ -296,16 +308,6 @@ def train(mode="curriculum", total_steps=500000, difficulty=0.0, seed=42,
 
     actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
-
-    # ── Environment ────────────────────────────────────────────────────
-    if mode == "1v1":
-        # 1v1: single pursuer, no mate features needed
-        env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
-        n_pursuers = 1
-        actor.mate_scale = 0.0  # mate features are zero anyway
-    else:
-        env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
-        n_pursuers = 2
 
     # ── Training loop ──────────────────────────────────────────────────
     total = 0; epoch = 0; rew_win = deque(maxlen=10)
