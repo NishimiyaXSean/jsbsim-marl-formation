@@ -36,15 +36,18 @@ from src.models.attention_actor import AttentionFormationActor, AttentionCritic
 # ═══════════════════════════════════════════════════════════════════════════
 
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
-VF_COEF = 0.5; ENT_COEF = 0.01; MAX_GRAD_NORM = 0.5
-ACTOR_LR = 3e-4; CRITIC_LR = 1e-3
+VF_COEF = 0.5; ENT_COEF = 0.0; MAX_GRAD_NORM = 0.5
+ACTOR_LR_WARMUP = 0.0; ACTOR_LR_FINE = 1e-5
+CRITIC_LR_WARMUP = 5e-4; CRITIC_LR_FINE = 1e-4
 MINI_BATCH_SIZE = 64; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096
 REWARD_SCALE = 100.0
 OBS_PER_AGENT = 33; GLOBAL_DIM = 21; ACT_DIM = 2; N_PURSUERS = 2
+EV_UNFREEZE_THRESHOLD = 0.5  # only unfreeze Actor when Critic has meaningful value estimates
+KL_TARGET = 0.015            # skip minibatch if approx KL exceeds this
 
-# Curriculum
-MATE_SCALE_RAMP_START = 0.0   # start with mate ignored
-MATE_SCALE_RAMP_END = 200_000  # steps over which to ramp mate_scale to 1.0
+# Curriculum ramp (only used for cold-start, not BC 2v1)
+MATE_SCALE_RAMP_START = 0.0
+MATE_SCALE_RAMP_END = 200_000
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -178,17 +181,20 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
 #  PPO Update
 # ═══════════════════════════════════════════════════════════════════════════
 
-def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device, epochs=PPO_EPOCHS):
+def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
+               epochs=PPO_EPOCHS, kl_target=KL_TARGET, ent_coef=ENT_COEF):
     actor.train(); critic.train()
     all_vals, all_rets = [], []
+    kl_skips = 0; total_minibatches = 0
 
-    for _ in range(epochs):
+    for epoch_idx in range(epochs):
         for data in all_data:
             n = len(data['obs'])
             idx_all = torch.randperm(n)
             for start in range(0, n, MINI_BATCH_SIZE):
                 idx = idx_all[start:start+MINI_BATCH_SIZE]
                 if len(idx) == 0: continue
+                total_minibatches += 1
 
                 b_obs = data['obs'][idx].to(device); b_act = data['act'][idx].to(device)
                 b_adv = data['adv'][idx].to(device); b_ret = data['ret'][idx].to(device)
@@ -202,13 +208,21 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device, epochs=PP
                 new_logp = dist.log_prob(b_act).sum(-1)
                 ratio = torch.exp(new_logp - b_logp)
 
+                # KL early stopping (skip minibatch if KL too high)
+                if epoch_idx > 0:
+                    with torch.no_grad():
+                        approx_kl = ((ratio - 1) - ratio.log()).mean().item()
+                        if approx_kl > kl_target:
+                            kl_skips += 1
+                            continue
+
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1-CLIP_EPS, 1+CLIP_EPS) * mb_adv
                 actor_loss = -torch.min(surr1, surr2).mean()
 
-                # Entropy bonus (only for cold-start; zero for hot-start)
-                entropy = dist.entropy().mean()
-                actor_loss = actor_loss - ENT_COEF * entropy
+                if ent_coef > 0:
+                    entropy = dist.entropy().mean()
+                    actor_loss = actor_loss - ent_coef * entropy
 
                 val_pred = critic(b_gs)
                 v_clip = b_oldv + torch.clamp(val_pred - b_oldv, -CLIP_EPS, CLIP_EPS)
@@ -222,7 +236,7 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device, epochs=PP
                 all_vals.append(val_pred.detach()); all_rets.append(b_ret)
 
     ev = 1.0 - torch.var(torch.cat(all_rets) - torch.cat(all_vals)) / (torch.var(torch.cat(all_rets)) + 1e-8) if all_vals else 0.0
-    return float(ev)
+    return float(ev), kl_skips
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -259,33 +273,33 @@ def compute_attention_stats(actor, device):
     }
 
 
-def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
+def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
           load_ckpt=None, load_bc=None, log_attn_every=50,
-          critic_warmup_steps=50_000, actor_frozen_lr=0.0,
-          critic_warmup_lr=5e-4, actor_fine_lr=1e-5, critic_fine_lr=1e-4):
-    """Two-stage MAPPO fine-tuning for Attention Actor.
+          critic_warmup_steps=100_000, actor_frozen_lr=0.0,
+          critic_warmup_lr=5e-4, actor_fine_lr=1e-5, critic_fine_lr=1e-4,
+          ev_unfreeze_threshold=EV_UNFREEZE_THRESHOLD, kl_target=KL_TARGET,
+          ent_coef=ENT_COEF, use_mate_ramp=False):
+    """Two-stage MAPPO fine-tuning for Attention Actor with EV gating + KL protection.
 
     Stage 1 (Critic Warmup): Actor frozen at BC weights, Critic learns V(s).
-    Stage 2 (Joint Fine-tune): Actor unfrozen with tiny LR, PPO policy gradient.
+      - EV-gated: only unfreeze when EV >= ev_unfreeze_threshold.
+    Stage 2 (Joint Fine-tune): Actor unfrozen with tiny LR, KL early stopping.
 
     Args:
-        mode: "1v1" or "2v1" or "curriculum"
-        total_steps: Total environment steps
-        load_ckpt: Resume from MAPPO checkpoint .pth (actor + critic)
-        load_bc: Load BC-pretrained Actor weights only (.pth from train_attention_bc.py)
-        critic_warmup_steps: Steps to keep Actor frozen while Critic learns
+        use_mate_ramp: If True, use cosine ramp 0→1 for mate_scale.
+                       If False (default for 2v1 BC), keep mate_scale=1.0 from start.
     """
     ts = datetime.datetime.now().strftime("%m%d_%H%M")
-    stage_label = "bc_finetune" if load_bc else "cold"
+    stage_label = "bc2v1" if (load_bc and not use_mate_ramp) else ("bc_finetune" if load_bc else "cold")
     run_name = f"attn_{mode}_{stage_label}_{ts}_s{seed}"
     log_dir = f"./marl_runs/{run_name}"; os.makedirs(log_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"{'='*60}")
-    print(f"Self-Attention MAPPO Training")
-    print(f"  Mode:      {mode}  |  Stages: {total_steps:,} steps")
-    print(f"  BC init:   {load_bc is not None}")
-    print(f"  Difficulty: {difficulty:.2f}  |  Device: {device}")
+    print(f"Self-Attention MAPPO Training (EV-gated + KL protection)")
+    print(f"  Mode:      {mode}  |  Steps: {total_steps:,}  |  BC: {load_bc is not None}")
+    print(f"  EV gate:   {ev_unfreeze_threshold}  |  KL target: {kl_target}")
+    print(f"  Mate ramp: {use_mate_ramp}  |  Difficulty: {difficulty:.2f}")
     print(f"  Log dir:   {log_dir}")
     print(f"{'='*60}\n")
 
@@ -298,57 +312,63 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
         n_pursuers = 2
 
     global_dim = (n_pursuers + len(env.targets)) * 7
-    print(f"  Global dim: {global_dim} ({n_pursuers}P + {len(env.targets)}T × 7)")
+    print(f"  Global dim: {global_dim} ({n_pursuers}P + {len(env.targets)}T x 7)")
 
     # ── Build networks ─────────────────────────────────────────────────
-    actor = AttentionFormationActor(mate_scale=0.0 if mode == "1v1" else MATE_SCALE_RAMP_START).to(device)
+    init_mate_scale = 0.0 if (mode == "1v1" or use_mate_ramp) else 1.0
+    actor = AttentionFormationActor(mate_scale=init_mate_scale).to(device)
     critic = AttentionCritic(global_dim=global_dim).to(device)
 
-    # Load BC-pretrained Actor weights
     if load_bc:
         bc = torch.load(load_bc, map_location='cpu')
         actor.load_state_dict(bc['actor_state'])
         vl = bc.get('val_loss', None)
         vl_str = f"val_loss={vl:.6f}" if isinstance(vl, float) else ""
-        print(f"  BC Actor loaded: {load_bc}  {vl_str}")
+        bc_mate = bc.get('mate_scale', '?')
+        print(f"  BC Actor loaded: {load_bc}  {vl_str}  mate_scale={bc_mate}")
+        # If BC was trained with mate_scale=1.0, keep it at 1.0
+        if isinstance(bc_mate, (int, float)) and bc_mate == 1.0:
+            actor.mate_scale = 1.0
 
-    # Load full MAPPO checkpoint (resume)
     if load_ckpt:
         ck = torch.load(load_ckpt, map_location='cpu')
         actor.load_state_dict(ck['actor']); critic.load_state_dict(ck['critic'])
         print(f'  MAPPO checkpoint loaded: {load_ckpt}')
 
     # ── Optimisers ─────────────────────────────────────────────────────
-    actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
+    actor_opt = torch.optim.Adam(actor.parameters(), lr=ACTOR_LR_WARMUP, eps=1e-5)
     critic_opt = torch.optim.Adam(critic.parameters(), lr=critic_warmup_lr, eps=1e-5)
 
     # ── Training loop ──────────────────────────────────────────────────
     total = 0; epoch = 0; rew_win = deque(maxlen=10)
     best_rew = -float('inf')
-    stage = "WARMUP"  # "WARMUP" → "FINE_TUNE"
+    stage = "WARMUP"; last_ev = 0.0
+    warmup_done = False
 
-    if not load_bc:
-        critic_warmup_steps = 0  # skip warmup for cold-start
-        stage = "FINE_TUNE"
+    if not load_bc and not load_ckpt:
+        critic_warmup_steps = 0; stage = "FINE_TUNE"; warmup_done = True
 
     while total < total_steps:
-        # ── Stage transition ───────────────────────────────────────────
-        if total >= critic_warmup_steps and stage == "WARMUP":
-            stage = "FINE_TUNE"
-            actor_opt.param_groups[0]["lr"] = actor_fine_lr
-            critic_opt.param_groups[0]["lr"] = critic_fine_lr
-            print(f"\n[MAPPO] === Stage 2: Actor unfrozen (lr={actor_fine_lr:.1e}) ===\n")
+        # ── EV-gated stage transition ──────────────────────────────────
+        if total >= critic_warmup_steps and not warmup_done:
+            if last_ev >= ev_unfreeze_threshold:
+                warmup_done = True; stage = "FINE_TUNE"
+                actor_opt.param_groups[0]["lr"] = actor_fine_lr
+                critic_opt.param_groups[0]["lr"] = critic_fine_lr
+                print(f"\n[MAPPO] === Actor unfrozen (EV={last_ev:.3f} >= {ev_unfreeze_threshold}) ===\n")
+            else:
+                print(f"\n[MAPPO] === Step {total}: EV={last_ev:.3f} < {ev_unfreeze_threshold}, extending warmup ===\n")
 
         # ── Actor frozen during warmup ─────────────────────────────────
-        if stage == "WARMUP":
+        if not warmup_done:
             actor_opt.param_groups[0]["lr"] = actor_frozen_lr
             critic_opt.param_groups[0]["lr"] = critic_warmup_lr
-            actor.eval()  # no grad needed for frozen actor
+            actor.eval()
         else:
             actor.train()
 
-        # ── Mate-scale curriculum (2v1 / curriculum modes) ─────────────
-        if mode in ("2v1", "curriculum") and n_pursuers >= 2:
+        # ── Mate-scale (only ramp if use_mate_ramp=True, otherwise fixed at 1.0) ──
+        if use_mate_ramp and n_pursuers >= 2:
             if total < MATE_SCALE_RAMP_END:
                 frac = total / MATE_SCALE_RAMP_END
                 mate_scale = MATE_SCALE_RAMP_START + (1.0 - MATE_SCALE_RAMP_START) * (1 - np.cos(np.pi * frac)) / 2
@@ -356,15 +376,17 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
                 mate_scale = 1.0
             actor.mate_scale = mate_scale
 
-        # ── LR annealing (fine-tune stage only) ────────────────────────
-        if stage == "FINE_TUNE" and total > critic_warmup_steps:
-            frac = 1.0 - (total - critic_warmup_steps) / (total_steps - critic_warmup_steps)
+        # ── LR annealing ───────────────────────────────────────────────
+        if warmup_done and total > critic_warmup_steps:
+            frac = 1.0 - (total - critic_warmup_steps) / max(total_steps - critic_warmup_steps, 1)
             actor_opt.param_groups[0]["lr"] = actor_fine_lr * max(frac, 0.1)
             critic_opt.param_groups[0]["lr"] = critic_fine_lr * max(frac, 0.1)
 
         all_data, avg_rew, n_ep = collect_rollout(env, actor, critic, device, n_pursuers=n_pursuers)
         total += ROLLOUT_STEPS; rew_win.append(avg_rew)
-        ev = ppo_update(actor, critic, actor_opt, critic_opt, all_data, device)
+        ev, kl_skips = ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
+                                   ent_coef=ent_coef, kl_target=kl_target)
+        last_ev = ev
 
         # ── Logging ────────────────────────────────────────────────────
         if epoch % 5 == 0:
@@ -380,10 +402,12 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
             ]
             if n_pursuers >= 2:
                 parts.append(f"mate_s={actor.mate_scale:.2f}")
+            if kl_skips > 0:
+                parts.append(f"kl_skip={kl_skips}")
             print("  ".join(parts), flush=True)
 
-        # ── Attention statistics (periodic, all modes) ─────────────────
-        if epoch % log_attn_every == 0:
+        # ── Attention statistics ───────────────────────────────────────
+        if epoch % log_attn_every == 0 and n_pursuers >= 2:
             attn_stats = compute_attention_stats(actor, device)
             mha_e = attn_stats['mha_entropy']; pool_e = attn_stats['pool_entropy']
             collapse_flags = []
@@ -391,9 +415,9 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
             if pool_e < 0.3: collapse_flags.append(f"POOL_COLLAPSE(H={pool_e:.2f})")
             if mha_e > 1.05: collapse_flags.append(f"MHA_UNIFORM(H={mha_e:.2f})")
             status = " | ".join(collapse_flags) if collapse_flags else "HEALTHY"
-            mate_str = f"S2M={attn_stats['attn_self2mate']:.3f}  M2S={attn_stats['attn_mate2self']:.3f}  |  " if n_pursuers >= 2 else ""
             print(f"  [Attn] S2T={attn_stats['attn_self2target']:.3f}  "
-                  f"{mate_str}"
+                  f"S2M={attn_stats['attn_self2mate']:.3f}  "
+                  f"M2S={attn_stats['attn_mate2self']:.3f}  |  "
                   f"H_mha={mha_e:.3f} H_pool={pool_e:.3f}  |  "
                   f"pool(S/T/M)={attn_stats['pool_self']:.2f}/{attn_stats['pool_target']:.2f}/{attn_stats['pool_mate']:.2f}  |  "
                   f"[{status}]", flush=True)
@@ -403,11 +427,9 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
         if avg10 > best_rew and len(rew_win) >= 5:
             best_rew = avg10
             torch.save({
-                "actor": actor.state_dict(),
-                "critic": critic.state_dict(),
+                "actor": actor.state_dict(), "critic": critic.state_dict(),
                 "epoch": epoch, "total_steps": total,
-                "mode": mode, "mate_scale": actor.mate_scale,
-                "stage": stage,
+                "mode": mode, "mate_scale": actor.mate_scale, "stage": stage,
             }, os.path.join(log_dir, "best_policy.pth"))
 
         epoch += 1
@@ -415,11 +437,9 @@ def train(mode="1v1", total_steps=200000, difficulty=0.0, seed=42,
     # ── Save final ─────────────────────────────────────────────────────
     final_path = os.path.join(log_dir, "final_policy.pth")
     torch.save({
-        "actor": actor.state_dict(),
-        "critic": critic.state_dict(),
+        "actor": actor.state_dict(), "critic": critic.state_dict(),
         "epoch": epoch, "total_steps": total,
-        "mode": mode, "mate_scale": actor.mate_scale,
-        "stage": stage,
+        "mode": mode, "mate_scale": actor.mate_scale, "stage": stage,
     }, final_path)
     print(f"\n[Done] {final_path}")
     print(f"  Best avg10 rew: {best_rew:.1f}")
