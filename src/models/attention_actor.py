@@ -161,7 +161,9 @@ class AttentionFormationActor(nn.Module):
         )
 
         # ── Attention pooling: learned weighted sum over 3 tokens ──────────
-        self.attn_pool_query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        # Scale 0.1: for d_model=128, pre-softmax scores have std ≈ sqrt(128)*0.1*1 ≈ 1.13,
+        # giving meaningful initial differentiation across 3 tokens (prevents collapse).
+        self.attn_pool_query = nn.Parameter(torch.randn(1, 1, d_model) * 0.1)
 
         # ── Final MLP head (3*d_model → mlp_hidden → mlp_hidden → act_dim) ─
         self.mlp_head = nn.Sequential(
@@ -255,6 +257,44 @@ class AttentionFormationActor(nn.Module):
     def set_mate_scale(self, scale: float):
         """Dynamically adjust mate token contribution (for curriculum training)."""
         self.mate_scale = scale
+
+    def attention_entropy(self, obs: torch.Tensor) -> dict:
+        """Compute per-head attention entropy for collapse detection.
+
+        Returns dict with:
+          - mha_entropy: mean entropy across all MHA heads (bits, max=log(3)≈1.10)
+          - pool_entropy: entropy of learned pooling weights (bits, max=log(3)≈1.10)
+          - mate_attention: fraction of MHA attention allocated to mate token (row avg)
+
+        Low entropy (< 0.3) signals attention collapse (one token dominates).
+        High entropy (> 1.0) signals uniform attention (no differentiation).
+        Healthy range: 0.4–0.9 (meaningful differentiation without collapse).
+        """
+        if isinstance(obs, np.ndarray):
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)
+
+        with torch.no_grad():
+            (_, _), info = self.forward(obs, return_attention=True)
+            attn = info['attn_weights']  # [B, 3, 3]
+
+            # MHA entropy per batch item, averaged
+            eps = 1e-8
+            mha_entropy = -(attn * (attn + eps).log()).sum(-1).mean().item()  # avg over B×3 rows
+
+            # Pool entropy
+            pool = info['pool_weights'].squeeze(1)  # [B, 3]
+            pool_entropy = -(pool * (pool + eps).log()).sum(-1).mean().item()
+
+            # Mate attention fraction (column 2 of attention matrix = attention TO mate)
+            mate_attn = attn[:, :, 2].mean().item()  # avg over B×3 query positions
+
+        return {
+            'mha_entropy': float(mha_entropy),
+            'pool_entropy': float(pool_entropy),
+            'mate_attention': float(mate_attn),
+        }
 
 
 class AttentionCritic(nn.Module):
