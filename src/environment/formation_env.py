@@ -97,14 +97,15 @@ PINCER_IDEAL_ANGLE_MAX = 150.0   # max pincer angle for reward (180=perfect flan
 PINCER_WEIGHT = 15.0             # reward weight for pincer angle (per micro-step)
 PINCER_DIST_MAX = 2000.0         # only apply pincer reward when both within this range
 
-# Cooperative interception (AND-gate) — curriculum-annealed
-COOP_SUCCESS_DIST_EASY = 1200.0  # relaxed: both within 1200m (easy to discover)
-COOP_SUCCESS_DIST_HARD = 300.0   # strict: both within 300m
-COOP_SUCCESS_ANGLE_EASY = 10.0   # relaxed: > 10 deg pincer (any separation works)
-COOP_SUCCESS_ANGLE_HARD = 60.0   # strict: > 60 deg pincer
+# ── Two-phase cooperative training ─────────────────────────────────────
+# Phase 1 (0→200K): OR-gate — any pursuer <200m = success, light pincer guidance
+# Phase 2 (200K→500K): AND-gate — both <500m + angle >45° + sustained
+COOP_PHASE_OR = 0                # OR-gate: single-pursuer success
+COOP_PHASE_AND = 1               # AND-gate: cooperative pincer required
+COOP_PHASE1_OR_DIST = 200.0      # Phase 1: any pursuer within 200m = success
+COOP_PHASE2_AND_DIST = 500.0     # Phase 2: BOTH within 500m
+COOP_PHASE2_AND_ANGLE = 45.0     # Phase 2: pincer angle > 45 deg
 COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps
-COOP_CURRICULUM_START = 0.0      # curriculum progress at which tightening begins
-COOP_CURRICULUM_END = 0.8        # stay relaxed longer before full strictness
 
 # Individual distance pressure: prevent free-riding by penalising far pursuers
 DIST_PRESSURE_THRESHOLD = 1500.0  # distance (m) beyond which penalty begins
@@ -210,10 +211,7 @@ class FormationEnv(gym.Env):
         # Cooperative state
         self._striker_idx: int = 0       # which pursuer is the striker this episode
         self._coop_sustain_counter: int = 0  # consecutive steps in cooperative kill zone
-        # Dynamic AND-gate (curriculum-annealed)
-        self._coop_curriculum_progress: float = 0.0
-        self._coop_success_dist: float = COOP_SUCCESS_DIST_EASY
-        self._coop_success_angle: float = COOP_SUCCESS_ANGLE_EASY
+        self._coop_phase: int = COOP_PHASE_OR  # Phase 0=OR-gate, 1=AND-gate
 
         # ── Build aircraft + controllers ──────────────────────────────
         self.pursuers: List[PursuerState] = []
@@ -556,37 +554,39 @@ class FormationEnv(gym.Env):
                     interceptor_bonus = INTERCEPTOR_PINCER_BONUS * (pincer_angle / 180.0) * dt
                     total_reward += interceptor_bonus
 
-                # ── Distance pressure: penalise free-riding ──────────
-                # Each pursuer loses reward for being > DIST_PRESSURE_THRESHOLD from target.
-                # This creates a hard incentive to stay within engagement range,
-                # preventing the "one chases, one flees" degenerate strategy.
-                for i in range(self.N):
-                    if pursuer_dists[i] > DIST_PRESSURE_THRESHOLD:
-                        excess = pursuer_dists[i] - DIST_PRESSURE_THRESHOLD
-                        penalty = max(DIST_PRESSURE_WEIGHT * excess * dt, DIST_PRESSURE_MAX * dt)
-                        total_reward += penalty
+                # ── Cooperative success (phase-aware) ──────────────────
+                if self._coop_phase == COOP_PHASE_AND:
+                    # Phase 2: Relaxed AND-gate
+                    both_in_kill_zone = (d0 < COOP_PHASE2_AND_DIST and d1 < COOP_PHASE2_AND_DIST
+                                         and pincer_angle >= COOP_PHASE2_AND_ANGLE)
+                    if both_in_kill_zone:
+                        self._coop_sustain_counter += 1
+                    else:
+                        self._coop_sustain_counter = 0
 
-                # ── Cooperative success (AND-gate, curriculum-annealed) ─
-                both_in_kill_zone = (d0 < self._coop_success_dist and d1 < self._coop_success_dist
-                                     and pincer_angle >= self._coop_success_angle)
-
-                if both_in_kill_zone:
-                    self._coop_sustain_counter += 1
+                    if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
+                        total_reward += REWARD_SUCCESS
+                        coop_bonus = 2000.0 * (pincer_angle / 180.0)
+                        total_reward += coop_bonus
+                        terminated = True
+                        reason = "cooperative_success"
+                        kill_info["killer"] = closer_idx
+                        break
                 else:
-                    self._coop_sustain_counter = 0
-
-                if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
-                    total_reward += REWARD_SUCCESS
-                    # Extra cooperative bonus: bigger for better pincer
-                    coop_bonus = 2000.0 * (pincer_angle / 180.0)
-                    total_reward += coop_bonus
-                    terminated = True
-                    reason = "cooperative_success"
-                    kill_info["killer"] = closer_idx
-                    break
+                    # Phase 1: OR-gate (any pursuer close) — build attack instinct
+                    for i, ps in enumerate(self.pursuers):
+                        if pursuer_dists[i] < COOP_PHASE1_OR_DIST and ps.episode_start_dist > 400.0:
+                            total_reward += REWARD_SUCCESS
+                            # Small pincer bonus even in OR phase (light guidance)
+                            if pincer_angle >= 30.0:
+                                total_reward += 500.0 * (pincer_angle / 180.0)
+                            terminated = True
+                            reason = "success"
+                            kill_info["killer"] = i
+                            break
 
             else:
-                # ── Legacy: single-pursuer success (any within 200m) ──
+                # ── Legacy non-cooperative: single-pursuer success ──
                 for i, ps in enumerate(self.pursuers):
                     if pursuer_dists[i] < 200.0 and ps.episode_start_dist > 400.0:
                         total_reward += REWARD_SUCCESS
@@ -859,23 +859,10 @@ class FormationEnv(gym.Env):
         """Dynamic formation spacing weight (0→1 via annealing)."""
         self._formation_weight = float(np.clip(w, 0.0, 1.0))
 
-    def set_coop_curriculum(self, progress: float) -> None:
-        """Anneal AND-gate criteria from easy→strict.
+    def set_coop_phase(self, phase: int) -> None:
+        """Switch cooperative success criteria.
 
-        progress=0.0: dist<800m, angle>20deg (easy to discover)
-        progress=1.0: dist<300m, angle>60deg (strict pincer)
-
-        The curriculum window is [CURRICULUM_START, CURRICULUM_END].
-        Before START: full easy. After END: full strict.
+        Phase COOP_PHASE_OR  (0): OR-gate  — any pursuer < 200m = success
+        Phase COOP_PHASE_AND (1): AND-gate — both < 500m + angle > 45° + sustained
         """
-        self._coop_curriculum_progress = float(np.clip(progress, 0.0, 1.0))
-        if progress < COOP_CURRICULUM_START:
-            frac = 0.0
-        elif progress > COOP_CURRICULUM_END:
-            frac = 1.0
-        else:
-            frac = (progress - COOP_CURRICULUM_START) / (COOP_CURRICULUM_END - COOP_CURRICULUM_START)
-        # Cosine easing for smooth transition
-        frac = (1.0 - np.cos(np.pi * frac)) / 2.0
-        self._coop_success_dist = COOP_SUCCESS_DIST_EASY + frac * (COOP_SUCCESS_DIST_HARD - COOP_SUCCESS_DIST_EASY)
-        self._coop_success_angle = COOP_SUCCESS_ANGLE_EASY + frac * (COOP_SUCCESS_ANGLE_HARD - COOP_SUCCESS_ANGLE_EASY)
+        self._coop_phase = int(phase)

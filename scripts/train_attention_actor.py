@@ -415,10 +415,13 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
                 mate_scale = 1.0
             actor.mate_scale = mate_scale
 
-        # ── Cooperative curriculum ramp (AND-gate easing) ────────────
+        # ── Cooperative phase transition ─────────────────────────────
         if cooperative:
-            progress = total / total_steps
-            env.set_coop_curriculum(progress)
+            from src.environment.formation_env import COOP_PHASE_OR, COOP_PHASE_AND
+            if total < 200_000:
+                env.set_coop_phase(COOP_PHASE_OR)   # Phase 1: OR-gate, build pursuit
+            else:
+                env.set_coop_phase(COOP_PHASE_AND)  # Phase 2: AND-gate, learn pincer
 
         # ── Entropy guard: boost ent_coef if action entropy collapses ─
         if warmup_done and total > critic_warmup_steps:
@@ -462,8 +465,8 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
             if n_pursuers >= 2:
                 parts.append(f"mate_s={actor.mate_scale:.2f}")
             if cooperative:
-                parts.append(f"coop_d={env._coop_success_dist:.0f}")
-                parts.append(f"coop_a={env._coop_success_angle:.0f}")
+                phase_label = "OR" if env._coop_phase == 0 else "AND"
+                parts.append(f"[{phase_label}]")
             if kl_skips > 0:
                 parts.append(f"kl_skip={kl_skips}")
             print("  ".join(parts), flush=True)
