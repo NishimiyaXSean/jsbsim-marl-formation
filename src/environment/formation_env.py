@@ -90,6 +90,27 @@ SPACING_DANGER_PENALTY = -5.0  # penalty per micro-step in danger zone
 # Weight annealing
 FORMATION_WEIGHT = 0.0      # current dynamic weight (0→1 via annealing)
 
+# ── Phase 5: Cooperative 2v1 (pincer + AND-gate + asymmetric resets) ─────
+# Pincer angle reward: encourage pursuers to flank the target
+PINCER_IDEAL_ANGLE_MIN = 60.0    # min pincer angle (degrees) for reward
+PINCER_IDEAL_ANGLE_MAX = 150.0   # max pincer angle for reward (180=perfect flank)
+PINCER_WEIGHT = 15.0             # reward weight for pincer angle (per micro-step)
+PINCER_DIST_MAX = 2000.0         # only apply pincer reward when both within this range
+
+# Cooperative interception (AND-gate)
+COOP_SUCCESS_DIST = 400.0        # BOTH pursuers must be within this range
+COOP_SUCCESS_ANGLE = 45.0        # pincer angle must exceed this (degrees)
+COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps (6×1/60=0.1s)
+
+# Dynamic role assignment
+STRIKER_TRACKING_BONUS = 1.5     # multiplier on tracking reward for closer pursuer
+INTERCEPTOR_PINCER_BONUS = 2.0   # multiplier on pincer reward for further pursuer
+
+# Asymmetric resets
+ASYMMETRIC_RESET_PROB = 0.7      # probability of asymmetric spawn per episode
+ASYMMETRIC_DIST_FAR = 1500.0     # disadvantaged pursuer starts this far behind (m)
+ASYMMETRIC_HEADING_OFF = 120.0   # disadvantaged pursuer faces away (degrees)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Environment
@@ -114,6 +135,7 @@ class PursuerState:
     loiter_time: float = 0.0
     last_action: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=np.float32))
     episode_start_dist: float = 0.0
+    kill_zone_steps: int = 0   # consecutive micro-steps both pursuers in kill zone
 
     def reset_state(self):
         self.prev_ata_deg = None
@@ -121,6 +143,7 @@ class PursuerState:
         self.closure_rates.clear()
         self.zone_death_counter = 0
         self.loiter_time = 0.0
+        self.kill_zone_steps = 0
 
 
 @dataclass
@@ -158,6 +181,7 @@ class FormationEnv(gym.Env):
         lock_altitude: bool = True,
         jsbsim_data_dir: Optional[str] = None,
         record_tacview: bool = False,
+        cooperative_mode: bool = False,
     ):
         super().__init__()
         self.N = num_pursuers
@@ -165,10 +189,14 @@ class FormationEnv(gym.Env):
         self._difficulty = float(np.clip(difficulty_level, 0.0, 1.0))
         self._lock_altitude = lock_altitude
         self.record_tacview = record_tacview
+        self.cooperative_mode = cooperative_mode
         self._ref_lla = (30.0, 120.0, 3000.0)
         self._tacview_frames: List[dict] = []
         self._ata_penalty_weight = 0.0
         self._formation_weight = FORMATION_WEIGHT
+        # Cooperative state
+        self._striker_idx: int = 0       # which pursuer is the striker this episode
+        self._coop_sustain_counter: int = 0  # consecutive steps in cooperative kill zone
 
         # ── Build aircraft + controllers ──────────────────────────────
         self.pursuers: List[PursuerState] = []
@@ -211,18 +239,46 @@ class FormationEnv(gym.Env):
         cluster_center = np.array([rng.uniform(-200, 200),
                                     rng.uniform(-200, 200), 3000.0])
 
+        # ── Asymmetric reset (cooperative mode) ──────────────────────────
+        asymmetric = False
+        disadvantaged_idx = 0
+        if self.cooperative_mode and self.N >= 2 and rng.random() < ASYMMETRIC_RESET_PROB:
+            asymmetric = True
+            disadvantaged_idx = rng.integers(0, self.N)  # randomly pick one pursuer
+            self._striker_idx = 1 if disadvantaged_idx == 0 else 0
+
         for i, ps in enumerate(self.pursuers):
-            offset = np.array([rng.uniform(-100, 100), rng.uniform(-100, 100), 0.0])
-            ps.aircraft.reset(
-                lat_deg=30.0, lon_deg=120.0, alt_ft=int(3000 * 3.28084),
-                heading_deg=rng.uniform(0, 360), speed_kts=400, trim=False)
-            ps.aircraft.position_ned = cluster_center + offset
+            if asymmetric and i == disadvantaged_idx:
+                # Disadvantaged spawn: far behind, facing away
+                behind_dir = rng.uniform(0, 2 * np.pi)
+                far_offset = np.array([
+                    ASYMMETRIC_DIST_FAR * np.cos(behind_dir),
+                    ASYMMETRIC_DIST_FAR * np.sin(behind_dir), 0.0])
+                ps.aircraft.reset(
+                    lat_deg=30.0, lon_deg=120.0, alt_ft=int(3000 * 3.28084),
+                    heading_deg=rng.uniform(0, 360), speed_kts=400, trim=False)
+                ps.aircraft.position_ned = cluster_center + far_offset
+                # Face away from cluster center
+                away_hdg = float(np.degrees(np.arctan2(-far_offset[1], -far_offset[0]))) % 360.0
+                away_hdg += rng.uniform(-ASYMMETRIC_HEADING_OFF / 2, ASYMMETRIC_HEADING_OFF / 2)
+                ps.ref_hdg = away_hdg % 360.0
+            else:
+                # Normal / advantaged spawn
+                offset = np.array([rng.uniform(-100, 100), rng.uniform(-100, 100), 0.0])
+                ps.aircraft.reset(
+                    lat_deg=30.0, lon_deg=120.0, alt_ft=int(3000 * 3.28084),
+                    heading_deg=rng.uniform(0, 360), speed_kts=400, trim=False)
+                ps.aircraft.position_ned = cluster_center + offset
+                ps.ref_hdg = float(ps.aircraft.state["yaw_deg"])
+
             ps.fc.reset()
             ps.envelope.reset()
             ps.autopilot.reset(initial_speed_mps=200.0)
-            ps.ref_hdg = float(ps.aircraft.state["yaw_deg"])
             ps.ref_alt_m = 3000.0
             ps.reset_state()
+
+        if not asymmetric:
+            self._striker_idx = rng.integers(0, self.N)  # random striker for symmetric reset
 
         for j, ts in enumerate(self.targets):
             target_dist = rng.uniform(900 + d * 1100, 1300 + d * 1700)
@@ -361,13 +417,15 @@ class FormationEnv(gym.Env):
                 break
 
             # ── Per-pursuer reward + target-relative geometry ─────────
-            any_success = False
+            pursuer_dists = []
+            pursuer_geos = []
             all_closing = True
 
             for i, ps in enumerate(self.pursuers):
                 t_pos = self.targets[0].aircraft.position_ned
                 a_pos = ps.aircraft.position_ned
                 current_dist = float(np.linalg.norm(a_pos - t_pos))
+                pursuer_dists.append(current_dist)
 
                 # Track minimum distance
                 if current_dist < kill_info["min_dist"]:
@@ -376,11 +434,6 @@ class FormationEnv(gym.Env):
                 delta_dist = ps.prev_dist - current_dist
                 if delta_dist <= 0:
                     all_closing = False
-
-                # ── Success check ─────────────────────────────────
-                if current_dist < 200.0 and ps.episode_start_dist > 400.0:
-                    any_success = True
-                    kill_info["killer"] = i
 
                 # ── Progress reward ────────────────────────────────
                 prog = REWARD_PROGRESS * delta_dist * 0.5
@@ -393,6 +446,7 @@ class FormationEnv(gym.Env):
                 t_fwd = compute_forward_vector(self.targets[0].aircraft.rpy_rad)
                 _, los_dir, _ = compute_los(a_pos, t_pos)
                 geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
+                pursuer_geos.append(geo)
 
                 dist_factor = max(0.0, 1.0 - current_dist / 3000.0)
                 ata_r = REWARD_ATA * max(geo["cos_ata"], -0.2) * dt * dist_factor
@@ -438,12 +492,81 @@ class FormationEnv(gym.Env):
             if terminated:
                 break
 
-            # ── Success: any pursuer within 200m ──────────────────────
-            if any_success:
-                total_reward += REWARD_SUCCESS
-                terminated = True
-                reason = "success"
-                break
+            # ═══════════════════════════════════════════════════════════
+            #  Phase 5: Cooperative 2v1 (pincer + dynamic roles)
+            # ═══════════════════════════════════════════════════════════
+            if self.cooperative_mode and self.N >= 2:
+                d0, d1 = pursuer_dists[0], pursuer_dists[1]
+
+                # ── Pincer angle: angle between the two LOS vectors ──
+                p0_pos = self.pursuers[0].aircraft.position_ned
+                p1_pos = self.pursuers[1].aircraft.position_ned
+                t_pos = self.targets[0].aircraft.position_ned
+                los0 = t_pos - p0_pos; los1 = t_pos - p1_pos
+                los0_h = los0[:2]; los1_h = los1[:2]
+                norm0 = float(np.linalg.norm(los0_h)); norm1 = float(np.linalg.norm(los1_h))
+
+                if norm0 > 1.0 and norm1 > 1.0:
+                    cos_pincer = np.clip(float(np.dot(los0_h, los1_h)) / (norm0 * norm1), -1.0, 1.0)
+                    pincer_angle = float(np.degrees(np.arccos(cos_pincer)))
+                else:
+                    pincer_angle = 0.0
+
+                both_in_range = (d0 < PINCER_DIST_MAX and d1 < PINCER_DIST_MAX)
+
+                # Reward pincer angles in IDEAL range (wider = better flanking)
+                if both_in_range and PINCER_IDEAL_ANGLE_MIN <= pincer_angle <= PINCER_IDEAL_ANGLE_MAX:
+                    # Normalize angle to [0, 1] within reward range
+                    angle_quality = (pincer_angle - PINCER_IDEAL_ANGLE_MIN) / \
+                                    (PINCER_IDEAL_ANGLE_MAX - PINCER_IDEAL_ANGLE_MIN)
+                    pincer_r = PINCER_WEIGHT * angle_quality * dt
+                    total_reward += pincer_r
+
+                # ── Dynamic role assignment ─────────────────────────
+                closer_idx = 0 if d0 <= d1 else 1
+                further_idx = 1 if closer_idx == 0 else 0
+
+                # Striker (closer): bonus on tracking/target-relative rewards
+                striker_geo = pursuer_geos[closer_idx]
+                striker_ata = float(striker_geo["cos_ata"])
+                striker_dist = pursuer_dists[closer_idx]
+                striker_factor = max(0.0, 1.0 - striker_dist / 3000.0)
+                striker_bonus = STRIKER_TRACKING_BONUS * max(striker_ata, -0.2) * dt * striker_factor
+                total_reward += striker_bonus
+
+                # Interceptor (further): bonus on pincer angle maintenance
+                if both_in_range and pincer_angle >= PINCER_IDEAL_ANGLE_MIN:
+                    interceptor_bonus = INTERCEPTOR_PINCER_BONUS * (pincer_angle / 180.0) * dt
+                    total_reward += interceptor_bonus
+
+                # ── Cooperative success (AND-gate) ───────────────────
+                both_in_kill_zone = (d0 < COOP_SUCCESS_DIST and d1 < COOP_SUCCESS_DIST
+                                     and pincer_angle >= COOP_SUCCESS_ANGLE)
+
+                if both_in_kill_zone:
+                    self._coop_sustain_counter += 1
+                else:
+                    self._coop_sustain_counter = 0
+
+                if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
+                    total_reward += REWARD_SUCCESS
+                    # Extra cooperative bonus: bigger for better pincer
+                    coop_bonus = 2000.0 * (pincer_angle / 180.0)
+                    total_reward += coop_bonus
+                    terminated = True
+                    reason = "cooperative_success"
+                    kill_info["killer"] = closer_idx
+                    break
+
+            else:
+                # ── Legacy: single-pursuer success (any within 200m) ──
+                for i, ps in enumerate(self.pursuers):
+                    if pursuer_dists[i] < 200.0 and ps.episode_start_dist > 400.0:
+                        total_reward += REWARD_SUCCESS
+                        terminated = True
+                        reason = "success"
+                        kill_info["killer"] = i
+                        break
 
             # ── Collision between pursuers ────────────────────────────
             for i in range(self.N):

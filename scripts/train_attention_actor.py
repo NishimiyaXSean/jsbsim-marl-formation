@@ -42,7 +42,7 @@ CRITIC_LR_WARMUP = 1e-3; CRITIC_LR_FINE = 5e-4  # Attention Critic needs high LR
 MINI_BATCH_SIZE = 128; PPO_EPOCHS = 10; ROLLOUT_STEPS = 8192  # big batch for stable attention gradients
 REWARD_SCALE = 100.0
 OBS_PER_AGENT = 33; TOKEN_DIM = 7; ACT_DIM = 2; N_PURSUERS = 2
-EV_UNFREEZE_THRESHOLD = 0.6  # higher bar with better Critic
+EV_UNFREEZE_THRESHOLD = 0.3  # lowered: cooperative rewards need PPO exploration
 KL_TARGET = 0.015
 TOKEN_ORDER_SELF = 0; TOKEN_ORDER_MATE = 1; TOKEN_ORDER_TARGET = 2
 
@@ -311,7 +311,7 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
           critic_warmup_steps=100_000, actor_frozen_lr=0.0,
           critic_warmup_lr=5e-4, actor_fine_lr=1e-5, critic_fine_lr=1e-4,
           ev_unfreeze_threshold=EV_UNFREEZE_THRESHOLD, kl_target=KL_TARGET,
-          ent_coef=ENT_COEF, use_mate_ramp=False):
+          ent_coef=ENT_COEF, use_mate_ramp=False, cooperative=False):
     """Two-stage MAPPO fine-tuning for Attention Actor with EV gating + KL protection.
 
     Stage 1 (Critic Warmup): Actor frozen at BC weights, Critic learns V(s).
@@ -320,10 +320,10 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
 
     Args:
         use_mate_ramp: If True, use cosine ramp 0→1 for mate_scale.
-                       If False (default for 2v1 BC), keep mate_scale=1.0 from start.
+        cooperative: If True, use Phase 5 cooperative 2v1 (pincer + AND-gate + asymmetric).
     """
     ts = datetime.datetime.now().strftime("%m%d_%H%M")
-    stage_label = "bc2v1" if (load_bc and not use_mate_ramp) else ("bc_finetune" if load_bc else "cold")
+    stage_label = "coop" if cooperative else ("bc2v1" if (load_bc and not use_mate_ramp) else ("bc_finetune" if load_bc else "cold"))
     run_name = f"attn_{mode}_{stage_label}_{ts}_s{seed}"
     log_dir = f"./marl_runs/{run_name}"; os.makedirs(log_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -331,7 +331,7 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
     print(f"{'='*60}")
     print(f"Self-Attention MAPPO Training (EV-gated + KL protection)")
     print(f"  Mode:      {mode}  |  Steps: {total_steps:,}  |  BC: {load_bc is not None}")
-    print(f"  EV gate:   {ev_unfreeze_threshold}  |  KL target: {kl_target}")
+    print(f"  Cooperative: {cooperative}  |  EV gate: {ev_unfreeze_threshold}  |  KL: {kl_target}")
     print(f"  Mate ramp: {use_mate_ramp}  |  Difficulty: {difficulty:.2f}")
     print(f"  Log dir:   {log_dir}")
     print(f"{'='*60}\n")
@@ -341,7 +341,8 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
         env = FormationEnv(num_pursuers=1, num_targets=1, difficulty_level=difficulty)
         n_pursuers = 1
     else:
-        env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
+        env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty,
+                           cooperative_mode=cooperative)
         n_pursuers = 2
 
     # ── Build networks ─────────────────────────────────────────────────
@@ -505,6 +506,8 @@ if __name__ == "__main__":
                         help="Actor LR after unfreeze (default: 1e-5)")
     parser.add_argument("--critic-fine-lr", type=float, default=1e-4,
                         help="Critic LR after warmup (default: 1e-4)")
+    parser.add_argument("--cooperative", action="store_true",
+                        help="Use Phase 5 cooperative 2v1 (pincer + AND-gate + asymmetric)")
     args = parser.parse_args()
 
     os.environ.setdefault("JSBSIM_DEBUG", "0")
@@ -519,6 +522,7 @@ if __name__ == "__main__":
         train(args.mode, args.steps, args.difficulty, args.seed, args.load,
               load_bc=args.load_bc, critic_warmup_steps=args.warmup,
               actor_frozen_lr=0.0, critic_warmup_lr=args.critic_warmup_lr,
-              actor_fine_lr=args.actor_fine_lr, critic_fine_lr=args.critic_fine_lr)
+              actor_fine_lr=args.actor_fine_lr, critic_fine_lr=args.critic_fine_lr,
+              cooperative=args.cooperative)
     finally:
         sys.stderr = _stderr_backup
