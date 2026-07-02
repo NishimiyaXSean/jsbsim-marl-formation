@@ -37,13 +37,14 @@ from src.models.attention_actor import AttentionFormationActor, AttentionCritic
 # ═══════════════════════════════════════════════════════════════════════════
 
 GAMMA = 0.99; GAE_LAMBDA = 0.95; CLIP_EPS = 0.2
-VF_COEF = 0.5; ENT_COEF = 0.0; MAX_GRAD_NORM = 0.5
+VF_COEF = 0.5; ENT_COEF = 0.005; ENT_COEF_MIN = 0.001; ENT_COEF_MAX = 0.02; MAX_GRAD_NORM = 0.5
 ACTOR_LR_WARMUP = 0.0; ACTOR_LR_FINE = 1e-5
-CRITIC_LR_WARMUP = 1e-3; CRITIC_LR_FINE = 5e-4  # Attention Critic needs high LR + big batch
-MINI_BATCH_SIZE = 128; PPO_EPOCHS = 10; ROLLOUT_STEPS = 8192  # big batch for stable attention gradients
+CRITIC_LR_WARMUP = 1e-3; CRITIC_LR_FINE = 5e-4
+MINI_BATCH_SIZE = 128; PPO_EPOCHS = 10; ROLLOUT_STEPS = 4096  # more frequent EV checks
 REWARD_SCALE = 100.0
 OBS_PER_AGENT = 33; TOKEN_DIM = 7; ACT_DIM = 2; N_PURSUERS = 2
-EV_UNFREEZE_THRESHOLD = 0.3  # lowered: cooperative rewards need PPO exploration
+EV_UNFREEZE_THRESHOLD = 0.3
+ENTROPY_COLLAPSE_THRESH = 0.5  # if action entropy drops below this, boost ENT_COEF
 KL_TARGET = 0.015
 TOKEN_ORDER_SELF = 0; TOKEN_ORDER_MATE = 1; TOKEN_ORDER_TARGET = 2
 
@@ -405,7 +406,7 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
         else:
             actor.train()
 
-        # ── Mate-scale (only ramp if use_mate_ramp=True, otherwise fixed at 1.0) ──
+        # ── Mate-scale ──────────────────────────────────────────────
         if use_mate_ramp and n_pursuers >= 2:
             if total < MATE_SCALE_RAMP_END:
                 frac = total / MATE_SCALE_RAMP_END
@@ -413,6 +414,26 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
             else:
                 mate_scale = 1.0
             actor.mate_scale = mate_scale
+
+        # ── Cooperative curriculum ramp (AND-gate easing) ────────────
+        if cooperative:
+            progress = total / total_steps
+            env.set_coop_curriculum(progress)
+
+        # ── Entropy guard: boost ent_coef if action entropy collapses ─
+        if warmup_done and total > critic_warmup_steps:
+            with torch.no_grad():
+                sample_obs = all_data[0]['obs'][:64].to(device)
+                loc, scale = actor(sample_obs)
+                dist = Independent(Normal(loc, scale), 1)
+                action_entropy = dist.entropy().mean().item()
+            if action_entropy < ENTROPY_COLLAPSE_THRESH:
+                ent_coef = min(ent_coef * 1.5, ENT_COEF_MAX)
+                if epoch % 10 == 0:
+                    print(f"  [Entropy] action_ent={action_entropy:.3f} < {ENTROPY_COLLAPSE_THRESH}, "
+                          f"ent_coef boosted to {ent_coef:.4f}", flush=True)
+            elif action_entropy > ENTROPY_COLLAPSE_THRESH * 2.0:
+                ent_coef = max(ent_coef * 0.95, ENT_COEF_MIN)
 
         # ── LR annealing ───────────────────────────────────────────────
         if warmup_done and total > critic_warmup_steps:
@@ -440,6 +461,9 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
             ]
             if n_pursuers >= 2:
                 parts.append(f"mate_s={actor.mate_scale:.2f}")
+            if cooperative:
+                parts.append(f"coop_d={env._coop_success_dist:.0f}")
+                parts.append(f"coop_a={env._coop_success_angle:.0f}")
             if kl_skips > 0:
                 parts.append(f"kl_skip={kl_skips}")
             print("  ".join(parts), flush=True)
