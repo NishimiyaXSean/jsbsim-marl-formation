@@ -386,9 +386,13 @@ def _record_single_tacview(model_path: str, difficulty: float, output_path: str)
     """Re-run one episode with Tacview recording enabled, export ACMI."""
     import logging as _logging
     _logging.getLogger("jsbsim").setLevel(_logging.CRITICAL)
+    # Suppress JSBSIM C-level stderr during recording
+    _stderr = sys.stderr
+    sys.stderr = open(os.devnull, 'w')
 
     model = _load_sb3_model(model_path, difficulty)
-    env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty)
+    env = FormationEnv(num_pursuers=2, num_targets=1, difficulty_level=difficulty,
+                       record_tacview=True)
     obs, _ = env.reset()
     done = False
 
@@ -398,7 +402,8 @@ def _record_single_tacview(model_path: str, difficulty: float, output_path: str)
         done = terminated or truncated
 
     env.export_tacview(output_path)
-    print(f"    → {output_path}")
+    sys.stderr = _stderr
+    print(f"    Tacview: {output_path}  ({len(env._tacview_frames)} frames)")
 
 
 if __name__ == "__main__":
