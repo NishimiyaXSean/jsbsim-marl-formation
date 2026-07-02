@@ -27,6 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Independent, Normal
+from torch.utils.tensorboard import SummaryWriter
 
 from src.environment.formation_env import FormationEnv
 from src.models.attention_actor import AttentionFormationActor, AttentionCritic
@@ -326,6 +327,8 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
     stage_label = "coop" if cooperative else ("bc2v1" if (load_bc and not use_mate_ramp) else ("bc_finetune" if load_bc else "cold"))
     run_name = f"attn_{mode}_{stage_label}_{ts}_s{seed}"
     log_dir = f"./marl_runs/{run_name}"; os.makedirs(log_dir, exist_ok=True)
+    tb_dir = os.path.join(log_dir, "tensorboard"); os.makedirs(tb_dir, exist_ok=True)
+    writer = SummaryWriter(tb_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"{'='*60}")
@@ -334,6 +337,7 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
     print(f"  Cooperative: {cooperative}  |  EV gate: {ev_unfreeze_threshold}  |  KL: {kl_target}")
     print(f"  Mate ramp: {use_mate_ramp}  |  Difficulty: {difficulty:.2f}")
     print(f"  Log dir:   {log_dir}")
+    print(f"  TensorBoard: {tb_dir}")
     print(f"{'='*60}\n")
 
     # ── Environment ────────────────────────────────────────────────────
@@ -440,6 +444,17 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
                 parts.append(f"kl_skip={kl_skips}")
             print("  ".join(parts), flush=True)
 
+            # TensorBoard scalars
+            writer.add_scalar("Train/Reward", avg_rew, total)
+            writer.add_scalar("Train/Avg10Reward", avg10, total)
+            writer.add_scalar("Train/EV", ev, total)
+            writer.add_scalar("Train/ActorLR", actor_opt.param_groups[0]['lr'], total)
+            writer.add_scalar("Train/CriticLR", critic_opt.param_groups[0]['lr'], total)
+            writer.add_scalar("Train/Episodes", n_ep, total)
+            writer.add_scalar("Train/KL_Skips", kl_skips, total)
+            if n_pursuers >= 2:
+                writer.add_scalar("Train/MateScale", actor.mate_scale, total)
+
         # ── Attention statistics (Actor + Critic) ──────────────────────
         if epoch % log_attn_every == 0 and n_pursuers >= 2:
             attn_stats = compute_attention_stats(actor, critic, device)
@@ -455,6 +470,10 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
             print(f"  [Crit Attn] mate_mha={attn_stats['critic_mate_mha']:.3f}  "
                   f"mate_pool={attn_stats['critic_mate_pool']:.3f}  |  "
                   f"H_mha={attn_stats['critic_mha_ent']:.3f} H_pool={attn_stats['critic_pool_ent']:.3f}", flush=True)
+
+            # TensorBoard attention
+            for k, v in attn_stats.items():
+                writer.add_scalar(f"Attn/{k}", v, total)
 
         # ── Save best ──────────────────────────────────────────────────
         avg10 = np.mean(rew_win) if rew_win else avg_rew
@@ -475,8 +494,10 @@ def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
         "epoch": epoch, "total_steps": total,
         "mode": mode, "mate_scale": actor.mate_scale, "stage": stage,
     }, final_path)
+    writer.close()
     print(f"\n[Done] {final_path}")
     print(f"  Best avg10 rew: {best_rew:.1f}")
+    print(f"  TensorBoard: tensorboard --logdir {tb_dir}")
     return log_dir
 
 
