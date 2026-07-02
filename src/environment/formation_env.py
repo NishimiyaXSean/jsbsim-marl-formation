@@ -660,19 +660,40 @@ class FormationEnv(gym.Env):
         return float(lat), float(lon)
 
     def export_tacview(self, path):
+        """Export recorded frames as Tacview ACMI 2.2 file.
+
+        Writes object definitions (Name, Color, Type) BEFORE any telemetry,
+        in compliance with the ACMI specification. Without this ordering,
+        Tacview cannot instantiate the aircraft objects.
+        """
+        if not self._tacview_frames:
+            print(f"  [WARN] export_tacview: no frames recorded (use record_tacview=True)")
+            return
+
         with open(path, "w", encoding="utf-8-sig") as f:
+            # ── Global header ──────────────────────────────────────────
             f.write("FileType=text/acmi/tacview\nFileVersion=2.2\n")
             f.write("0,ReferenceTime=2024-01-01T00:00:00Z\n")
+
+            # ── Object definitions (MUST precede all telemetry) ─────────
+            seen_ids = set()
             for frame in self._tacview_frames:
                 for ac in frame["aircraft"]:
-                    if frame == self._tacview_frames[0]:
+                    aid = ac["id"]
+                    if aid not in seen_ids:
+                        seen_ids.add(aid)
                         color = "Red" if "Pursuer" in ac["name"] else "Blue"
-                        f.write(f"{ac['id']},Name={ac['name']}\n")
-                        f.write(f"{ac['id']},Color={color}\n")
-                        f.write(f"{ac['id']},Type=Air+Fighter\n")
+                        f.write(f"{aid},Name={ac['name']}\n")
+                        f.write(f"{aid},Color={color}\n")
+                        if "Pursuer" in ac["name"]:
+                            f.write(f"{aid},Coalition=Enemies\n")
+
+            # ── Telemetry ───────────────────────────────────────────────
+            for frame in self._tacview_frames:
                 f.write(f"#{frame['time']:.2f}\n")
                 for ac in frame["aircraft"]:
-                    f.write(f"{ac['id']},T={ac['lon_deg']}|{ac['lat_deg']}|{ac['alt_m']:.1f}"
+                    # T = longitude|latitude|altitude_m|roll|pitch|yaw
+                    f.write(f"{ac['id']},T={ac['lon_deg']:.8f}|{ac['lat_deg']:.8f}|{ac['alt_m']:.1f}"
                             f"|{ac['roll_deg']:.1f}|{ac['pitch_deg']:.1f}|{ac['yaw_deg']:.1f}\n")
 
     # ── Properties ──────────────────────────────────────────────────────
