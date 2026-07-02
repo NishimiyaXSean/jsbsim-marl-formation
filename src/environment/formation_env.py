@@ -98,13 +98,18 @@ PINCER_WEIGHT = 15.0             # reward weight for pincer angle (per micro-ste
 PINCER_DIST_MAX = 2000.0         # only apply pincer reward when both within this range
 
 # Cooperative interception (AND-gate) — curriculum-annealed
-COOP_SUCCESS_DIST_EASY = 800.0   # relaxed: both within 800m
+COOP_SUCCESS_DIST_EASY = 1200.0  # relaxed: both within 1200m (easy to discover)
 COOP_SUCCESS_DIST_HARD = 300.0   # strict: both within 300m
-COOP_SUCCESS_ANGLE_EASY = 20.0   # relaxed: > 20 deg pincer
+COOP_SUCCESS_ANGLE_EASY = 10.0   # relaxed: > 10 deg pincer (any separation works)
 COOP_SUCCESS_ANGLE_HARD = 60.0   # strict: > 60 deg pincer
 COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps
 COOP_CURRICULUM_START = 0.0      # curriculum progress at which tightening begins
-COOP_CURRICULUM_END = 0.6        # curriculum progress at which criteria are fully strict
+COOP_CURRICULUM_END = 0.8        # stay relaxed longer before full strictness
+
+# Individual distance pressure: prevent free-riding by penalising far pursuers
+DIST_PRESSURE_THRESHOLD = 1500.0  # distance (m) beyond which penalty begins
+DIST_PRESSURE_WEIGHT = -3.0       # penalty per micro-step per metre beyond threshold
+DIST_PRESSURE_MAX = -10.0         # cap on total distance penalty per micro-step
 
 # Dynamic role assignment
 STRIKER_TRACKING_BONUS = 1.5     # multiplier on tracking reward for closer pursuer
@@ -550,6 +555,16 @@ class FormationEnv(gym.Env):
                 if both_in_range and pincer_angle >= PINCER_IDEAL_ANGLE_MIN:
                     interceptor_bonus = INTERCEPTOR_PINCER_BONUS * (pincer_angle / 180.0) * dt
                     total_reward += interceptor_bonus
+
+                # ── Distance pressure: penalise free-riding ──────────
+                # Each pursuer loses reward for being > DIST_PRESSURE_THRESHOLD from target.
+                # This creates a hard incentive to stay within engagement range,
+                # preventing the "one chases, one flees" degenerate strategy.
+                for i in range(self.N):
+                    if pursuer_dists[i] > DIST_PRESSURE_THRESHOLD:
+                        excess = pursuer_dists[i] - DIST_PRESSURE_THRESHOLD
+                        penalty = max(DIST_PRESSURE_WEIGHT * excess * dt, DIST_PRESSURE_MAX * dt)
+                        total_reward += penalty
 
                 # ── Cooperative success (AND-gate, curriculum-annealed) ─
                 both_in_kill_zone = (d0 < self._coop_success_dist and d1 < self._coop_success_dist
