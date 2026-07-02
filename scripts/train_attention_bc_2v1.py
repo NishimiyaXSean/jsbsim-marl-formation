@@ -34,8 +34,8 @@ from src.models.attention_actor import AttentionFormationActor
 #  Paths
 # ═══════════════════════════════════════════════════════════════════════════
 
-DATA_PATH = "data/expert/coop_pid_data.npz"
-MODEL_PATH = "data/expert/coop_pid_pretrained.pth"
+DATA_PATH = "data/expert/attention_bc_2v1_filtered.npz"
+MODEL_PATH = "data/expert/attention_bc_2v1_filtered_pretrained.pth"
 SB3_2V1_PATH = "benchmarks/sb3_2v1_97p3/model.zip"
 
 
