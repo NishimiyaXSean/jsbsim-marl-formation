@@ -97,10 +97,14 @@ PINCER_IDEAL_ANGLE_MAX = 150.0   # max pincer angle for reward (180=perfect flan
 PINCER_WEIGHT = 15.0             # reward weight for pincer angle (per micro-step)
 PINCER_DIST_MAX = 2000.0         # only apply pincer reward when both within this range
 
-# Cooperative interception (AND-gate)
-COOP_SUCCESS_DIST = 400.0        # BOTH pursuers must be within this range
-COOP_SUCCESS_ANGLE = 45.0        # pincer angle must exceed this (degrees)
-COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps (6×1/60=0.1s)
+# Cooperative interception (AND-gate) — curriculum-annealed
+COOP_SUCCESS_DIST_EASY = 800.0   # relaxed: both within 800m
+COOP_SUCCESS_DIST_HARD = 300.0   # strict: both within 300m
+COOP_SUCCESS_ANGLE_EASY = 20.0   # relaxed: > 20 deg pincer
+COOP_SUCCESS_ANGLE_HARD = 60.0   # strict: > 60 deg pincer
+COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps
+COOP_CURRICULUM_START = 0.0      # curriculum progress at which tightening begins
+COOP_CURRICULUM_END = 0.6        # curriculum progress at which criteria are fully strict
 
 # Dynamic role assignment
 STRIKER_TRACKING_BONUS = 1.5     # multiplier on tracking reward for closer pursuer
@@ -110,6 +114,10 @@ INTERCEPTOR_PINCER_BONUS = 2.0   # multiplier on pincer reward for further pursu
 ASYMMETRIC_RESET_PROB = 0.7      # probability of asymmetric spawn per episode
 ASYMMETRIC_DIST_FAR = 1500.0     # disadvantaged pursuer starts this far behind (m)
 ASYMMETRIC_HEADING_OFF = 120.0   # disadvantaged pursuer faces away (degrees)
+
+# Target evasive maneuvers (cooperative mode, difficulty > 0)
+EVASION_DIST_TRIGGER = 800.0     # target starts evading when BOTH pursuers within this
+EVASION_TURN_RATE = 5.0          # max evasion turn rate (deg/s)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -197,6 +205,10 @@ class FormationEnv(gym.Env):
         # Cooperative state
         self._striker_idx: int = 0       # which pursuer is the striker this episode
         self._coop_sustain_counter: int = 0  # consecutive steps in cooperative kill zone
+        # Dynamic AND-gate (curriculum-annealed)
+        self._coop_curriculum_progress: float = 0.0
+        self._coop_success_dist: float = COOP_SUCCESS_DIST_EASY
+        self._coop_success_angle: float = COOP_SUCCESS_ANGLE_EASY
 
         # ── Build aircraft + controllers ──────────────────────────────
         self.pursuers: List[PursuerState] = []
@@ -539,9 +551,9 @@ class FormationEnv(gym.Env):
                     interceptor_bonus = INTERCEPTOR_PINCER_BONUS * (pincer_angle / 180.0) * dt
                     total_reward += interceptor_bonus
 
-                # ── Cooperative success (AND-gate) ───────────────────
-                both_in_kill_zone = (d0 < COOP_SUCCESS_DIST and d1 < COOP_SUCCESS_DIST
-                                     and pincer_angle >= COOP_SUCCESS_ANGLE)
+                # ── Cooperative success (AND-gate, curriculum-annealed) ─
+                both_in_kill_zone = (d0 < self._coop_success_dist and d1 < self._coop_success_dist
+                                     and pincer_angle >= self._coop_success_angle)
 
                 if both_in_kill_zone:
                     self._coop_sustain_counter += 1
@@ -831,3 +843,24 @@ class FormationEnv(gym.Env):
     def set_formation_weight(self, w: float) -> None:
         """Dynamic formation spacing weight (0→1 via annealing)."""
         self._formation_weight = float(np.clip(w, 0.0, 1.0))
+
+    def set_coop_curriculum(self, progress: float) -> None:
+        """Anneal AND-gate criteria from easy→strict.
+
+        progress=0.0: dist<800m, angle>20deg (easy to discover)
+        progress=1.0: dist<300m, angle>60deg (strict pincer)
+
+        The curriculum window is [CURRICULUM_START, CURRICULUM_END].
+        Before START: full easy. After END: full strict.
+        """
+        self._coop_curriculum_progress = float(np.clip(progress, 0.0, 1.0))
+        if progress < COOP_CURRICULUM_START:
+            frac = 0.0
+        elif progress > COOP_CURRICULUM_END:
+            frac = 1.0
+        else:
+            frac = (progress - COOP_CURRICULUM_START) / (COOP_CURRICULUM_END - COOP_CURRICULUM_START)
+        # Cosine easing for smooth transition
+        frac = (1.0 - np.cos(np.pi * frac)) / 2.0
+        self._coop_success_dist = COOP_SUCCESS_DIST_EASY + frac * (COOP_SUCCESS_DIST_HARD - COOP_SUCCESS_DIST_EASY)
+        self._coop_success_angle = COOP_SUCCESS_ANGLE_EASY + frac * (COOP_SUCCESS_ANGLE_HARD - COOP_SUCCESS_ANGLE_EASY)
