@@ -1,19 +1,12 @@
-"""Cold-start training for Self-Attention FormationActor (MAPPO CTDE).
+"""MAPPO CTDE training for Self-Attention FormationActor.
 
-Training modes:
-  1v1:        Single-pursuer warmup, mate_scale=0 (no wingman features)
-  2v1:        Direct 2v1 cold-start, mate_scale=1 (full attention from scratch)
-  curriculum: 1v1 pre-train → 2v1 fine-tune with mate_scale annealing
-
-Key innovation: The Attention Actor learns to dynamically allocate attention
-between Self, Target, and Mate token groups WITHOUT relying on tiled SB3 weights.
-This forces the network to discover coordination patterns organically.
+Supports shared or decoupled (dual) Actor architectures.
+Dual mode breaks symmetry — P0 and P1 learn independent strategies,
+preventing the free-rider degenerate equilibrium.
 
 Usage:
-  conda activate jsbsim_rl
-  python scripts/train_attention_actor.py --mode curriculum --steps 500000
-  python scripts/train_attention_actor.py --mode 1v1 --steps 200000
-  python scripts/train_attention_actor.py --mode 2v1 --steps 300000
+  python scripts/train_attention_actor.py --mode 2v1 --steps 500000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth --cooperative --dual
 """
 
 from __future__ import annotations
@@ -90,8 +83,9 @@ def build_global_tokens(env, pursuer_idx: int):
 
 
 @torch.no_grad()
-def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuers=2):
-    """Collect rollout data for N pursuers with per-pursuer tokenized global state."""
+def collect_rollout(env, actors, critic, device, n_steps=ROLLOUT_STEPS, n_pursuers=2):
+    """Collect rollout data for N pursuers, each with its own Actor."""
+    # actors: list of [actor_p0, actor_p1] or [actor_shared, actor_shared]
     buf = {f'p{i}': {'obs':[],'act':[],'rew':[],'val':[],'logp':[],
                       'done':[],'term':[],'gs':[]} for i in range(n_pursuers)}
     obs, _ = env.reset()
@@ -99,10 +93,9 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
 
     for _ in range(n_steps):
         actions = {}
-        # Per-pursuer view-relative tokenized global state + value
         gs_tokens = {}; vals = {}
         for i in range(n_pursuers):
-            gs_i = build_global_tokens(env, i)  # (3, 7) view-relative
+            gs_i = build_global_tokens(env, i)
             gs_tokens[i] = gs_i
             gs_t = torch.as_tensor(gs_i, dtype=torch.float32).unsqueeze(0).to(device)
             vals[i] = critic(gs_t).item()
@@ -110,7 +103,7 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
         for i in range(n_pursuers):
             start = i * OBS_PER_AGENT
             o_t = torch.as_tensor(obs[start:start+OBS_PER_AGENT], dtype=torch.float32).unsqueeze(0).to(device)
-            loc, scale = actor(o_t)
+            loc, scale = actors[i](o_t)  # each pursuer uses its own Actor
             dist = Independent(Normal(loc, scale), 1)
             act = dist.sample()
             logp = dist.log_prob(act).sum(-1)
@@ -207,20 +200,22 @@ def collect_rollout(env, actor, critic, device, n_steps=ROLLOUT_STEPS, n_pursuer
 #  PPO Update
 # ═══════════════════════════════════════════════════════════════════════════
 
-def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
+def ppo_update(actors, critic, actor_opts, critic_opt, all_data, device,
                epochs=PPO_EPOCHS, kl_target=KL_TARGET, ent_coef=ENT_COEF):
-    actor.train(); critic.train()
+    """PPO update with per-pursuer decoupled actors. all_data[i] belongs to pursuer i."""
+    for a in actors: a.train()
+    critic.train()
     all_vals, all_rets = [], []
-    kl_skips = 0; total_minibatches = 0
+    kl_skips = 0
 
     for epoch_idx in range(epochs):
-        for data in all_data:
+        for i, data in enumerate(all_data):  # i = pursuer index
+            actor = actors[i]; actor_opt = actor_opts[i]
             n = len(data['obs'])
             idx_all = torch.randperm(n)
             for start in range(0, n, MINI_BATCH_SIZE):
                 idx = idx_all[start:start+MINI_BATCH_SIZE]
                 if len(idx) == 0: continue
-                total_minibatches += 1
 
                 b_obs = data['obs'][idx].to(device); b_act = data['act'][idx].to(device)
                 b_adv = data['adv'][idx].to(device); b_ret = data['ret'][idx].to(device)
@@ -234,7 +229,6 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
                 new_logp = dist.log_prob(b_act).sum(-1)
                 ratio = torch.exp(new_logp - b_logp)
 
-                # KL early stopping (skip minibatch if KL too high)
                 if epoch_idx > 0:
                     with torch.no_grad():
                         approx_kl = ((ratio - 1) - ratio.log()).mean().item()
@@ -245,15 +239,12 @@ def ppo_update(actor, critic, actor_opt, critic_opt, all_data, device,
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1-CLIP_EPS, 1+CLIP_EPS) * mb_adv
                 actor_loss = -torch.min(surr1, surr2).mean()
-
                 if ent_coef > 0:
-                    entropy = dist.entropy().mean()
-                    actor_loss = actor_loss - ent_coef * entropy
+                    actor_loss = actor_loss - ent_coef * dist.entropy().mean()
 
                 val_pred = critic(b_gs)
                 v_clip = b_oldv + torch.clamp(val_pred - b_oldv, -CLIP_EPS, CLIP_EPS)
-                v_l1 = (val_pred - b_ret)**2; v_l2 = (v_clip - b_ret)**2
-                critic_loss = 0.5 * torch.max(v_l1, v_l2).mean()
+                critic_loss = 0.5 * torch.max((val_pred - b_ret)**2, (v_clip - b_ret)**2).mean()
 
                 actor_opt.zero_grad(); actor_loss.backward()
                 nn.utils.clip_grad_norm_(actor.parameters(), MAX_GRAD_NORM); actor_opt.step()
@@ -309,11 +300,11 @@ def compute_attention_stats(actor, critic, device, n_pursuers=2):
 
 
 def train(mode="2v1", total_steps=200000, difficulty=0.0, seed=42,
-          load_ckpt=None, load_bc=None, log_attn_every=50,
+          load_ckpt=None, load_bc=None, load_bc_p1=None, log_attn_every=50,
           critic_warmup_steps=100_000, actor_frozen_lr=0.0,
           critic_warmup_lr=5e-4, actor_fine_lr=1e-5, critic_fine_lr=1e-4,
           ev_unfreeze_threshold=EV_UNFREEZE_THRESHOLD, kl_target=KL_TARGET,
-          ent_coef=ENT_COEF, use_mate_ramp=False, cooperative=False):
+          ent_coef=ENT_COEF, use_mate_ramp=False, cooperative=False, dual=False):
     """Two-stage MAPPO fine-tuning for Attention Actor with EV gating + KL protection.
 
     Stage 1 (Critic Warmup): Actor frozen at BC weights, Critic learns V(s).
