@@ -103,8 +103,8 @@ PINCER_DIST_MAX = 2000.0         # only apply pincer reward when both within thi
 COOP_PHASE_OR = 0                # OR-gate: single-pursuer success
 COOP_PHASE_AND = 1               # AND-gate: cooperative pincer required
 COOP_PHASE1_OR_DIST = 200.0      # Phase 1: any pursuer within 200m = success
-COOP_PHASE2_AND_DIST = 500.0     # Phase 2: BOTH within 500m
-COOP_PHASE2_AND_ANGLE = 45.0     # Phase 2: pincer angle > 45 deg
+COOP_PHASE2_AND_DIST = 800.0     # Phase 2: BOTH within 800m (relaxed for ablation)
+COOP_PHASE2_AND_ANGLE = 30.0     # Phase 2: pincer angle > 30 deg
 COOP_SUSTAIN_STEPS = 6           # must hold for N consecutive micro-steps
 
 # Individual distance pressure: prevent free-riding by penalising far pursuers
