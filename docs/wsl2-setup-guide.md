@@ -1,12 +1,26 @@
-# WSL2 MAPPO 训练环境搭建指南
+# WSL2 训练环境搭建指南
 
-> 目标: 在 WSL2 Ubuntu 中运行 RLlib MAPPO 多智能体强化学习训练
+> 目标: 在 WSL2 Ubuntu 中运行现有的纯 PyTorch MAPPO 训练脚本
+> （train_attention_actor.py / train_dual_actor.py 等）
+
+##   致命警告：不要使用 RLlib
+
+代码仓库中存在 `train_formation_mappo.py`、`formation_mappo_env.py` 等 RLlib 脚本，
+但它们是早期为简单 MLP 架构编写的。你刚刚跑通的 v6 dual 模型的核心壁垒在于：
+
+- 手搓的 `AttentionFormationActor`（33 维观测 → 3-token Self-Attention）
+- Tokenized `AttentionCritic`（3-entity MHA over global state）
+- 双 Actor 解耦架构（`train_dual_actor.py`）
+- 纯定制的 BC 预训练管线（`train_attention_bc_2v1.py`）
+
+RLlib 是高度封装的框架，将这些定制架构接入其 `TorchModelV2` API 的工作量无异于重写整个项目。
+**请直接跳过所有 Ray/RLlib 相关内容，继续运行你自己的训练脚本。**
 
 ---
 
 ## 你需要自己完成的操作（需要 Windows 管理员权限 + 重启）
 
-### Step 1: 启用 WSL2 (一次性)
+### Step 1: 启用 WSL2（一次性）
 
 以管理员身份打开 PowerShell，执行:
 
@@ -36,28 +50,29 @@ wsl --install -d Ubuntu-22.04
 
 首次启动 Ubuntu 时，会提示创建 Linux 用户名和密码。
 
-### Step 2: 安装 GPU 驱动（如果有 NVIDIA GPU）
+### Step 2: GPU 驱动（如果有 NVIDIA GPU）
 
-在 Windows 端下载安装 NVIDIA WSL2 驱动:
-https://developer.nvidia.com/cuda/wsl
-
-不需要在 WSL 内部安装 CUDA toolkit —— 驱动会自动穿透。
+**不需要去 NVIDIA 官网下载"WSL2 专用驱动"。** 当前的 Windows 11/10 体系下，
+只要 Windows 宿主机的常规 NVIDIA 驱动是最新的（GeForce Experience 正常更新即可），
+CUDA 会自动透传给 WSL2。跳过一切"WSL2 专用驱动"的旧教程。
 
 ---
 
-## 我可以帮你准备的操作
+## WSL2 环境配置
 
-### Step 3: WSL2 环境初始化脚本
+###   CRLF 换行符陷阱
 
-以下脚本 `scripts/setup_wsl2.sh` 已准备好，进入 WSL2 后直接运行:
+因为代码仓库是从 Windows 拿过来的，`.sh` 文件的换行符大概率是 Windows 格式的 CRLF。
+在 WSL2 (Linux) 里直接跑 CRLF 结尾的脚本会报 `\r: command not found` 错误。
+
+**进入 WSL2 后，先修复换行符再执行任何脚本:**
 
 ```bash
-# 在 WSL2 Ubuntu 中执行:
-cd /mnt/c/Users/Sean/Documents/GitHub/jsbsim-marl-formation
-bash scripts/setup_wsl2.sh
+sudo apt install dos2unix -y
+dos2unix scripts/setup_wsl2.sh
 ```
 
-### Step 4: 文件访问
+### Step 3: 文件访问
 
 WSL2 可以直接访问 Windows 文件系统。你的代码仓库在:
 ```
@@ -66,110 +81,89 @@ WSL2 可以直接访问 Windows 文件系统。你的代码仓库在:
 
 **不需要"传输文件"** —— WSL2 自动挂载所有 Windows 驱动器到 `/mnt/`。
 
-但是，WSL2 访问 Windows 文件系统（/mnt/c/）的 I/O 性能较差。对于 JSBSim 这种需要频繁读取飞机配置文件的场景，建议将代码复制到 WSL2 原生文件系统:
+但是，WSL2 访问 Windows 文件系统（/mnt/c/）的 I/O 性能较差。JSBSim 需要频繁读取 F-16
+配置文件（每次 reset 都要初始化），建议将代码复制到 WSL2 原生 ext4 文件系统:
 
 ```bash
-# 在 WSL2 中执行:
 cp -r /mnt/c/Users/Sean/Documents/GitHub/jsbsim-marl-formation ~/jsbsim-marl-formation
 cd ~/jsbsim-marl-formation
+dos2unix scripts/setup_wsl2.sh   # 如果还没执行过
 bash scripts/setup_wsl2.sh
 ```
 
-### Step 5: 验证安装
+### Step 4: 验证安装 + 启动训练
 
 ```bash
-# 在 WSL2 中执行:
 cd ~/jsbsim-marl-formation
+source jsbsim_rl/bin/activate
 python scripts/verify_installation.py
-
-# 测试 RLlib 能否正常启动:
-python -c "import ray; ray.init(); print('Ray OK'); ray.shutdown()"
 ```
 
-### Step 6: 启动 MAPPO 训练
+直接运行你现有的训练脚本（不需要 Ray/RLlib）:
 
 ```bash
-# 2v1 编队追猎 (RLlib MAPPO):
-python scripts/train_formation_mappo.py
+# 双 Actor + 协作模式 (当前最佳配置):
+python scripts/train_dual_actor.py --mode 2v1 --steps 500000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
+    --cooperative --warmup 100000
 
-# 或在 Python 中直接运行:
-python -c "
-import ray
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.tune.registry import register_env
-from src.environment.formation_mappo_env import FormationMAPPOEnv
-
-def env_creator(cfg):
-    return FormationMAPPOEnv(cfg)
-
-register_env('formation_2v1', env_creator)
-
-config = (
-    PPOConfig()
-    .environment('formation_2v1')
-    .framework('torch')
-    .training(
-        lr=3e-4,
-        train_batch_size=8192,
-        sgd_minibatch_size=1024,
-        num_sgd_iter=10,
-        gamma=0.99,
-        lambda_=0.95,
-        clip_param=0.2,
-        entropy_coeff=0.01,
-        vf_loss_coeff=0.5,
-        grad_clip=0.5,
-    )
-    .resources(num_gpus=1)
-)
-
-algo = config.build()
-for i in range(500):
-    result = algo.train()
-    print(f'Iter {i}: reward={result[\"episode_reward_mean\"]:.1f}')
-    if i % 50 == 0:
-        algo.save(f'./marl_runs/rllib_2v1/')
-"
+# 或单 Actor 两阶段:
+python scripts/train_attention_actor.py --mode 2v1 --steps 500000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
+    --cooperative --warmup 100000
 ```
 
 ---
 
 ## 注意事项
 
+### WSL2 内存配置
+
+在 Windows 用户目录 (`C:\Users\Sean\`) 创建 `.wslconfig` 文件。
+**分配给 WSL2 的内存不要超过物理总内存的 70%**，否则 Windows 宿主机会卡死。
+
+例如你的电脑有 16GB 物理内存:
+```
+[wsl2]
+memory=10GB
+processors=6
+```
+
+如果你的电脑有 32GB:
+```
+[wsl2]
+memory=22GB
+processors=12
+```
+
+修改 `.wslconfig` 后需要在 PowerShell 中执行 `wsl --shutdown` 然后重新打开 WSL2 才能生效。
+
 ### JSBSim 数据文件
 
-JSBSim 需要 `data/jsbsim/` 目录中的 F-16 配置文件和初始化脚本。确保这些文件在 WSL2 中可访问。
+JSBSim 需要 `data/jsbsim/` 目录中的 F-16 配置文件和初始化脚本。
+确保这些文件在 WSL2 中可访问。如果是从 Windows 侧复制过来的，路径应该已经正确。
 
-当前代码使用 `jsbsim_data_dir` 参数来指定路径。在 `FormationMAPPOEnv` 初始化时传入:
-```python
-env = FormationMAPPOEnv({"jsbsim_data_dir": "data/jsbsim"})
-```
+### Python 版本
 
-### Ray 版本
+当前环境使用 Python 3.10。`setup_wsl2.sh` 会自动安装。
+WSL2 Ubuntu 22.04 默认不带 Python 3.10，脚本会通过 `apt` 安装。
 
-`pyproject.toml` 中声明了 `ray[rllib] ^2.40`。在 WSL2 Ubuntu 中安装:
+### 性能预期
+
+- CPU 模式: JSBSim F-16 六自由度物理仿真，性能与 Windows 原生 Python 基本持平
+- GPU 模式: 如果 PyTorch 检测到 CUDA，训练中的矩阵运算会自动加速（但 JSBSim 仿真仍在 CPU 上）
+- WSL2 原生文件系统（ext4）上的 I/O 显著快于 `/mnt/c/` 挂载点
+
+### 常见问题
+
+**Q: `import jsbsim` 失败？**
 ```bash
-pip install "ray[rllib]==2.40.0"
+pip install jsbsim==1.3.1
 ```
 
-### 性能优化
+**Q: 训练脚本找不到 `src/` 模块？**
+确保在项目根目录执行脚本，`sys.path.insert(0, ...)` 会自动处理路径。
 
-- WSL2 内存限制: 在 Windows 用户目录创建 `.wslconfig`:
-  ```
-  [wsl2]
-  memory=16GB
-  processors=8
-  ```
-- JSBSim 使用 CPU 物理仿真，不需要 GPU
-- RLlib 的训练批次可以在 GPU 上运行（如果有 NVIDIA GPU）
-
-### 调试
-
-如果 Ray 启动失败:
-```bash
-# 检查 Ray 状态
-ray status
-
-# 查看 Ray 日志
-cat /tmp/ray/session_latest/logs/raylet.out
-```
+**Q: WSL2 中 TensorBoard 能访问吗？**
+能。在 WSL2 中启动 `tensorboard --logdir marl_runs/xxx/tensorboard --bind_all`，
+然后在 Windows 浏览器访问 `http://localhost:6006`（WSL2 自动端口转发）。
