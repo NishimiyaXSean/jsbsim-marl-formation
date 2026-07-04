@@ -1,53 +1,106 @@
 # jsbsim-marl-formation
 
-**Multi-agent reinforcement learning for formation cooperative route decision and planning**, powered by JSBSim 6-DOF F-16 flight dynamics and MAPPO (Multi-Agent PPO).
+**Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics and Self-Attention MAPPO (CTDE).
 
-> 🎓 **Academic Research Project** — targeting paper submission on *"Multi-agent reinforcement learning for formation cooperative route decision and planning"* at Zhejiang University.
+>   **Academic Research Project** — *"Token-based CTDE with Self-Attention outperforms centralized PPO on cooperative 2v1 formation pursuit."*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
 [![JSBSim](https://img.shields.io/badge/FDM-JSBSim%20F--16-orange.svg)](https://jsbsim-team.github.io/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org)
 
 ---
 
-## Overview
+##   Key Results
 
-This project provides a **high-fidelity air combat simulation and training framework** that replaces traditional point-mass models with JSBSim's full 6-DOF F-16 flight dynamics. It supports single-agent and multi-agent reinforcement learning for tactical pursuit, basic fighter maneuvers (BFM), and cooperative formation flight.
+| Experiment | Architecture | Reward | Notes |
+|-----------|-------------|--------|-------|
+| **SB3 Centralized (ceiling)** | 66-dim shared policy | +5,908 (92% capture) | Upper bound for 2v1 |
+| **Attention BC (no PPO)** | 33-dim CTDE | **+6,846** | Pure BC beats centralized PPO |
+| **Dual-Actor Cooperative** | 33-dim × 2 decoupled | +5,078 (13.75% AND-gate) | First stable cooperative signal |
+| **Evasive Maneuvers** | 4 patterns × 20 episodes | 11/80 successes | Works against spiral/lissajous/weave |
 
-### Key Features
-
-- **6-DOF Aerodynamics**: JSBSim F-16 model with real G-loading, stall behavior, engine spool-up, and sideslip dynamics
-- **Three Environment Classes**: Continuous pursuit (`SinglePursuitEnv`), discrete BFM pursuit (`BFMPursuitEnv`), and multi-agent combat (`AirCombatEnv`)
-- **λ-G Flight Control Law**: F-16-class autopilot closing the loop around normal acceleration (Nz) with speed-dependent gain scheduling
-- **CTDE Architecture**: Centralized Training Decentralized Execution via RLlib MAPPO with separate actor/critic observations
-- **Action Masking**: 5 safety rules (hard deck, stall, overspeed, high alpha) for safe exploration in discrete BFM mode
-- **Auto-Curriculum**: Continuous difficulty scheduling with cliff-collapse rollback and sliding-window win rate evaluation
-- **Tacview Export**: ACMI v2.1 telemetry for after-action review in Tacview
-- **Comprehensive Evaluation**: 3D trajectory plots, altitude profiles, Wilson CI statistics, multi-seed aggregation
+> Pure behavior cloning with Self-Attention CTDE Actor achieves **+6,846** reward — **15% above** the centralized SB3 PPO ceiling (+5,908) that uses full 66-dim joint observations. The token-based modular architecture is more sample-efficient than flat concatenation.
 
 ---
 
-## Installation
+##   Architecture
 
-### Prerequisites
+```
+┌─────────────────────────────────────────────────────────┐
+│              Self-Attention FormationActor               │
+│                                                         │
+│  obs[33] → [Self(13)] [Target(14)] [Mate(6)]            │
+│              ↓          ↓            ↓                  │
+│         Linear     Linear       Linear × mate_scale     │
+│              ↓          ↓            ↓                  │
+│         ┌──────────────────────────────┐                │
+│         │  Multi-Head Self-Attention   │                │
+│         │  (4 heads, d_model=128)      │                │
+│         │  + Token-Type Embedding      │                │
+│         │  + Residual + Learned Pool   │                │
+│         └──────────────┬───────────────┘                │
+│                        ↓                                │
+│              MLP [256,256] → action_mean(2)             │
+└─────────────────────────────────────────────────────────┘
 
-- Python 3.10+
-- Git
+Dual-Actor (P0/P1 decoupled):
+  actor_p0 ≠ actor_p1  →  independent gradients
+  Shared Tokenized AttentionCritic (3-entity MHA)
+```
 
-### Setup
+**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization.
+
+---
+
+##   Installation
+
+Two paths depending on your operating system:
+
+### Path A: WSL2 (Recommended — Linux performance)
+
+See the full guide at **[docs/wsl2-setup-guide.md](docs/wsl2-setup-guide.md)**. Quick summary:
+
+```powershell
+# 1. In Windows PowerShell (Admin):
+wsl --install
+# → Restart computer
+```
 
 ```bash
-# Clone the repository
+# 2. In WSL2 Ubuntu terminal:
+cd ~
 git clone https://github.com/NishimiyaXSean/jsbsim-marl-formation.git
 cd jsbsim-marl-formation
 
-# Install dependencies (Poetry or pip)
-pip install -e .
+# 3. Fix line endings (CRLF → LF)
+sudo apt install dos2unix -y && dos2unix scripts/setup_wsl2.sh
+
+# 4. Install environment
+bash scripts/setup_wsl2.sh
+
+# 5. Large files (BC data, model weights) — drag via Windows Explorer:
+#    Address bar: \\wsl$\Ubuntu\home\YOUR_USER\jsbsim-marl-formation\
+#    Copy from Windows project: data/expert/*.npz, benchmarks/*.pth
+
+# 6. Activate and verify
+conda activate marl_env
+python scripts/verify_installation.py
+```
+
+### Path B: Windows (conda, for evaluation only)
+
+Training on Windows is possible but **CPU-only and significantly slower** than WSL2. For evaluation and Tacview export, Windows is fine:
+
+```bash
+conda create -n jsbsim_rl python=3.10 -y
+conda activate jsbsim_rl
+pip install torch numpy gymnasium stable-baselines3 tensorboard matplotlib pyyaml
+pip install jsbsim==1.3.1
+python scripts/verify_installation.py
 ```
 
 ### JSBSim Aircraft Data
-
-Download the official JSBSim aircraft, engines, and systems data into `data/jsbsim/`:
 
 ```bash
 git clone https://github.com/JSBSim-Team/jsbsim.git /tmp/jsbsim
@@ -56,332 +109,284 @@ cp -r /tmp/jsbsim/engines  data/jsbsim/
 cp -r /tmp/jsbsim/systems  data/jsbsim/
 ```
 
-Alternatively, set the `JSBSIM_DATA_DIR` environment variable to point to an existing JSBSim installation.
+---
 
-### Verify Installation
+##   Quick Start
+
+### Evaluate the SB3 Baseline
 
 ```bash
-python scripts/verify_installation.py
+# Benchmark the centralized ceiling model (100 episodes × 3 difficulties)
+python scripts/benchmark_sb3_baseline.py -n 100 -d 0.0,0.3,0.6
 ```
 
-This performs a 4-step check: JSBSim bindings → aircraft data → F-16 model load → 1000-step test simulation.
+### Run Attention Actor Training
+
+```bash
+# 1v1 BC pretraining + MAPPO fine-tuning
+python scripts/train_attention_actor.py --mode 1v1 --steps 200000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth
+
+# 2v1 cooperative two-phase (OR-gate → AND-gate)
+python scripts/train_attention_actor.py --mode 2v1 --steps 500000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
+    --cooperative --warmup 100000
+```
+
+### Dual-Actor (Recommended — Breaks Symmetry)
+
+```bash
+# Decoupled P0/P1 actors with relaxed AND-gate (800m/30°)
+python scripts/train_dual_actor.py --mode 2v1 --steps 500000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
+    --cooperative --warmup 100000
+```
+
+### Diagnose Cooperative Behavior
+
+```bash
+# Per-step AND-gate diagnostics + Tacview export
+python scripts/diagnose_coop_tacview.py --episodes 3
+
+# Evasive target maneuvers (spiral, lissajous, weave)
+python scripts/diagnose_dual_evasion.py --pattern all --episodes 5
+```
+
+### Generate BC Training Data
+
+```bash
+# PID-based cooperative trajectory generator (clean data, no free-riding)
+python scripts/generate_coop_expert.py --episodes 500
+
+# BC pretrain on filtered data
+python scripts/train_attention_bc_2v1.py --train --epochs 80
+```
 
 ---
 
-## Quick Start
-
-```bash
-# Simplest demo: single F-16 tracking a moving target (50K steps)
-python scripts/run_single_agent.py
-
-# Single pursuit training with continuous actions (5M steps)
-python scripts/train_single_pursuit.py
-
-# Discrete BFM pursuit training with action masking (5M steps)
-python scripts/train_bfm_pursuit.py
-
-# 1v1 MAPPO multi-agent combat training
-python scripts/run_1v1_training.py
-```
-
----
-
-## Project Structure
+##   Project Structure
 
 ```
 jsbsim-marl-formation/
 ├── src/
-│   ├── dynamics/              # JSBSim F-16 wrapper + flight control laws
-│   │   ├── aircraft.py        #   Aircraft — wraps JSBSim FGFDMExec for a single F-16
-│   │   ├── autopilot.py       #   BFMAutopilot (λ-G flight control), PIDController,
-│   │   │                      #   GainScheduler, TrimSchedule, AltitudeHoldAP, SpeedHoldAP
-│   │   ├── bfm_actions.py     #   13-action BFM set + 9-action pursuit subset definitions
-│   │   ├── flight_controller.py # Stabilized FlightController (altitude/speed/heading stabilizers)
-│   │   └── flight_envelope.py #   V-n diagram, GPWS, G-onset lag, roll rate limiting,
-│   │                          #   stall/overspeed clamps, G-scale curriculum
+│   ├── dynamics/              # JSBSim F-16 wrapper + flight control
+│   │   ├── aircraft.py        #   Aircraft — wraps JSBSim FGFDMExec
+│   │   ├── autopilot.py       #   BFMAutopilot (λ-G), PIDController, GainScheduler
+│   │   ├── flight_controller.py # Stabilized FlightController (heading/alt/speed)
+│   │   └── flight_envelope.py #   V-n diagram, GPWS, stall/overspeed limits
 │   │
 │   ├── environment/           # Gymnasium environments
-│   │   ├── air_combat_env.py  #   AirCombatEnv (MultiAgentEnv) — 1v1 combat, 3 action modes
-│   │   ├── single_pursuit_env.py # SinglePursuitEnv — 3D continuous pursuit with FlightController
-│   │   ├── bfm_pursuit_env.py #   BFMPursuitEnv — Discrete(9) BFM pursuit with action masking
-│   │   ├── observations.py    #   19-dim local obs + 26-dim global state (CTDE)
-│   │   ├── rewards.py         #   RewardConfig: progress, ATA, AA, HCA, closing speed, etc.
-│   │   ├── termination.py     #   Collision, CPA, ground crash, out-of-bounds, timeout checks
-│   │   ├── scenario.py        #   Spawn generation: 1v1 combat + front-arc pursuit
-│   │   ├── curriculum.py      #   3-stage curriculum config + auto-advancement logic
-│   │   ├── ablation_wrappers.py # FrameStack, BlendedAction, LeadPursuitReward, ActionRepeat
-│   │   └── masked_policy.py   #   MaskableActorCriticPolicy for SB3 action masking
+│   │   ├── formation_env.py   #   FormationEnv — NvM cooperative pursuit (Phase 5)
+│   │   ├── formation_mappo_env.py # RLlib MultiAgentEnv wrapper (2v1 CTDE)
+│   │   ├── single_pursuit_env.py  # SinglePursuitEnv — 3D continuous pursuit (25-dim)
+│   │   ├── continuous_pursuit_env.py # ContinuousPursuitEnv (27-dim obs)
+│   │   ├── air_combat_env.py  #   AirCombatEnv — 1v1 adversarial combat
+│   │   ├── observations.py    #   19-dim local + 26-dim global observation builders
+│   │   ├── rewards.py         #   RewardConfig: progress, ATA, pincer, proximity tiers
+│   │   ├── termination.py     #   Collision, CPA, ground/OOB/timeout checks
+│   │   ├── curriculum.py      #   3-stage curriculum + auto-advancement
+│   │   └── ablation_wrappers.py # FrameStack, CubicAction, LeadPursuitReward
 │   │
 │   ├── models/                # Neural network architectures
-│   │   └── mappo_model.py     #   MAPPOModel (TorchModelV2) — actor [19→256→256→8],
-│   │                          #   critic [26→256→256→1] for RLlib MAPPO CTDE
+│   │   ├── attention_actor.py #   ★ AttentionFormationActor + Tokenized AttentionCritic
+│   │   ├── formation_mappo_model.py # RLlib CTDE model (33-dim actor, 21-dim critic)
+│   │   ├── mappo_model.py     #   RLlib 1v1 model (19-dim actor, 26-dim critic)
+│   │   └── tianshou_networks.py   # Pure PyTorch Actor/Critic for Tianshou MAPPO
 │   │
-│   ├── training/              # Training pipelines
-│   │   ├── train_mappo.py     #   RLlib MAPPO multi-agent training (500 iters, 3-stage curriculum)
-│   │   ├── callbacks.py       #   AirCombatCallbacks — kill/crash/OOB/timeout rate tracking
-│   │   └── baselines.py       #   Random agent + pure pursuit guidance baseline
+│   ├── training/              # RLlib pipelines (legacy — RLlib not recommended)
+│   │   ├── train_mappo.py     #   RLlib MAPPO 1v1 training (3-stage curriculum)
+│   │   ├── callbacks.py       #   AirCombatCallbacks — kill/crash/OOB tracking
+│   │   └── baselines.py       #   Random agent + pure pursuit baseline
 │   │
-│   ├── utils/                 # Mathematical utilities
-│   │   ├── geometry.py        #   Tactical geometry: ATA, AA, HCA, LOS, closing speed
-│   │   ├── kinematics.py      #   NED→WGS-84 coordinate transformation
-│   │   ├── pn_guidance.py     #   Proportional Navigation guidance with augmented bearing bias
+│   ├── utils/                 # Math + geometry + guidance
+│   │   ├── geometry.py        #   Tactical angles: ATA, AA, HCA, LOS, closing speed
+│   │   ├── kinematics.py      #   NED↔WGS-84 coordinate transforms
+│   │   ├── pn_guidance.py     #   Proportional Navigation with bearing bias
 │   │   └── units.py           #   Imperial ↔ SI unit conversions
 │   │
-│   ├── logging/               # Telemetry export
-│   │   └── tacview_exporter.py #  Tacview ACMI v2.1 writer for after-action review
-│   │
-│   └── visualization/         # 3D visualization (MeshCat / FlightGear bridge — planned)
+│   └── logging/               # Tacview ACMI telemetry export
+│       └── tacview_exporter.py
 │
-├── configs/
-│   ├── env/
-│   │   └── 1v1_combat.yaml    #   1v1 environment: 60 Hz, 0.5s decision interval, 240s max
-│   └── model/
-│       └── mappo_ctde.yaml    #   MAPPO model: [256,256] actor/critic, tanh activation
+├── scripts/                   # ★ Entry-point scripts (30+ total)
+│   ├── train_dual_actor.py    #   ★ Dual-Actor MAPPO (decoupled P0/P1, current best)
+│   ├── train_attention_actor.py  # ★ Attention Actor MAPPO (EV-gated + KL protection)
+│   ├── train_attention_bc_2v1.py # ★ 2v1 BC pipeline (data collection + pretraining)
+│   ├── train_attention_bc.py  #   1v1 BC pipeline
+│   ├── generate_coop_expert.py   # PID cooperative trajectory generator
+│   ├── diagnose_coop_tacview.py  # Cooperative model diagnostic + Tacview
+│   ├── diagnose_dual_evasion.py  # Evasive maneuver diagnostic (4 patterns)
+│   ├── benchmark_sb3_baseline.py # SB3 baseline evaluation (Wilson CI + Tacview)
+│   ├── train_formation_2v1.py    # SB3 2v1 shared-policy training (Phase 4)
+│   ├── train_single_pursuit.py   # SB3 PPO single-pursuit (auto-curriculum)
+│   ├── evaluate_and_visualize.py # Full eval: Tacview + 3D plots + Wilson CI
+│   ├── quick_tacview.py       #   Quick Tacview export from any model
+│   ├── verify_installation.py #   4-step installation verification
+│   ├── setup_wsl2.sh          #   ★ WSL2 one-command environment setup
+│   └── ...
 │
-├── scripts/                   # Entry-point scripts (22 total)
-│   ├── train_single_pursuit.py #  Primary training: SB3 PPO on SinglePursuitEnv (5M steps)
-│   ├── train_bfm_pursuit.py   #  SB3 PPO on BFMPursuitEnv with action masking (5M steps)
-│   ├── run_1v1_training.py    #  RLlib MAPPO 1v1 combat training
-│   ├── run_sb3_training.py    #  SB3 PPO 1v1 (avoids Ray/RLlib on Windows)
-│   ├── run_single_agent.py    #  Simplest demo: single F-16 tracks moving target
-│   ├── evaluate_and_visualize.py # Comprehensive eval: Tacview + 3D plots + Wilson CI
-│   ├── run_ablation_study.py  #  4-variant × 3-seed ablation study
-│   ├── run_hyperparam_sweep.py #  Orthogonal hyperparameter sweep (fractional factorial)
-│   ├── run_v10_5_training.py  #  V10.5 batch with anti-dolphin fixes
-│   ├── verify_installation.py #  4-step installation verification
-│   ├── verify_pursuit.py      #  3-scenario pursuit physics verification
-│   ├── verify_bfm_actions.py  #  Phase 4 BFM action validation
-│   ├── diagnose_dynamics.py   #  7-test diagnostic: trim, turn rate, climb/dive, PN, etc.
-│   ├── sweep_elevator.py      #  Phase 1: elevator sweep → trim table calibration
-│   ├── tune_pitch.py          #  Phase 2: pitch (Nz) PID tuning
-│   ├── tune_roll.py           #  Phase 2: roll PID tuning
-│   ├── tune_speed.py          #  Phase 2: speed PID tuning
-│   ├── quick_tacview.py       #  Quick Tacview export + 3D plots
-│   ├── quick_tacview_bfm.py   #  Tacview export for BFM pursuit models
-│   └── ...                    #  Additional eval/viz scripts
+├── benchmarks/
+│   ├── sb3_2v1_97p3/          # SB3 Phase 4.1 centralized ceiling archive
+│   │   ├── README.md          #   Benchmark documentation
+│   │   ├── model.zip          #   Archived model weights
+│   │   └── metrics_diff*.json #   Wilson CI × 3 difficulties
+│   └── dual_actor_coop_best.pth   # ★ Best dual-actor checkpoint
 │
-├── tests/
-│   ├── test_dynamics/         # Aircraft, autopilot, BFM actions, flight envelope tests
-│   ├── test_environment/      # Reset/step validity, ablation wrapper tests
-│   └── test_models/           # Model tests (placeholder)
-│
+├── configs/                   # YAML configs (env + model)
 ├── data/
-│   ├── trim_table.json        # F-16 speed-to-elevator-trim lookup (Phase 1 calibration)
-│   └── jsbsim/                # JSBSim aircraft/engines/systems data (git-ignored, user-provided)
+│   ├── expert/                # BC pretraining data
+│   │   ├── attention_bc_2v1_filtered.npz      # Filtered 2v1 data (18K samples)
+│   │   ├── attention_bc_2v1_filtered_pretrained.pth  # Filtered BC model
+│   │   ├── coop_pid_data.npz                  # PID cooperative data (10K samples)
+│   │   └── tiled_2v1_phase36.zip              # SB3 Phase 3.6 tiled weights
+│   └── jsbsim/                # JSBSim aircraft/engines/systems data
 │
-├── docs/                      # Session summaries, training reports, design specs
-├── marl_runs/                 # Training outputs (models, logs, CSVs)
-├── results/                   # Evaluation outputs (plots, CSVs, Tacview files)
-├── notebooks/                 # Jupyter notebooks (reserved)
-├── pyproject.toml             # Poetry project config + dependencies
+├── docs/                      # Daily work summaries + design docs + WSL2 guide
+│   ├── wsl2-setup-guide.md    # ★ WSL2 4-phase deployment checklist
+│   ├── 2026-07-01-full-summary.md
+│   ├── 2026-07-02-full-summary.md
+│   └── 2026-07-03-full-summary.md
+│
+├── results/                   # Evaluation outputs
+│   └── evasion_diag/          # Evasive maneuver Tacview files (80 episodes)
+│
+├── marl_runs/                 # Training outputs (git-ignored)
+├── tests/                     # Unit tests (dynamics, environment, models)
+├── pyproject.toml             # Poetry project config (reference only)
 ├── CLAUDE.md                  # Claude Code agent instructions
-├── CITATION.cff               # Citation metadata
-└── LICENSE                    # MIT License
+└── README.md                  # This file
 ```
 
 ---
 
-## Environments
+##   Environments
 
-### AirCombatEnv — 1v1 Multi-Agent Combat
+### FormationEnv — Cooperative 2v1 Pursuit (Phase 5)
 
-Multi-agent environment for adversarial air combat training with RLlib MAPPO.
+The primary environment for cooperative formation research.
 
-- **Agents**: `attacker_0`, `evader_0`
-- **Action Modes**: `"continuous"` (4-dim Box), `"bfm"` (Discrete 13), `"pursuit"` (Discrete 9)
-- **Observation**: Dict with 19-dim local obs + 26-dim global state (CTDE)
-- **Termination**: Collision (50 m), CPA (300 m for kill), ground crash (10 m), ceiling (4900 m), timeout (240 s)
-- **Curriculum**: 3 stages with increasing evader speed/G coefficients and warning radii
-- **Features**: Tacview export, GPWS with hysteresis, FlightEnvelope safety constraints
+- **Pursuers**: 2 × F-16 (JSBSim 6-DOF)
+- **Target**: 1 × F-16 (scripted straight/evasive)
+- **Observation**: 66-dim concatenated (2 × 33-dim per-pursuer)
+- **Action**: Box(4) — `[turn_0, speed_0, turn_1, speed_1]`
+- **Decision Rate**: 2 Hz (0.5 s per macro-action, 30 physics sub-steps at 60 Hz)
+- **Cooperative Mode** (`cooperative_mode=True`):
+  - **Phase 1 [OR]**: Any pursuer < 200m → success (+5,000) + light pincer guidance
+  - **Phase 2 [AND]**: Both < 800m + pincer > 30° + sustained 6 steps → cooperative_success
+  - **Pincer Reward**: Bonus for 60°–150° between LOS vectors
+  - **Dynamic Roles**: Striker (closer pursuer, tracking ×1.5) + Interceptor (further, pincer ×2.0)
+  - **Asymmetric Resets**: 70% probability, random pursuer starts 1,500m behind + facing away
 
-### SinglePursuitEnv — Continuous Pursuit
+### SinglePursuitEnv — Continuous 1v1 Pursuit
 
-Single-agent pursuit environment with 3D continuous action space (recommended for most training).
+Single-agent pursuit with 3D continuous action via FlightController.
 
-- **Action Space**: 3-dim continuous `[d_heading, d_alt, d_speed]` via FlightController interface
-- **Observation Space**: 25-dim (body-frame relative state + tactical geometry + AoA + airspeed + specific excess power)
-- **Decision Rate**: 10 Hz (0.1 s per step)
-- **Auto-Curriculum**: Continuous difficulty [0, 1] with 50-episode sliding window win rate
-- **Anti-Stall**: Truncation on AoA exceedance + quadratic altitude penalty
-- **Training Wrapper Chain**: `SinglePursuitEnv → BlendedAction → LeadPursuitReward → ResidualExpert → ActionRepeat(5×, 2 Hz)`
-
-### BFMPursuitEnv — Discrete BFM Pursuit
-
-Single-agent pursuit with Discrete(9) BFM action space and full autopilot pipeline.
-
-- **Action Space**: Discrete 9 (`PURSUIT_ACTIONS`: pure pursuit, lead pursuit, lag pursuit, high/low yo-yo, etc.)
-- **Pipeline**: `PURSUIT_ACTIONS → FlightEnvelope → BFMAutopilot (GainScheduler) → JSBSim`
-- **Action Masking**: 5 safety rules preventing self-destructive actions during exploration
-- **Observation**: 25-dim Dict with `"obs"` + `"action_mask"` keys
-- **Gain Scheduling**: 1/V² adaptive PID gains for Nz channel across speed envelope
+- **Action**: Box(3) `[d_heading, d_alt, d_speed]`
+- **Observation**: 25-dim (body-frame relative state + tactical angles + energy features)
+- **Auto-Curriculum**: Continuous difficulty [0, 1] with cliff-collapse rollback
 
 ---
 
-## Key Architecture
+##   Key Architecture Details
 
-### λ-G Flight Control Law
+### Per-Pursuer Observation (33-dim)
 
-The `BFMAutopilot` implements a real F-16-class flight control system (Stevens & Lewis) that closes the loop around normal acceleration (Nz) rather than pitch attitude:
+| Indices | Content |
+|---------|---------|
+| 0–2 | Target relative position (body frame) |
+| 3–5 | Own velocity (body frame) |
+| 6–8 | Own attitude (RPY) |
+| 9–11 | Own angular velocity |
+| 12 | Own height |
+| 13–15 | Target velocity (body frame) |
+| 19–21 | Tactical geometry: cos(ATA), cos(AA), cos(HCA) |
+| 22 | Angle of Attack |
+| 23 | Airspeed |
+| 25 | LOS angular rate |
+| 26 | Bearing error |
+| **27–29** | **Mate relative position** (body frame) |
+| **30–32** | **Mate relative velocity** (body frame) |
 
-```
-δ_elevator = PID(Nz_cmd − Nz_actual) + trim(V)
-δ_aileron  = PID(φ_cmd − φ_actual)
-δ_rudder   = PID(β_cmd − β_actual)   # sideslip suppression
-Throttle   = PID(V_cmd − V_actual)
-```
+### Cooperative Reward Components
 
-### Speed-Dependent Gain Scheduling
+| Component | Formula | Purpose |
+|-----------|---------|---------|
+| Progress | 1.5 × Δdist | Closing distance to target |
+| ATA alignment | 8.0 × cos(ATA) × dist_factor | Nose-on-target |
+| Pincer angle | 15.0 × (angle/150) when 60°–150° | Flanking geometry |
+| Striker bonus | 1.5 × tracking reward | Closer pursuer hunts |
+| Interceptor bonus | 2.0 × pincer reward | Further pursuer flanks |
+| AND-gate success | +5,000 + 2,000 × (angle/180) | Both in position |
+| Proximity tiers | +25/+50/+100 at 800/500/300m | Approach milestones |
 
-- **Nz channel**: 1/V² adaptive PID gains maintain constant loop gain across the speed envelope (150–400 m/s)
-- **Trim schedule**: Speed-to-elevator-trim lookup table calibrated from Phase 1 open-loop elevator sweeps
+### Training Hyperparameters
 
-### Proportional Navigation Guidance
-
-The PN guidance law provides a collision-course intercept solution with augmented bearing bias for initial target acquisition:
-
-```
-ψ_cmd = ψ_los + N × ψ̇_los × t_go + bearing_bias
-```
-
-### CTDE Architecture (MAPPO)
-
-- **Actor**: 19-dim local observation → [256, 256] → 4-dim action `[throttle, elevator, aileron, rudder]`
-- **Critic**: 26-dim global state → [256, 256] → scalar value (centralized training only)
-
----
-
-## Training
-
-### Continuous Pursuit (Recommended)
-
-```bash
-# Main training with auto-curriculum (5M steps)
-python scripts/train_single_pursuit.py
-
-# Ablation study: 4 variants × 3 seeds
-python scripts/run_ablation_study.py
-
-# Hyperparameter sweep
-python scripts/run_hyperparam_sweep.py
-```
-
-Training features:
-- **gSDE** (generalized State-Dependent Exploration) for temporally-correlated exploration
-- **Auto-curriculum** with spring mechanism: conservative advancement (consecutive good evals required), cliff-collapse rollback (restores model weights + resets difficulty on performance drop)
-- **Lead pursuit reward**: velocity alignment + lead prediction + LOS-rate damping, all V_c-coupled with minimum-wage floor
-- **Anti-dolphin fixes** (V10.5): quadratic altitude delta penalty, lowered V_c saturation ceiling, action smoothness penalty
-
-### Discrete BFM Pursuit
-
-```bash
-python scripts/train_bfm_pursuit.py
-```
-
-Uses `MaskableActorCriticPolicy` with 5 safety rules in the action mask.
-
-### Multi-Agent MAPPO (1v1)
-
-```bash
-python scripts/run_1v1_training.py
-```
-
-Uses Ray RLlib with dual policies (attacker + evader), 500 iterations, 3-stage curriculum.
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| γ (gamma) | 0.99 | Discount factor |
+| λ (GAE) | 0.95 | GAE trace decay |
+| ε (clip) | 0.2 | PPO clip range |
+| Rollout steps | 4,096 | Per epoch |
+| Mini-batch | 128 | Per update |
+| PPO epochs | 10 | Per rollout |
+| Actor LR (fine) | 1e-5 | After warmup |
+| Critic LR (warmup) | 1e-3 | Attention Critic |
+| EV unfreeze gate | 0.3 | Explained variance threshold |
+| KL target | 0.015 | Early stopping per minibatch |
+| ENT_COEF | 0.005 | With auto-boost on collapse |
 
 ---
 
-## Evaluation
+##   WSL2 Deployment
 
-```bash
-# Comprehensive evaluation (all models)
-python scripts/evaluate_and_visualize.py
+For full Linux training performance, see the detailed 4-phase guide:
 
-# Multi-seed evaluation with Wilson CI
-python scripts/eval_multi_seed.py
+**[  docs/wsl2-setup-guide.md](docs/wsl2-setup-guide.md)**
 
-# Quick Tacview export from checkpoint
-python scripts/quick_tacview.py
+Quick checklist:
 
-# Generate Tacview + trajectory plots for BFM models
-python scripts/quick_tacview_bfm.py
-```
+- [ ] `wsl --install` (PowerShell Admin) → reboot
+- [ ] Create `.wslconfig` (memory ≤ 70% physical RAM)
+- [ ] `nvidia-smi` (verify GPU passthrough)
+- [ ] `git clone` into `~/` (Linux native ext4, NOT `/mnt/c/`)
+- [ ] `dos2unix scripts/setup_wsl2.sh` (CRLF → LF)
+- [ ] `bash scripts/setup_wsl2.sh` (Miniconda + PyTorch + JSBSim)
+- [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
+- [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
-Outputs include:
-- **Tacview ACMI** (.txt.acmi) — drag-and-drop into [Tacview](https://www.tacview.net/) for 3D after-action review
-- **3D trajectory plots** (.png) — matplotlib 3D visualization with start/end markers
-- **Altitude profiles** (.png) — time-series altitude with key event annotations
-- **Summary statistics** — kill rate, average episode length, Wilson confidence intervals
-- **Multi-seed CSV** — per-seed metrics for statistical aggregation
+>  ⚠️  **Do NOT install RLlib (`ray[rllib]`).** The project's custom Self-Attention Actor and dual-actor decoupling cannot be hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or the conda instructions above.
 
 ---
 
-## Verification & Diagnostics
-
-```bash
-# Check JSBSim + F-16 are working correctly
-python scripts/verify_installation.py
-
-# Verify F-16 can physically intercept a target (3 scenarios)
-python scripts/verify_pursuit.py
-
-# Validate all 9 BFM actions through the full pipeline
-python scripts/verify_bfm_actions.py
-
-# Run 7-test diagnostic suite (trim, turn rate, climb/dive, PN, etc.)
-python scripts/diagnose_dynamics.py
-```
-
----
-
-## Testing
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test modules
-pytest tests/test_dynamics/ -v
-pytest tests/test_environment/ -v
-```
-
-Test coverage includes:
-- **Dynamics**: Aircraft creation/reset/step, autopilot output shapes + channel response, BFM action counts/indices/validity, flight envelope V-n diagram + GPWS + roll limiting
-- **Environment**: Reset observation validity (shape/dtype/bounds), step data integrity, ablation wrapper correctness (FrameStack, CubicAction, LeadPursuitReward)
-
----
-
-## Dependencies
+##   Dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `jsbsim` | 6-DOF F-16 flight dynamics engine |
-| `gymnasium ~=1.2` | Reinforcement learning environment interface |
-| `ray[rllib] ^2.40` | Distributed multi-agent training (MAPPO) |
-| `stable-baselines3` | Single-agent PPO training |
-| `torch >=2.0` | Neural network backend |
-| `numpy`, `scipy` | Numerical computation |
-| `matplotlib` | Trajectory and evaluation plots |
+| `jsbsim ~=1.3` | 6-DOF F-16 flight dynamics |
+| `torch >=2.0` | Neural networks (Self-Attention, MHA) |
+| `gymnasium ~=1.2` | RL environment interface |
+| `stable-baselines3` | SB3 baseline (PPO, evaluation only) |
+| `numpy` | Numerical computation |
 | `tensorboard` | Training monitoring |
-| `pyyaml` | Configuration file parsing |
-| `transforms3d` | 3D rotation and coordinate transforms |
+| `matplotlib` | Trajectory plots |
+| `pyyaml` | Config file parsing |
 
 ---
 
-## Citation
+##   Citation
 
 ```bibtex
 @software{nishimiya2026jsbsim,
   author       = {Sean Nishimiya},
-  title        = {jsbsim-marl-formation: Multi-Agent RL for Formation Flight with JSBSim F-16 Dynamics},
+  title        = {jsbsim-marl-formation: Multi-Agent RL for Cooperative
+                  Formation Flight with JSBSim F-16 Dynamics},
   year         = 2026,
   affiliation  = {Zhejiang University},
   url          = {https://github.com/NishimiyaXSean/jsbsim-marl-formation}
 }
 ```
 
-See [CITATION.cff](CITATION.cff) for complete metadata.
-
 ---
 
-## License
+##   License
 
 MIT — see [LICENSE](LICENSE) for details.
