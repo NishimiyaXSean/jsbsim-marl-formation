@@ -168,6 +168,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._difficulty = float(np.clip(config.get("difficulty_level", 0.0), 0.0, 1.0))
         self._lock_altitude = config.get("lock_altitude", True)
         self._record_tacview = config.get("record_tacview", False)
+        self.cooperative_mode = config.get("cooperative_mode", True)
         self._ref_lla = (30.0, 120.0, 3000.0)
         self._tacview_frames: List[dict] = []
 
@@ -499,7 +500,7 @@ class FormationRLlibEnv(MultiAgentEnv):
             # ════════════════════════════════════════════════════════════
             #  Phase 5: Cooperative 2v1 (pincer + dynamic roles)
             # ════════════════════════════════════════════════════════════
-            if self.N >= 2:
+            if self.cooperative_mode and self.N >= 2:
                 d0, d1 = pursuer_dists[0], pursuer_dists[1]
 
                 # Pincer angle: angle between LOS vectors (horizontal)

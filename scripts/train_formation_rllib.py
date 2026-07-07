@@ -179,6 +179,7 @@ def train(
             "difficulty_level": difficulty,
             "lock_altitude": True,
             "record_tacview": False,
+            "cooperative_mode": cooperative,
         })
         .framework("torch")
         .resources(num_gpus=1 if torch.cuda.is_available() else 0)
@@ -288,7 +289,7 @@ def train(
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
                 eval_rewards = run_evaluation(
-                    algo, eval_episodes, difficulty, current_phase)
+                    algo, eval_episodes, difficulty, current_phase, cooperative)
                 avg_eval = np.mean(eval_rewards) if eval_rewards else 0.0
                 print(f"  [EVAL] iter={i+1:4d}  avg_rew={avg_eval:8.1f}  "
                       f"n={len(eval_rewards)}")
@@ -322,7 +323,7 @@ def train(
 
 
 def run_evaluation(algo, n_episodes: int, difficulty: float,
-                   coop_phase: int) -> list[float]:
+                   coop_phase: int, cooperative_mode: bool = True) -> list[float]:
     """Evaluate the current policy in a separate env instance.
 
     Returns per-episode total reward.
@@ -331,8 +332,10 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
         "difficulty_level": difficulty,
         "lock_altitude": True,
         "record_tacview": False,
+        "cooperative_mode": cooperative_mode,
     })
-    env.set_coop_phase(coop_phase)
+    if cooperative_mode:
+        env.set_coop_phase(coop_phase)
     env._difficulty = difficulty
 
     episode_rewards = []
