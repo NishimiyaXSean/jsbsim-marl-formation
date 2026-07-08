@@ -38,8 +38,8 @@ from src.utils.geometry import compute_forward_vector, compute_los, compute_tact
 
 CTRL_FREQ = 60.0
 PHYSICS_DT = 1.0 / CTRL_FREQ
-DECISION_DT = 0.5
-DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)
+DECISION_DT = 0.2        # 5 Hz decision rate (was 2 Hz)
+DECISION_STEPS = int(DECISION_DT * CTRL_FREQ)  # 12 micro-steps
 MAX_EPISODE_TIME = 120.0
 
 MAX_DIST = 10000.0
@@ -94,6 +94,11 @@ INTERCEPTOR_PINCER_BONUS = 2.0
 ASYMMETRIC_RESET_PROB = 0.7
 ASYMMETRIC_DIST_FAR = 1500.0
 ASYMMETRIC_HEADING_OFF = 120.0
+
+# Distance asymmetry penalty (continuous shaping — prevents free-riding)
+DIST_ASYMMETRY_THRESH = 500.0   # start penalizing when dist diff > 500m
+DIST_ASYMMETRY_WEIGHT = 0.5     # penalty coefficient per m over threshold
+DIST_ASYMMETRY_NORM = 1000.0    # normalization factor
 
 # Global state: per-entity features
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
@@ -548,6 +553,15 @@ class FormationRLlibEnv(MultiAgentEnv):
                     interceptor_bonus = (INTERCEPTOR_PINCER_BONUS *
                                         (pincer_angle / 180.0) * dt)
                     rewards[self._agent_ids[further_idx]] += interceptor_bonus
+
+                # Distance asymmetry penalty (continuous — both pay when one lags)
+                dist_diff = abs(d0 - d1)
+                if dist_diff > DIST_ASYMMETRY_THRESH:
+                    asymmetry_penalty = (DIST_ASYMMETRY_WEIGHT *
+                                        (dist_diff - DIST_ASYMMETRY_THRESH) /
+                                        DIST_ASYMMETRY_NORM * dt)
+                    for aid in self._agent_ids:
+                        rewards[aid] -= asymmetry_penalty
 
                 # Cooperative success (phase-aware)
                 if self._coop_phase == COOP_PHASE_AND:

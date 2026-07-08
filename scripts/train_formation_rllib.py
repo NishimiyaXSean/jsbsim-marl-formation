@@ -1,12 +1,13 @@
-"""RLlib MAPPO 2v1 Cooperative Formation Training (CTDE + Dual-Actor).
+"""RLlib MAPPO 2v1 Cooperative Formation Training (Parameter-Shared CTDE).
 
 Rebuilt training pipeline using Ray RLlib for scalable multi-agent training.
 Features:
-  - Dual-Actor decoupled policies (p0_policy / p1_policy)
+  - Parameter-Shared MAPPO (shared policy across p0/p1 agents)
   - Self-Attention CTDE model (AttentionFormationActor + AttentionCritic)
   - BC weight hot-loading (inject pretrained weights before PPO)
   - Two-phase cooperative training (OR-gate → AND-gate)
-  - Phase 5 pincer rewards + dynamic role assignment
+  - Phase 5 pincer rewards + dynamic role assignment + distance asymmetry penalty
+  - 5 Hz decision rate (was 2 Hz)
 
 Usage:
     conda activate marl_env
@@ -168,7 +169,7 @@ def train(
     print(f"Observation space (p0): {obs_space_p0}")
     print(f"Action space (p0):      {act_space_p0}")
 
-    # ── PPOConfig with Dual-Actor ────────────────────────────────────────
+    # ── PPOConfig with Parameter-Shared MAPPO ──────────────────────────
     config = (
         PPOConfig()
         .api_stack(
@@ -186,17 +187,13 @@ def train(
         .env_runners(num_env_runners=2)
         .multi_agent(
             policies={
-                "p0_policy": (
+                "shared_policy": (
                     None, obs_space_p0, act_space_p0,
                     {"model": {"custom_model": "attention_formation"}}
                 ),
-                "p1_policy": (
-                    None, obs_space_p1, act_space_p1,
-                    {"model": {"custom_model": "attention_formation"}}
-                ),
             },
-            policy_mapping_fn=lambda agent_id, *args, **kwargs: f"{agent_id}_policy",
-            policies_to_train=["p0_policy", "p1_policy"],
+            policy_mapping_fn=lambda agent_id, *args, **kwargs: "shared_policy",
+            policies_to_train=["shared_policy"],
         )
         .training(
             lr=3e-4,
@@ -219,11 +216,11 @@ def train(
 
     # ── BC weight hot-loading ─────────────────────────────────────────────
     if load_bc:
-        success = load_bc_weights(algo, load_bc, ["p0_policy", "p1_policy"])
+        success = load_bc_weights(algo, load_bc, ["shared_policy"])
         if not success:
             print("[BC Load] Continuing with random initialization...")
         else:
-            print("[BC Load] Successfully loaded BC weights into p0 and p1 policies")
+            print("[BC Load] Successfully loaded BC weights into shared policy")
 
     # ── Training loop ─────────────────────────────────────────────────────
     current_phase = COOP_PHASE_OR
@@ -236,8 +233,8 @@ def train(
     print(f"Mode: {'Cooperative (OR→AND)' if cooperative else 'Non-cooperative'}")
     print(f"Iterations: {iterations}  |  Difficulty: {difficulty:.2f}  |  Seed: {seed}")
     print(f"BC Pretrain: {load_bc or 'None'}")
-    print(f"Dual-Actor: p0_policy / p1_policy (decoupled)")
-    print(f"Critic: Independent per policy (AttentionCritic)")
+    print(f"Architecture: Parameter-Shared MAPPO (shared_policy for p0/p1)")
+    print(f"Decision Rate: 5 Hz (DECISION_DT=0.2s)")
     print(f"{'='*60}\n")
 
     try:
@@ -249,22 +246,21 @@ def train(
             ep_rew = env_stats.get("episode_reward_mean", 0.0)
             ep_len = env_stats.get("episode_len_mean", 0.0)
 
-            # Per-policy rewards
+            # Shared policy metrics
             policy_rewards = env_stats.get("policy_reward_mean", {})
-            r0 = policy_rewards.get("p0_policy", 0.0)
-            r1 = policy_rewards.get("p1_policy", 0.0)
+            shared_r = policy_rewards.get("shared_policy", 0.0)
 
             # Entropy / KL
             info = result.get("info", {})
             learner_info = info.get("learner", {})
-            p0_learner = learner_info.get("p0_policy", {})
-            p0_stats = p0_learner.get("learner_stats", p0_learner)
-            entropy = p0_stats.get("entropy", 0.0)
-            kl = p0_stats.get("kl", 0.0)
+            shared_learner = learner_info.get("shared_policy", {})
+            learner_stats = shared_learner.get("learner_stats", shared_learner)
+            entropy = learner_stats.get("entropy", 0.0)
+            kl = learner_stats.get("kl", 0.0)
 
             if i % 10 == 0:
                 print(f"[{i:4d}] ep_rew={ep_rew:8.1f}  "
-                      f"r_p0={r0:8.1f}  r_p1={r1:8.1f}  "
+                      f"policy_r={shared_r:8.1f}  "
                       f"ep_len={ep_len:6.1f}  "
                       f"ent={entropy:.4f}  kl={kl:.4f}")
 
@@ -351,7 +347,7 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
                 if aid in obs_dict:
                     actions[aid] = algo.compute_single_action(
                         obs_dict[aid],
-                        policy_id=f"{aid}_policy",
+                        policy_id="shared_policy",
                         explore=False,
                     )
 
