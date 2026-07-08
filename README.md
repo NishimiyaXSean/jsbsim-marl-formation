@@ -1,6 +1,6 @@
 # jsbsim-marl-formation
 
-**Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics and Self-Attention MAPPO (CTDE).
+**Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics, Self-Attention CTDE, and RLlib MAPPO.
 
 >   **Academic Research Project** — *"Token-based CTDE with Self-Attention outperforms centralized PPO on cooperative 2v1 formation pursuit."*
 
@@ -17,10 +17,12 @@
 |-----------|-------------|--------|-------|
 | **SB3 Centralized (ceiling)** | 66-dim shared policy | +5,908 (92% capture) | Upper bound for 2v1 |
 | **Attention BC (no PPO)** | 33-dim CTDE | **+6,846** | Pure BC beats centralized PPO |
+| **Attention 1v1 BC+MAPPO** | 33-dim CTDE | +7,785 | Matches SB3 1v1 baseline |
 | **Dual-Actor Cooperative** | 33-dim × 2 decoupled | +5,078 (13.75% AND-gate) | First stable cooperative signal |
+| **RLlib Non-Cooperative** | 33-dim × 2 CTDE | −7,500 plateau | Confirms symmetry involution without coop rewards |
 | **Evasive Maneuvers** | 4 patterns × 20 episodes | 11/80 successes | Works against spiral/lissajous/weave |
 
-> Pure behavior cloning with Self-Attention CTDE Actor achieves **+6,846** reward — **15% above** the centralized SB3 PPO ceiling (+5,908) that uses full 66-dim joint observations. The token-based modular architecture is more sample-efficient than flat concatenation.
+> Pure behavior cloning with Self-Attention CTDE Actor achieves **+6,846** reward — **15% above** the centralized SB3 PPO ceiling (+5,908) that uses full 66-dim joint observations. The token-based modular architecture is more sample-efficient than flat concatenation. The **RLlib migration** (2026-07-07) replaced the custom PyTorch MAPPO pipeline with a scalable multi-agent infrastructure for NvM formation training.
 
 ---
 
@@ -28,28 +30,49 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              Self-Attention FormationActor               │
-│                                                         │
-│  obs[33] → [Self(13)] [Target(14)] [Mate(6)]            │
-│              ↓          ↓            ↓                  │
-│         Linear     Linear       Linear × mate_scale     │
-│              ↓          ↓            ↓                  │
-│         ┌──────────────────────────────┐                │
-│         │  Multi-Head Self-Attention   │                │
-│         │  (4 heads, d_model=128)      │                │
-│         │  + Token-Type Embedding      │                │
-│         │  + Residual + Learned Pool   │                │
-│         └──────────────┬───────────────┘                │
-│                        ↓                                │
-│              MLP [256,256] → action_mean(2)             │
+│              RLlib MAPPO Training Pipeline               │
+│                                                          │
+│  ┌──────────────────┐   ┌──────────────────┐            │
+│  │  Policy p0        │   │  Policy p1        │            │
+│  │  (TorchModelV2)   │   │  (TorchModelV2)   │            │
+│  │  Self-Attention   │   │  Self-Attention   │            │
+│  │  Actor + Critic   │   │  Actor + Critic   │            │
+│  └────────┬─────────┘   └────────┬─────────┘            │
+│           │                      │                       │
+│  ┌────────┴──────────────────────┴─────────┐            │
+│  │     FormationRllibEnv (MultiAgentEnv)     │            │
+│  │  obs: Dict(obs=Box(33), global_state=21) │            │
+│  │  act: Box(2) [turn, speed]               │            │
+│  │  2 Hz decision rate, 30 physics sub-steps │            │
+│  └────────────────────┬────────────────────┘            │
+│                       │                                  │
+│  ┌────────────────────┴────────────────────┐            │
+│  │         JSBSim 6-DOF F-16 FDM           │            │
+│  └─────────────────────────────────────────┘            │
 └─────────────────────────────────────────────────────────┘
 
-Dual-Actor (P0/P1 decoupled):
-  actor_p0 ≠ actor_p1  →  independent gradients
-  Shared Tokenized AttentionCritic (3-entity MHA)
+              Self-Attention FormationActor (TorchModelV2)
+              ─────────────────────────────────────────
+
+  obs[33] → [Self(13)] [Target(14)] [Mate(6)]
+              ↓          ↓            ↓
+         Linear     Linear       Linear × mate_scale
+              ↓          ↓            ↓
+         ┌──────────────────────────────┐
+         │  Multi-Head Self-Attention   │
+         │  (4 heads, d_model=128)      │
+         │  + Token-Type Embedding      │
+         │  + Residual + Learned Pool   │
+         └──────────────┬───────────────┘
+                        ↓
+              MLP [256,256] → action_mean(2)
 ```
 
-**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization.
+Dual-Actor (P0/P1 decoupled via RLlib `multi_agent.policies`):
+  actor_p0 ≠ actor_p1  →  independent gradients
+  Independent Critics (P0/P1 reward structures differ)
+
+**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization. The RLlib `TorchModelV2` API hosts the full Self-Attention architecture without compromise.
 
 ---
 
@@ -113,6 +136,26 @@ cp -r /tmp/jsbsim/systems  data/jsbsim/
 
 ##   Quick Start
 
+### RLlib MAPPO Training (Recommended)
+
+```bash
+# Experiment 1: Non-cooperative baseline (symmetry involution)
+python scripts/train_formation_rllib.py \
+    --iterations 200 --no-cooperative \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
+    --eval-interval 20 --seed 42
+
+# Experiment 2: OR-gate cooperative warmup
+python scripts/train_formation_rllib.py \
+    --iterations 120 --cooperative \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth
+
+# Experiment 3: Two-phase OR→AND (full cooperative curriculum)
+python scripts/train_formation_rllib.py \
+    --iterations 500 --cooperative --warmup 200000 \
+    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth
+```
+
 ### Evaluate the SB3 Baseline
 
 ```bash
@@ -120,7 +163,7 @@ cp -r /tmp/jsbsim/systems  data/jsbsim/
 python scripts/benchmark_sb3_baseline.py -n 100 -d 0.0,0.3,0.6
 ```
 
-### Run Attention Actor Training
+### Legacy: Custom PyTorch MAPPO Training (Archived)
 
 ```bash
 # 1v1 BC pretraining + MAPPO fine-tuning
@@ -131,12 +174,8 @@ python scripts/train_attention_actor.py --mode 1v1 --steps 200000 \
 python scripts/train_attention_actor.py --mode 2v1 --steps 500000 \
     --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
     --cooperative --warmup 100000
-```
 
-### Dual-Actor (Recommended — Breaks Symmetry)
-
-```bash
-# Decoupled P0/P1 actors with relaxed AND-gate (800m/30°)
+# Dual-Actor decoupled (P0/P1 independent networks)
 python scripts/train_dual_actor.py --mode 2v1 --steps 500000 \
     --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
     --cooperative --warmup 100000
@@ -177,7 +216,8 @@ jsbsim-marl-formation/
 │   │
 │   ├── environment/           # Gymnasium environments
 │   │   ├── formation_env.py   #   FormationEnv — NvM cooperative pursuit (Phase 5)
-│   │   ├── formation_mappo_env.py # RLlib MultiAgentEnv wrapper (2v1 CTDE)
+│   │   ├── formation_rllib_env.py # ★ RLlib MultiAgentEnv wrapper (2v1 CTDE, Phase 5)
+│   │   ├── formation_mappo_env.py # RLlib MultiAgentEnv wrapper (legacy MLP)
 │   │   ├── single_pursuit_env.py  # SinglePursuitEnv — 3D continuous pursuit (25-dim)
 │   │   ├── continuous_pursuit_env.py # ContinuousPursuitEnv (27-dim obs)
 │   │   ├── air_combat_env.py  #   AirCombatEnv — 1v1 adversarial combat
@@ -189,8 +229,9 @@ jsbsim-marl-formation/
 │   │
 │   ├── models/                # Neural network architectures
 │   │   ├── attention_actor.py #   ★ AttentionFormationActor + Tokenized AttentionCritic
-│   │   ├── formation_mappo_model.py # RLlib CTDE model (33-dim actor, 21-dim critic)
-│   │   ├── mappo_model.py     #   RLlib 1v1 model (19-dim actor, 26-dim critic)
+│   │   ├── formation_rllib_model.py # ★ RLlib TorchModelV2 — Self-Attention Actor+Critic
+│   │   ├── formation_mappo_model.py # RLlib CTDE model (legacy MLP)
+│   │   ├── mappo_model.py     #   RLlib 1v1 model (legacy MLP)
 │   │   └── tianshou_networks.py   # Pure PyTorch Actor/Critic for Tianshou MAPPO
 │   │
 │   ├── training/              # RLlib pipelines (legacy — RLlib not recommended)
@@ -208,9 +249,10 @@ jsbsim-marl-formation/
 │       └── tacview_exporter.py
 │
 ├── scripts/                   # ★ Entry-point scripts (30+ total)
-│   ├── train_dual_actor.py    #   ★ Dual-Actor MAPPO (decoupled P0/P1, current best)
-│   ├── train_attention_actor.py  # ★ Attention Actor MAPPO (EV-gated + KL protection)
-│   ├── train_attention_bc_2v1.py # ★ 2v1 BC pipeline (data collection + pretraining)
+│   ├── train_formation_rllib.py  # ★ RLlib Dual-Actor MAPPO (current primary pipeline)
+│   ├── train_dual_actor.py    #   Dual-Actor MAPPO (legacy — decoupled P0/P1)
+│   ├── train_attention_actor.py  # Attention Actor MAPPO (legacy — EV-gated + KL)
+│   ├── train_attention_bc_2v1.py # 2v1 BC pipeline (data collection + pretraining)
 │   ├── train_attention_bc.py  #   1v1 BC pipeline
 │   ├── generate_coop_expert.py   # PID cooperative trajectory generator
 │   ├── diagnose_coop_tacview.py  # Cooperative model diagnostic + Tacview
@@ -260,14 +302,15 @@ jsbsim-marl-formation/
 
 ##   Environments
 
-### FormationEnv — Cooperative 2v1 Pursuit (Phase 5)
+### FormationRllibEnv — Cooperative 2v1 Pursuit (RLlib MultiAgentEnv)
 
-The primary environment for cooperative formation research.
+The primary environment for cooperative formation research, now running under RLlib.
 
+- **Agent IDs**: `"p0"`, `"p1"` (independent policy instances)
 - **Pursuers**: 2 × F-16 (JSBSim 6-DOF)
 - **Target**: 1 × F-16 (scripted straight/evasive)
-- **Observation**: 66-dim concatenated (2 × 33-dim per-pursuer)
-- **Action**: Box(4) — `[turn_0, speed_0, turn_1, speed_1]`
+- **Observation**: `Dict({"obs": Box(33), "global_state": Box(21)})` — per-agent local + global state
+- **Action**: `Box(2)` — `[turn, speed]` → FlightController
 - **Decision Rate**: 2 Hz (0.5 s per macro-action, 30 physics sub-steps at 60 Hz)
 - **Cooperative Mode** (`cooperative_mode=True`):
   - **Phase 1 [OR]**: Any pursuer < 200m → success (+5,000) + light pincer guidance
@@ -275,6 +318,15 @@ The primary environment for cooperative formation research.
   - **Pincer Reward**: Bonus for 60°–150° between LOS vectors
   - **Dynamic Roles**: Striker (closer pursuer, tracking ×1.5) + Interceptor (further, pincer ×2.0)
   - **Asymmetric Resets**: 70% probability, random pursuer starts 1,500m behind + facing away
+- **Action Clipping**: DiagGaussian bounds enforcement to prevent NaN from unbounded sampling
+
+### FormationEnv — Cooperative 2v1 Pursuit (SB3/Legacy)
+
+The SB3-compatible environment (shared-policy interface).
+
+- **Observation**: 66-dim concatenated (2 × 33-dim per-pursuer)
+- **Action**: Box(4) — `[turn_0, speed_0, turn_1, speed_1]`
+- **Cooperative Mode**: Same Phase 5 logic as above, shared-policy execution
 
 ### SinglePursuitEnv — Continuous 1v1 Pursuit
 
@@ -353,7 +405,7 @@ Quick checklist:
 - [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
 - [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
->  ⚠️  **Do NOT install RLlib (`ray[rllib]`).** The project's custom Self-Attention Actor and dual-actor decoupling cannot be hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or the conda instructions above.
+>   **RLlib is now the primary training framework** (migrated 2026-07-07). The Self-Attention Actor and Dual-Actor decoupling are fully hosted inside RLlib's `TorchModelV2` API via `formation_rllib_model.py`. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or the conda instructions above.
 
 ---
 
@@ -363,6 +415,7 @@ Quick checklist:
 |---------|---------|
 | `jsbsim ~=1.3` | 6-DOF F-16 flight dynamics |
 | `torch >=2.0` | Neural networks (Self-Attention, MHA) |
+| `ray[rllib] >=2.40` | Multi-agent MAPPO training pipeline |
 | `gymnasium ~=1.2` | RL environment interface |
 | `stable-baselines3` | SB3 baseline (PPO, evaluation only) |
 | `numpy` | Numerical computation |
