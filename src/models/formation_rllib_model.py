@@ -151,33 +151,17 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
         self._last_value = self.critic(global_tokens)  # [B]
 
         # ── 2. Actor: local obs → intermediate features ─────────────────
-        # Re-use AttentionFormationActor's token processing pipeline
-        # but replace final mean/scale output with categorical heads
-        import numpy as np
-        from src.models.attention_actor import segment_obs
-
-        self_feat, target_feat, mate_feat = segment_obs(local)
-        token_self = self.actor.self_proj(self_feat)
-        token_target = self.actor.target_proj(target_feat)
-        token_mate = self.actor.mate_proj(mate_feat) * self.actor.mate_scale
-        tokens = torch.stack([token_self, token_target, token_mate], dim=1)
-        tokens = tokens + self.actor.token_type_embed
-        attn_out, _attn_w = self.actor.attention(tokens, tokens, tokens)
-        tokens_out = tokens + attn_out
-
-        # Learned attention pooling
-        pool_scores = torch.matmul(
-            self.actor.attn_pool_query, tokens_out.transpose(1, 2))
-        pool_weights = torch.softmax(
-            pool_scores / np.sqrt(self.actor.d_model), dim=-1)
-        pooled = torch.matmul(pool_weights, tokens_out).squeeze(1)
-
-        # MLP feature extractor
-        feat = self.actor.mlp_head(pooled)  # [B, 256]
+        feat = self.actor.forward_features(local)  # [B, 256]
+        feat = torch.nan_to_num(feat, nan=0.0, posinf=100.0, neginf=-100.0)
 
         # ── 3. Categorical heads ────────────────────────────────────────
         turn_logits = self.turn_head(feat)    # [B, n_turn]
         speed_logits = self.speed_head(feat)  # [B, n_speed]
+
+        # NaN guard (GPU init can produce NaN on first batch)
+        turn_logits = torch.nan_to_num(turn_logits, nan=0.0, posinf=10.0, neginf=-10.0)
+        speed_logits = torch.nan_to_num(speed_logits, nan=0.0, posinf=10.0, neginf=-10.0)
+
         logits = torch.cat([turn_logits, speed_logits], dim=1)  # [B, 8]
 
         # ── 4. Action masking ───────────────────────────────────────────

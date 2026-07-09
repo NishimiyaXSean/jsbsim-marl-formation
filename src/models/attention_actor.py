@@ -254,6 +254,35 @@ class AttentionFormationActor(nn.Module):
             }
         return loc, scale
 
+    def forward_features(self, obs: torch.Tensor) -> torch.Tensor:
+        """Extract 256-dim intermediate features before the final output heads.
+
+        Used by discrete-action models that replace mean/scale with categorical heads.
+        """
+        if isinstance(obs, np.ndarray):
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+        if obs.dim() == 1:
+            obs = obs.unsqueeze(0)
+        batch = obs.shape[0]
+
+        self_feat, target_feat, mate_feat = segment_obs(obs)
+        token_self = self.self_proj(self_feat)
+        token_target = self.target_proj(target_feat)
+        token_mate = self.mate_proj(mate_feat) * self.mate_scale
+        tokens = torch.stack([token_self, token_target, token_mate], dim=1)
+        tokens = tokens + self.token_type_embed
+        attn_out, _attn_w = self.attention(tokens, tokens, tokens)
+        tokens_out = tokens + attn_out
+
+        pool_scores = torch.matmul(
+            self.attn_pool_query, tokens_out.transpose(1, 2))
+        pool_weights = F.softmax(
+            pool_scores / np.sqrt(self.d_model), dim=-1)
+        pooled = torch.matmul(pool_weights, tokens_out).squeeze(1)
+
+        feat = self.mlp_head(pooled)  # [B, 256]
+        return feat
+
     def set_mate_scale(self, scale: float):
         """Dynamically adjust mate token contribution (for curriculum training)."""
         self.mate_scale = scale
