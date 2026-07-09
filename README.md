@@ -1,6 +1,6 @@
 # jsbsim-marl-formation
 
-**Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics, Self-Attention CTDE, and RLlib MAPPO.
+**Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics, Self-Attention CTDE, RLlib MAPPO, and discrete tactical action primitives.
 
 >   **Academic Research Project** — *"Token-based CTDE with Self-Attention outperforms centralized PPO on cooperative 2v1 formation pursuit."*
 
@@ -13,16 +13,16 @@
 
 ##   Key Results
 
-| Experiment | Architecture | Reward | Notes |
-|-----------|-------------|--------|-------|
-| **SB3 Centralized (ceiling)** | 66-dim shared policy | +5,908 (92% capture) | Upper bound for 2v1 |
-| **Attention BC (no PPO)** | 33-dim CTDE | **+6,846** | Pure BC beats centralized PPO |
-| **Attention 1v1 BC+MAPPO** | 33-dim CTDE | +7,785 | Matches SB3 1v1 baseline |
-| **Dual-Actor Cooperative** | 33-dim × 2 decoupled | +5,078 (13.75% AND-gate) | First stable cooperative signal |
-| **RLlib Non-Cooperative** | 33-dim × 2 CTDE | −7,500 plateau | Confirms symmetry involution without coop rewards |
-| **Evasive Maneuvers** | 4 patterns × 20 episodes | 11/80 successes | Works against spiral/lissajous/weave |
+| Experiment | Architecture | Action Space | Reward | Notes |
+|-----------|-------------|-------------|--------|-------|
+| **SB3 Centralized (ceiling)** | 66-dim shared policy | Box(4) | +5,908 (92% capture) | Upper bound for 2v1 |
+| **Attention BC (no PPO)** | 33-dim CTDE | Box(2) | **+6,846** | Pure BC beats centralized PPO |
+| **MAPPO OR-gate (Exp 2)** | Shared Attn CTDE | Box(2) | **+7,888** | 33% above SB3 ceiling |
+| **MAPPO AND dynamic (Exp 3v3)** | Shared Attn CTDE | Box(2) | −1,171 (best) | Dynamic annealing 2000→800m |
+| **Discrete OR-gate (Exp 4a)** | Shared MLP CTDE | **MultiDiscrete(5,3)** | TBD | 15 tactical primitives + action masking |
+| **Evasive Maneuvers** | 4 patterns × 20 episodes | Box(2) | 11/80 successes | Works against spiral/lissajous/weave |
 
-> Pure behavior cloning with Self-Attention CTDE Actor achieves **+6,846** reward — **15% above** the centralized SB3 PPO ceiling (+5,908) that uses full 66-dim joint observations. The token-based modular architecture is more sample-efficient than flat concatenation. The **RLlib migration** (2026-07-07) replaced the custom PyTorch MAPPO pipeline with a scalable multi-agent infrastructure for NvM formation training.
+> The **RLlib migration** (2026-07-07) replaced custom PyTorch MAPPO with scalable multi-agent infrastructure. The **Discrete action migration** (2026-07-09) replaced Box(2) with 15 tactical primitives + safety action masking, targeting AND-gate convergence.
 
 ---
 
@@ -68,11 +68,16 @@
               MLP [256,256] → action_mean(2)
 ```
 
-Dual-Actor (P0/P1 decoupled via RLlib `multi_agent.policies`):
-  actor_p0 ≠ actor_p1  →  independent gradients
-  Independent Critics (P0/P1 reward structures differ)
+Parameter-Shared MAPPO (via RLlib `multi_agent.policies`):
+  shared_policy for both p0/p1  →  single Self-Attention Actor + Centralized Critic
+  Eliminates IPPO non-stationarity; Self-Attention provides position-invariant role differentiation
 
-**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization. The RLlib `TorchModelV2` API hosts the full Self-Attention architecture without compromise.
+Discrete Action Space (MultiDiscrete):
+  Turn:  HardLeft(−15°/s) | SoftLeft(−5°) | Straight(0°) | SoftRight(+5°) | HardRight(+15°)
+  Speed: Slow(180m/s) | Cruise(250m/s) | Fast(320m/s)
+  Action Masking: anti-stall, ground-proximity, overspeed protection
+
+**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization. The recent migration to discrete tactical primitives constrains exploration to semantically meaningful actions.
 
 ---
 
@@ -405,7 +410,7 @@ Quick checklist:
 - [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
 - [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
->   **RLlib is now the primary training framework** (migrated 2026-07-07). The Self-Attention Actor and Dual-Actor decoupling are fully hosted inside RLlib's `TorchModelV2` API via `formation_rllib_model.py`. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or the conda instructions above.
+>   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3], migrated 2026-07-09). The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or conda.
 
 ---
 
@@ -422,6 +427,53 @@ Quick checklist:
 | `tensorboard` | Training monitoring |
 | `matplotlib` | Trajectory plots |
 | `pyyaml` | Config file parsing |
+
+---
+
+##   Technical Roadmap
+
+### Three-Layer Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SCENARIO LAYER                            │
+│  FormationEnv → FormationRllibEnv (MultiAgentEnv)            │
+│  2v1 cooperative pursuit, NvM extensible                     │
+│  Cooperative modes: OR-gate → AND-gate (curriculum)          │
+│  Evasive targets: straight, spiral, lissajous, weave         │
+├─────────────────────────────────────────────────────────────┤
+│                   ALGORITHM LAYER                            │
+│  Parameter-Shared MAPPO (CTDE)                               │
+│  Self-Attention Actor: 33-dim → 3 tokens → MHA → action      │
+│  Tokenized Attention Critic: 21-dim → 3-entity Attn → value  │
+│  Discrete: MultiDiscrete([5,3]) + Categorical heads + masks  │
+│  Continuous: Box(2) + DiagGaussian (archived)                │
+├─────────────────────────────────────────────────────────────┤
+│                 INFRASTRUCTURE LAYER                         │
+│  JSBSim 6-DOF F-16 FDM → FlightController (60 Hz PID)       │
+│  RLlib MAPPO (Ray 2.40) → TorchModelV2 → shared_policy      │
+│  WSL2 + CUDA GPU passthrough                                 │
+│  Tacview ACMI export + TensorBoard + Matplotlib              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Evolution Path
+
+```
+Phase 1 (Jun):  SB3 shared-policy baseline → 97.3% ceiling sealed
+Phase 2 (Jul 1):  Self-Attention CTDE Actor → BC beats centralized PPO
+Phase 3 (Jul 2-3): Dual-Actor decoupling → first AND-gate positive avg10
+Phase 4 (Jul 7):  RLlib migration → IPPO → Parameter-Shared MAPPO
+Phase 5 (Jul 8):  OR-gate convergence (+7,888), AND-gate dynamic annealing
+Phase 6 (Jul 9):  Continuous → Discrete actions + Action Masking ← CURRENT
+```
+
+### Current Optimization Priorities
+
+1. **Discrete AND-gate**: Cold-start MultiDiscrete MAPPO under dynamic annealing
+2. **Self-Attention reactivation**: Fix forward_features() NaN to restore token-based architecture
+3. **Action mask expansion**: Fuel-aware, weapons-zone, tactical geometry masks
+4. **NvM scaling**: MultiDiscrete naturally supports >2 pursuer scenarios
 
 ---
 
