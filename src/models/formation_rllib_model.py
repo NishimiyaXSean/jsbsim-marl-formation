@@ -13,7 +13,6 @@ Key design decisions:
 
 from __future__ import annotations
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -100,18 +99,9 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
         # Track attention health
         self._last_attn_info = {}
 
-        # ── Double-insurance orthogonal init ────────────────────────────
-        self._init_weights(self.actor)
-        self._init_weights(self.critic)
-
-    @staticmethod
-    def _init_weights(module):
-        """SB3-validated orthogonal initialization for all Linear layers."""
-        for m in module.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0.0)
+        # ── Remove double-init: AttentionFormationActor has its own
+        #     careful init; re-initializing all Linear layers would
+        #     corrupt MHA's in_proj_weight and cause NaN on GPU
 
     def forward(self, input_dict, state, seq_lens):
         """Compute action logits and critic value.
