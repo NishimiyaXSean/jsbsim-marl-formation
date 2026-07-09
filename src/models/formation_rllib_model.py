@@ -76,6 +76,14 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
             mate_scale=mate_scale,
         )
 
+        # ── Simple MLP fallback (bypasses Self-Attention for NaN isolation) ─
+        self._fallback_mlp = nn.Sequential(
+            nn.Linear(self._local_dim, mlp_hidden),
+            nn.Tanh(),
+            nn.Linear(mlp_hidden, mlp_hidden),
+            nn.Tanh(),
+        )
+
         # ── Categorical output heads ─────────────────────────────────────
         self.turn_head = nn.Linear(mlp_hidden, self._n_turn)
         self.speed_head = nn.Linear(mlp_hidden, self._n_speed)
@@ -104,20 +112,15 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
         #     corrupt MHA's in_proj_weight and cause NaN on GPU
 
     def forward(self, input_dict, state, seq_lens):
-        """Compute action logits and critic value.
-
-        For discrete MultiDiscrete([5,3]): logits = [turn_logits(5) || speed_logits(3)] = 8-dim
-        Action masking applied: invalid actions get -inf logit.
-        """
+        """Compute action logits and critic value."""
         obs = input_dict["obs"]
 
-        # ── Extract local observation, global state, action mask ────────
         if isinstance(obs, dict):
-            local = obs["obs"].float()                  # [B, 33]
-            global_flat = obs["global_state"].float()   # [B, 21]
+            local = obs["obs"].float()
+            global_flat = obs["global_state"].float()
             action_mask = obs.get("action_mask", None)
             if action_mask is not None:
-                action_mask = action_mask.float()       # [B, 8]
+                action_mask = action_mask.float()
         else:
             local = obs[:, :self._local_dim].float()
             global_flat = obs[:, self._local_dim:].float()
@@ -125,44 +128,28 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
 
         batch_size = local.shape[0]
 
-        # ── 1. Critic: global_state → value ─────────────────────────────
+        # ── Critic ──────────────────────────────────────────────────
         if global_flat.shape[-1] == self._global_dim:
             global_tokens = global_flat.view(batch_size, 3, 7)
         else:
             g_dim = global_flat.shape[-1]
             if g_dim < self._global_dim:
-                pad = torch.zeros(batch_size, self._global_dim - g_dim,
-                                 device=global_flat.device)
+                pad = torch.zeros(batch_size, self._global_dim - g_dim, device=global_flat.device)
                 global_flat = torch.cat([global_flat, pad], dim=-1)
             else:
                 global_flat = global_flat[:, :self._global_dim]
             global_tokens = global_flat.view(batch_size, 3, 7)
+        self._last_value = self.critic(global_tokens)
 
-        self._last_value = self.critic(global_tokens)  # [B]
+        # ── Actor: fallback MLP → categorical heads ──────────────────
+        feat = self._fallback_mlp(local)
+        turn_logits = self.turn_head(feat)
+        speed_logits = self.speed_head(feat)
+        logits = torch.cat([turn_logits, speed_logits], dim=1)
 
-        # ── 2. Actor: local obs → intermediate features ─────────────────
-        feat = self.actor.forward_features(local)  # [B, 256]
-        feat = torch.nan_to_num(feat, nan=0.0, posinf=100.0, neginf=-100.0)
-
-        # ── 3. Categorical heads ────────────────────────────────────────
-        turn_logits = self.turn_head(feat)    # [B, n_turn]
-        speed_logits = self.speed_head(feat)  # [B, n_speed]
-
-        # NaN guard (GPU init can produce NaN on first batch)
-        turn_logits = torch.nan_to_num(turn_logits, nan=0.0, posinf=10.0, neginf=-10.0)
-        speed_logits = torch.nan_to_num(speed_logits, nan=0.0, posinf=10.0, neginf=-10.0)
-
-        logits = torch.cat([turn_logits, speed_logits], dim=1)  # [B, 8]
-
-        # ── 4. Action masking ───────────────────────────────────────────
+        # ── Action masking ───────────────────────────────────────────
         if action_mask is not None:
-            # Convert mask: 1=valid → 0, 0=invalid → -inf
-            inf_mask = torch.where(
-                action_mask > 0.5,
-                torch.zeros_like(logits),
-                torch.full_like(logits, float("-inf")),
-            )
-            logits = logits + inf_mask
+            logits = logits + (1.0 - action_mask) * (-1e9)
 
         return logits, state
 
