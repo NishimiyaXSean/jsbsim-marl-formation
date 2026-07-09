@@ -141,6 +141,7 @@ def train(
     cooperative: bool = True,
     warmup_steps: int = 0,
     load_bc: str | None = None,
+    resume_from: str | None = None,
     checkpoint_freq: int = 50,
     eval_interval: int = 25,
     eval_episodes: int = 20,
@@ -227,6 +228,22 @@ def train(
     coop_warmup_done = False
     best_avg_reward = -float("inf")
 
+    # If --resume-from is set, restore checkpoint and skip warmup
+    if resume_from:
+        print(f"\n[Resume] Restoring from: {resume_from}")
+        algo.restore(resume_from)
+        if cooperative and warmup_steps > 0:
+            coop_warmup_done = True
+            current_phase = COOP_PHASE_AND
+            print(f"[Resume] Warmup skipped — starting directly in AND-gate phase")
+            def set_and_phase(env):
+                if hasattr(env, 'set_coop_phase'):
+                    env.set_coop_phase(COOP_PHASE_AND)
+            try:
+                algo.env_runner_group.foreach_env(set_and_phase)
+            except Exception as e:
+                print(f"  [WARN] Could not set coop phase on workers: {e}")
+
     print(f"\n{'='*60}")
     print(f"RLlib MAPPO 2v1 Cooperative Formation Training")
     print(f"Run: {run_name}")
@@ -266,11 +283,13 @@ def train(
 
             # ── Cooperative phase switching ──────────────────────────────
             if cooperative and not coop_warmup_done and warmup_steps > 0:
-                total_env_steps = result.get("env_runners", {}).get(
-                    "num_env_steps_sampled", 0)
+                # Use iteration counter * train_batch_size as step estimate
+                # (RLlib old API doesn't expose num_env_steps_sampled reliably)
+                total_env_steps = (i + 1) * 8192
                 if total_env_steps >= warmup_steps:
                     print(f"\n>>> Phase 2: Switching to AND-gate "
-                          f"(800m/30°) at {total_env_steps} steps\n")
+                          f"(800m/30°) at iter {i+1} "
+                          f"(~{total_env_steps} steps)\n")
                     current_phase = COOP_PHASE_AND
                     coop_warmup_done = True
                     # Set phase on all env runners
@@ -399,6 +418,8 @@ if __name__ == "__main__":
                        help="Run evaluation every N iterations")
     parser.add_argument("--eval-episodes", type=int, default=20,
                        help="Number of evaluation episodes")
+    parser.add_argument("--resume-from", type=str, default=None,
+                       help="Resume from RLlib checkpoint directory")
 
     args = parser.parse_args()
 
@@ -417,6 +438,7 @@ if __name__ == "__main__":
         cooperative=args.cooperative,
         warmup_steps=args.warmup,
         load_bc=load_bc_path,
+        resume_from=args.resume_from,
         checkpoint_freq=args.checkpoint_freq,
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
