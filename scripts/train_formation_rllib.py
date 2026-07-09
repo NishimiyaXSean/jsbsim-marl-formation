@@ -141,6 +141,7 @@ def train(
     cooperative: bool = True,
     warmup_steps: int = 0,
     load_bc: str | None = None,
+    load_discrete_bc: str | None = None,
     resume_from: str | None = None,
     checkpoint_freq: int = 50,
     eval_interval: int = 25,
@@ -216,12 +217,14 @@ def train(
     print(f"[RLlib MAPPO] Algorithm built: {type(algo).__name__}")
 
     # ── BC weight hot-loading ─────────────────────────────────────────────
-    if load_bc:
-        success = load_bc_weights(algo, load_bc, ["shared_policy"])
+    bc_path = load_discrete_bc or load_bc
+    if bc_path:
+        success = load_bc_weights(algo, bc_path, ["shared_policy"])
         if not success:
             print("[BC Load] Continuing with random initialization...")
         else:
-            print("[BC Load] Successfully loaded BC weights into shared policy")
+            bc_type = "discrete" if load_discrete_bc else "continuous"
+            print(f"[BC Load] Successfully loaded {bc_type} BC weights into shared policy")
 
     # ── Training loop ─────────────────────────────────────────────────────
     current_phase = COOP_PHASE_OR
@@ -449,9 +452,11 @@ if __name__ == "__main__":
 
     # BC
     parser.add_argument("--load-bc", type=str, default=None,
-                       help="Path to BC pretrained checkpoint")
+                       help="Path to continuous BC checkpoint (legacy)")
+    parser.add_argument("--load-discrete-bc", type=str, default=None,
+                       help="Path to discrete BC checkpoint (MultiDiscrete)")
     parser.add_argument("--no-bc", action="store_true", default=False,
-                       help="Skip BC loading even if checkpoint available")
+                       help="Skip BC loading")
 
     # Checkpointing
     parser.add_argument("--checkpoint-freq", type=int, default=50,
@@ -466,13 +471,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     load_bc_path = None
-    if args.load_bc and not args.no_bc:
-        load_bc_path = args.load_bc
-    elif not args.no_bc:
-        # Default BC checkpoint
-        default_bc = "data/expert/attention_bc_2v1_filtered_pretrained.pth"
-        if os.path.exists(default_bc):
-            load_bc_path = default_bc
+    load_disc_bc_path = None
+    if not args.no_bc:
+        if args.load_discrete_bc:
+            load_disc_bc_path = args.load_discrete_bc
+        elif args.load_bc:
+            load_bc_path = args.load_bc
+        else:
+            # Default: prefer discrete BC if available
+            default_disc = "data/expert/discrete_attention_bc.pth"
+            if os.path.exists(default_disc):
+                load_disc_bc_path = default_disc
+            elif os.path.exists("data/expert/attention_bc_2v1_filtered_pretrained.pth"):
+                load_bc_path = "data/expert/attention_bc_2v1_filtered_pretrained.pth"
 
     train(
         iterations=args.iterations,
@@ -480,6 +491,7 @@ if __name__ == "__main__":
         cooperative=args.cooperative,
         warmup_steps=args.warmup,
         load_bc=load_bc_path,
+        load_discrete_bc=load_disc_bc_path,
         resume_from=args.resume_from,
         checkpoint_freq=args.checkpoint_freq,
         eval_interval=args.eval_interval,
