@@ -28,6 +28,7 @@ marl_runs/
 
 # Agent skills (installed via npx skills add)
 .agents/
+skills-lock.json
 
 # OS
 .DS_Store
