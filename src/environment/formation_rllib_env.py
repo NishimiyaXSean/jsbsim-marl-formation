@@ -110,6 +110,16 @@ SYNC_PACING_WEIGHT = 1.0              # penalty weight: (d1−d0)/1000 per step
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
 OBS_PER_PURSUER = 33
 
+# ── Discrete action space ──────────────────────────────────────────────────
+# MultiDiscrete([5, 3]) = 15 tactical primitives
+# Turn:  0=HardLeft(-15°/s), 1=SoftLeft(-5°), 2=Straight(0°), 3=SoftRight(+5°), 4=HardRight(+15°)
+# Speed: 0=Slow(180m/s), 1=Cruise(250m/s), 2=Fast(320m/s)
+TURN_RATES = [-15.0, -5.0, 0.0, 5.0, 15.0]
+SPEEDS     = [180.0, 250.0, 320.0]
+N_TURN = len(TURN_RATES)    # 5
+N_SPEED = len(SPEEDS)       # 3
+N_ACTIONS = N_TURN + N_SPEED  # 8 total logits
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Internal state dataclasses
@@ -218,8 +228,9 @@ class FormationRLlibEnv(MultiAgentEnv):
         single_obs = gym.spaces.Dict({
             "obs": gym.spaces.Box(-1.0, 1.0, (OBS_PER_PURSUER,), dtype=np.float32),
             "global_state": gym.spaces.Box(-1.0, 1.0, (self._global_dim,), dtype=np.float32),
+            "action_mask": gym.spaces.Box(0.0, 1.0, (N_ACTIONS,), dtype=np.float32),
         })
-        single_act = gym.spaces.Box(-1.0, 1.0, (2,), dtype=np.float32)
+        single_act = gym.spaces.MultiDiscrete([N_TURN, N_SPEED])
 
         self.observation_space = gym.spaces.Dict({
             aid: single_obs for aid in self._agent_ids
@@ -363,21 +374,18 @@ class FormationRLlibEnv(MultiAgentEnv):
         """
         dt = PHYSICS_DT
 
-        # 🔴 CRITICAL: Clamp actions to [-1, 1] — DiagGaussian produces unbounded samples
-        for aid in list(action_dict.keys()):
-            action_dict[aid] = np.clip(
-                np.asarray(action_dict[aid], dtype=np.float32), -1.0, 1.0)
-
-        # Parse per-pursuer actions
+        # Parse discrete actions → physical flight control targets
         actions = {}
         for i, aid in enumerate(self._agent_ids):
-            a = action_dict.get(aid, np.zeros(2, dtype=np.float32))
-            a = np.clip(np.asarray(a, dtype=np.float32), -1.0, 1.0)
+            a = action_dict.get(aid, np.array([2, 1], dtype=np.int64))  # default: straight+cruise
+            a = np.asarray(a, dtype=np.int64)
+            turn_idx = int(np.clip(a[0], 0, N_TURN - 1))
+            speed_idx = int(np.clip(a[1], 0, N_SPEED - 1))
             actions[aid] = {
-                'turn': float(a[0]),
-                'speed': float(a[1]),
-                'cmd_turn_rate': float(a[0] * 15.0),
-                'cmd_speed': float(250.0 + a[1] * 100.0),
+                'turn_idx': turn_idx,
+                'speed_idx': speed_idx,
+                'cmd_turn_rate': TURN_RATES[turn_idx],
+                'cmd_speed': SPEEDS[speed_idx],
             }
 
         terminated = False
@@ -710,12 +718,51 @@ class FormationRLlibEnv(MultiAgentEnv):
         obs = {}
         for i, (ps, aid) in enumerate(zip(self.pursuers, self._agent_ids)):
             local = self._build_local_obs(i, ps, target_pos, target_vel)
+            mask = self._build_action_mask(ps)
             obs[aid] = {
                 "obs": local.astype(np.float32),
                 "global_state": global_state,
+                "action_mask": mask.astype(np.float32),
             }
 
         return obs
+
+    def _build_action_mask(self, ps) -> np.ndarray:
+        """Build action mask [8] based on flight safety constraints.
+
+        Returns binary mask where 1=allowed, 0=forbidden.
+        Layout: [turn_0, ..., turn_4, speed_0, speed_1, speed_2]
+        """
+        mask = np.ones(N_ACTIONS, dtype=np.float32)
+
+        airspeed = float(ps.aircraft.state["airspeed_mps"])
+        alt_m = float(ps.aircraft.state["alt_m"])
+        nz_g = float(ps.aircraft.state.get("n_z_g", 1.0))
+
+        # ── Low-speed protection ──────────────────────────────────────────
+        # Below stall warning: forbid slow speed and hard turns (high AoA risk)
+        if airspeed < ANTI_STALL_SPEED_WARN:
+            mask[5] = 0.0   # forbid speed=Slow (need energy)
+            mask[0] = 0.0   # forbid HardLeft (high drag)
+            mask[4] = 0.0   # forbid HardRight (high drag)
+
+        # ── Ground proximity protection ───────────────────────────────────
+        # Very low altitude: forbid hard turns (risk of spiral into ground)
+        if alt_m < 200.0:
+            mask[0] = 0.0   # forbid HardLeft
+            mask[4] = 0.0   # forbid HardRight
+            if alt_m < 100.0 and nz_g > 2.0:
+                mask[0] = 0.0
+                mask[1] = 0.0  # forbid SoftLeft
+                mask[3] = 0.0  # forbid SoftRight
+                mask[4] = 0.0  # only allow Straight
+
+        # ── Overspeed protection ──────────────────────────────────────────
+        # Near max speed: forbid Fast (structural limits)
+        if airspeed > MAX_VEL * 0.95:
+            mask[7] = 0.0   # forbid speed=Fast
+
+        return mask
 
     def _build_local_obs(self, idx, ps, target_pos, target_vel):
         """33-dim per-pursuer local observation (matches FormationEnv)."""

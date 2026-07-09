@@ -204,7 +204,7 @@ def train(
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=0.01,
+            entropy_coeff=0.03,          # higher for discrete exploration
             vf_clip_param=1000.0,
             grad_clip=0.5,
             model={"vf_share_layers": False},
@@ -254,6 +254,7 @@ def train(
     print(f"Iterations: {iterations}  |  Difficulty: {difficulty:.2f}  |  Seed: {seed}")
     print(f"BC Pretrain: {load_bc or 'None'}")
     print(f"Architecture: Parameter-Shared MAPPO (shared_policy for p0/p1)")
+    print(f"Action Space: MultiDiscrete([5 turn, 3 speed]) = 15 primitives")
     print(f"Decision Rate: 5 Hz (DECISION_DT=0.2s)")
     print(f"{'='*60}\n")
 

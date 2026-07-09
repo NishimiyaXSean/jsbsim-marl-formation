@@ -47,26 +47,43 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
                               num_outputs, model_config, name)
         nn.Module.__init__(self)
 
-        # Derive dimensions from observation space (robust, not hardcoded)
-        # RLlib wraps the original space → use original_space if available
+        # Derive dimensions from observation space
         orig = getattr(obs_space, "original_space", obs_space)
         self._local_dim = orig["obs"].shape[0]       # 33
         self._global_dim = orig["global_state"].shape[0]  # 21
-        self._act_dim = action_space.shape[0]  # 2
 
-        # num_outputs should be 2 * act_dim (mean + log_std for each action)
-        assert num_outputs == 2 * self._act_dim, \
-            f"Expected num_outputs={2*self._act_dim}, got {num_outputs}"
+        # Discrete action space: MultiDiscrete([n_turn, n_speed])
+        if hasattr(action_space, "nvec"):
+            self._n_turn = int(action_space.nvec[0])
+            self._n_speed = int(action_space.nvec[1])
+        else:
+            self._n_turn = 5
+            self._n_speed = 3
 
-        # ── Embed full AttentionFormationActor ──────────────────────────
+        # num_outputs = n_turn + n_speed (categorical logits concatenated)
+        assert num_outputs == self._n_turn + self._n_speed, \
+            f"Expected num_outputs={self._n_turn + self._n_speed}, got {num_outputs}"
+        self._n_actions_total = num_outputs
+
+        # ── Embed full AttentionFormationActor (feature extractor) ──────
+        # The actor's MLP head outputs [B, mlp_hidden] features.
+        # We replace its final mean layer with categorical heads.
         self.actor = AttentionFormationActor(
             obs_dim=self._local_dim,
-            act_dim=self._act_dim,
+            act_dim=2,  # dummy — we replace output heads
             d_model=d_model,
             n_heads=n_heads,
             mlp_hidden=mlp_hidden,
             mate_scale=mate_scale,
         )
+
+        # ── Categorical output heads ─────────────────────────────────────
+        self.turn_head = nn.Linear(mlp_hidden, self._n_turn)
+        self.speed_head = nn.Linear(mlp_hidden, self._n_speed)
+        nn.init.orthogonal_(self.turn_head.weight, gain=0.01)
+        nn.init.constant_(self.turn_head.bias, 0.0)
+        nn.init.orthogonal_(self.speed_head.weight, gain=0.01)
+        nn.init.constant_(self.speed_head.bias, 0.0)
 
         # ── Embed full AttentionCritic ─────────────────────────────────
         # Critic expects (B, 3, 7) token sequence: [Self, Mate, Target]
@@ -99,35 +116,29 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
     def forward(self, input_dict, state, seq_lens):
         """Compute action logits and critic value.
 
-        Args:
-            input_dict: RLlib-provided dict with "obs" key
-            state: RNN state (unused)
-            seq_lens: Sequence lengths (unused)
-
-        Returns:
-            (logits, state) where logits = [mean(2), log_std(2)] = 4-dim
+        For discrete MultiDiscrete([5,3]): logits = [turn_logits(5) || speed_logits(3)] = 8-dim
+        Action masking applied: invalid actions get -inf logit.
         """
         obs = input_dict["obs"]
 
-        # ── Extract local observation and global state ──────────────────
-        # RLlib may present obs as nested dict or flat tensor
+        # ── Extract local observation, global state, action mask ────────
         if isinstance(obs, dict):
             local = obs["obs"].float()                  # [B, 33]
             global_flat = obs["global_state"].float()   # [B, 21]
+            action_mask = obs.get("action_mask", None)
+            if action_mask is not None:
+                action_mask = action_mask.float()       # [B, 8]
         else:
-            # Fallback: split flat tensor
             local = obs[:, :self._local_dim].float()
             global_flat = obs[:, self._local_dim:].float()
+            action_mask = None
 
         batch_size = local.shape[0]
 
         # ── 1. Critic: global_state → value ─────────────────────────────
-        #    Reshape flat [B,21] → token sequence [B,3,7]
-        #    Order: [Self(0), Mate(1), Target(2)]
         if global_flat.shape[-1] == self._global_dim:
             global_tokens = global_flat.view(batch_size, 3, 7)
         else:
-            # Safety: if dimensions don't match, pad or truncate
             g_dim = global_flat.shape[-1]
             if g_dim < self._global_dim:
                 pad = torch.zeros(batch_size, self._global_dim - g_dim,
@@ -139,15 +150,45 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
 
         self._last_value = self.critic(global_tokens)  # [B]
 
-        # ── 2. Actor: local obs → action distribution params ────────────
-        loc, scale = self.actor(local)  # loc=[B,2], scale=[B,2]
+        # ── 2. Actor: local obs → intermediate features ─────────────────
+        # Re-use AttentionFormationActor's token processing pipeline
+        # but replace final mean/scale output with categorical heads
+        import numpy as np
+        from src.models.attention_actor import segment_obs
 
-        # Clamp scale to prevent NaN/Inf in log
-        scale = torch.clamp(scale, min=1e-6, max=1e6)
+        self_feat, target_feat, mate_feat = segment_obs(local)
+        token_self = self.actor.self_proj(self_feat)
+        token_target = self.actor.target_proj(target_feat)
+        token_mate = self.actor.mate_proj(mate_feat) * self.actor.mate_scale
+        tokens = torch.stack([token_self, token_target, token_mate], dim=1)
+        tokens = tokens + self.actor.token_type_embed
+        attn_out, _attn_w = self.actor.attention(tokens, tokens, tokens)
+        tokens_out = tokens + attn_out
 
-        # ── 3. Build logits = mean || log_std ────────────────────────────
-        log_std = torch.log(scale)
-        logits = torch.cat([loc, log_std], dim=1)  # [B, 4]
+        # Learned attention pooling
+        pool_scores = torch.matmul(
+            self.actor.attn_pool_query, tokens_out.transpose(1, 2))
+        pool_weights = torch.softmax(
+            pool_scores / np.sqrt(self.actor.d_model), dim=-1)
+        pooled = torch.matmul(pool_weights, tokens_out).squeeze(1)
+
+        # MLP feature extractor
+        feat = self.actor.mlp_head(pooled)  # [B, 256]
+
+        # ── 3. Categorical heads ────────────────────────────────────────
+        turn_logits = self.turn_head(feat)    # [B, n_turn]
+        speed_logits = self.speed_head(feat)  # [B, n_speed]
+        logits = torch.cat([turn_logits, speed_logits], dim=1)  # [B, 8]
+
+        # ── 4. Action masking ───────────────────────────────────────────
+        if action_mask is not None:
+            # Convert mask: 1=valid → 0, 0=invalid → -inf
+            inf_mask = torch.where(
+                action_mask > 0.5,
+                torch.zeros_like(logits),
+                torch.full_like(logits, float("-inf")),
+            )
+            logits = logits + inf_mask
 
         return logits, state
 
