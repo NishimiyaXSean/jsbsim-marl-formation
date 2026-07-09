@@ -141,8 +141,8 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
             global_tokens = global_flat.view(batch_size, 3, 7)
         self._last_value = self.critic(global_tokens)
 
-        # ── Actor: fallback MLP → categorical heads ──────────────────
-        feat = self._fallback_mlp(local)
+        # ── Actor: Self-Attention token pipeline → categorical heads ──
+        feat = self.actor.forward_features(local)  # [B, 256]
         turn_logits = self.turn_head(feat)
         speed_logits = self.speed_head(feat)
         logits = torch.cat([turn_logits, speed_logits], dim=1)
