@@ -26,6 +26,9 @@ data/tacview/
 ray_results/
 marl_runs/
 
+# Agent skills (installed via npx skills add)
+.agents/
+
 # OS
 .DS_Store
 Thumbs.db
