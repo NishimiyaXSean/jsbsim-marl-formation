@@ -125,15 +125,19 @@ def plot_3d_trajectories(ep_data: dict, save_path: str):
     ax.set_ylabel("North (m)", labelpad=8)
     ax.set_zlabel("Altitude (m)", labelpad=8)
 
-    # Equal aspect ratio on horizontal plane
+    # Equal aspect ratio on horizontal plane; altitude compressed
     x_lim = ax.get_xlim()
     y_lim = ax.get_ylim()
     z_lim = ax.get_zlim()
     xy_range = max(x_lim[1] - x_lim[0], y_lim[1] - y_lim[0])
     x_mid = (x_lim[0] + x_lim[1]) / 2
     y_mid = (y_lim[0] + y_lim[1]) / 2
+    z_mid = (z_lim[0] + z_lim[1]) / 2
+    # X:Y:Z = 1:1:0.1 — altitude compressed to prevent visual exaggeration
+    z_range = xy_range * 0.1
     ax.set_xlim(x_mid - xy_range/2, x_mid + xy_range/2)
     ax.set_ylim(y_mid - xy_range/2, y_mid + xy_range/2)
+    ax.set_zlim(z_mid - z_range/2, z_mid + z_range/2)
 
     ax.grid(True, alpha=0.3, color=COLORS["grid"])
     ax.xaxis.pane.fill = False

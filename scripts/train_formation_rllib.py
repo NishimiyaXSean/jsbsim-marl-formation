@@ -229,13 +229,16 @@ def train(
     best_avg_reward = -float("inf")
 
     # If --resume-from is set, restore checkpoint and skip warmup
+    and_start_iter = 0
     if resume_from:
         print(f"\n[Resume] Restoring from: {resume_from}")
         algo.restore(resume_from)
         if cooperative and warmup_steps > 0:
             coop_warmup_done = True
             current_phase = COOP_PHASE_AND
+            and_start_iter = 0  # start annealing from iter 0 after resume
             print(f"[Resume] Warmup skipped — starting directly in AND-gate phase")
+            print(f"[Resume] AND distance curriculum: 2000m → 800m")
             def set_and_phase(env):
                 if hasattr(env, 'set_coop_phase'):
                     env.set_coop_phase(COOP_PHASE_AND)
@@ -287,11 +290,14 @@ def train(
                 # (RLlib old API doesn't expose num_env_steps_sampled reliably)
                 total_env_steps = (i + 1) * 8192
                 if total_env_steps >= warmup_steps:
-                    print(f"\n>>> Phase 2: Switching to AND-gate "
-                          f"(800m/30°) at iter {i+1} "
-                          f"(~{total_env_steps} steps)\n")
                     current_phase = COOP_PHASE_AND
                     coop_warmup_done = True
+                    and_start_iter = i + 1
+                    print(f"\n>>> Phase 2: Switching to AND-gate "
+                          f"at iter {and_start_iter} "
+                          f"(~{total_env_steps} steps)")
+                    print(f"    AND distance: 2000m → 800m "
+                          f"(linear decay over {200 - and_start_iter} iters)\n")
                     # Set phase on all env runners
                     def set_and_phase(env):
                         if hasattr(env, 'set_coop_phase'):
@@ -301,10 +307,42 @@ def train(
                     except Exception as e:
                         print(f"  [WARN] Could not set coop phase on workers: {e}")
 
+            # ── Dynamic AND-distance annealing (Phase 2 only) ────────────
+            if coop_warmup_done and cooperative:
+                # Linear decay: 2000m → 800m over [and_start_iter, 200]
+                from src.environment.formation_rllib_env import (
+                    COOP_PHASE2_AND_DIST_INIT, COOP_PHASE2_AND_DIST)
+                decay_end_iter = 200
+                if i < decay_end_iter:
+                    decay_progress = (i - and_start_iter) / max(decay_end_iter - and_start_iter, 1)
+                    decay_progress = max(0.0, min(1.0, decay_progress))
+                    current_and_dist = (COOP_PHASE2_AND_DIST_INIT -
+                                       decay_progress *
+                                       (COOP_PHASE2_AND_DIST_INIT - COOP_PHASE2_AND_DIST))
+                else:
+                    current_and_dist = COOP_PHASE2_AND_DIST
+
+                # Broadcast to workers every 5 iters (or on significant change)
+                if i % 5 == 0 or i == and_start_iter:
+                    dist_val = current_and_dist
+                    def set_dist(env):
+                        if hasattr(env, 'set_and_distance'):
+                            env.set_and_distance(dist_val)
+                    try:
+                        algo.env_runner_group.foreach_env(set_dist)
+                    except Exception:
+                        pass
+
+                # Also set on the eval env (run_evaluation uses a standalone env)
+                if i % 10 == 0:
+                    print(f"    [AND-curriculum] iter={i+1:3d}  "
+                          f"AND_dist={current_and_dist:.0f}m")
+
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
                 eval_rewards = run_evaluation(
-                    algo, eval_episodes, difficulty, current_phase, cooperative)
+                    algo, eval_episodes, difficulty, current_phase, cooperative,
+                    and_distance=current_and_dist if coop_warmup_done else None)
                 avg_eval = np.mean(eval_rewards) if eval_rewards else 0.0
                 print(f"  [EVAL] iter={i+1:4d}  avg_rew={avg_eval:8.1f}  "
                       f"n={len(eval_rewards)}")
@@ -338,7 +376,8 @@ def train(
 
 
 def run_evaluation(algo, n_episodes: int, difficulty: float,
-                   coop_phase: int, cooperative_mode: bool = True) -> list[float]:
+                   coop_phase: int, cooperative_mode: bool = True,
+                   and_distance: float | None = None) -> list[float]:
     """Evaluate the current policy in a separate env instance.
 
     Returns per-episode total reward.
@@ -351,6 +390,8 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
     })
     if cooperative_mode:
         env.set_coop_phase(coop_phase)
+    if and_distance is not None:
+        env.set_and_distance(and_distance)
     env._difficulty = difficulty
 
     episode_rewards = []

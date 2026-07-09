@@ -84,7 +84,8 @@ PINCER_DIST_MAX = 2000.0
 COOP_PHASE_OR = 0
 COOP_PHASE_AND = 1
 COOP_PHASE1_OR_DIST = 200.0
-COOP_PHASE2_AND_DIST = 800.0
+COOP_PHASE2_AND_DIST = 800.0       # final target (after annealing)
+COOP_PHASE2_AND_DIST_INIT = 2000.0  # initial value for dynamic annealing
 COOP_PHASE2_AND_ANGLE = 30.0
 COOP_SUSTAIN_STEPS = 6
 
@@ -99,6 +100,11 @@ ASYMMETRIC_HEADING_OFF = 120.0
 DIST_ASYMMETRY_THRESH = 500.0   # start penalizing when dist diff > 500m
 DIST_ASYMMETRY_WEIGHT = 0.5     # penalty coefficient per m over threshold
 DIST_ASYMMETRY_NORM = 1000.0    # normalization factor
+
+# Time-sync pacing penalty (prevents Striker from rushing ahead alone)
+SYNC_PACING_STRIKER_DIST = 1200.0   # Striker within this range triggers sync check
+SYNC_PACING_INTERCEPTOR_DIST = 1500.0  # Interceptor beyond this range → too far behind
+SYNC_PACING_WEIGHT = 1.0              # penalty weight: (d1−d0)/1000 per step
 
 # Global state: per-entity features
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
@@ -185,6 +191,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._striker_idx: int = 0
         self._coop_sustain_counter: int = 0
         self._coop_phase: int = COOP_PHASE_OR
+        self._and_dist: float = COOP_PHASE2_AND_DIST_INIT  # dynamic, annealed from outside
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -563,10 +570,23 @@ class FormationRLlibEnv(MultiAgentEnv):
                     for aid in self._agent_ids:
                         rewards[aid] -= asymmetry_penalty
 
+                # Time-sync pacing penalty — prevent striker rushing ahead alone
+                # If striker is within kill zone but interceptor is far behind,
+                # penalize the team for tactical desynchronization
+                d_striker = pursuer_dists[self._striker_idx]
+                d_interceptor = pursuer_dists[1 - self._striker_idx]
+                if (d_striker < SYNC_PACING_STRIKER_DIST and
+                        d_interceptor > SYNC_PACING_INTERCEPTOR_DIST):
+                    sync_penalty = (SYNC_PACING_WEIGHT *
+                                   (d_interceptor - d_striker) /
+                                   1000.0 * dt)
+                    for aid in self._agent_ids:
+                        rewards[aid] -= sync_penalty
+
                 # Cooperative success (phase-aware)
                 if self._coop_phase == COOP_PHASE_AND:
-                    both_in_kill = (d0 < COOP_PHASE2_AND_DIST and
-                                   d1 < COOP_PHASE2_AND_DIST and
+                    both_in_kill = (d0 < self._and_dist and
+                                   d1 < self._and_dist and
                                    pincer_angle >= COOP_PHASE2_AND_ANGLE)
                     if both_in_kill:
                         self._coop_sustain_counter += 1
@@ -808,6 +828,18 @@ class FormationRLlibEnv(MultiAgentEnv):
             phase: COOP_PHASE_OR (0) or COOP_PHASE_AND (1)
         """
         self._coop_phase = int(phase)
+
+    def set_and_distance(self, dist: float) -> None:
+        """Dynamically adjust AND-gate distance threshold (for curriculum annealing).
+
+        Args:
+            dist: New AND-gate distance threshold in meters (clamped ≥ 800)
+        """
+        self._and_dist = max(COOP_PHASE2_AND_DIST, float(dist))
+
+    @property
+    def and_distance(self) -> float:
+        return self._and_dist
 
     @property
     def cooperation_phase(self) -> int:
