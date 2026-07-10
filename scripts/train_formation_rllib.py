@@ -209,6 +209,12 @@ def train(
     print(f"Observation space (p0): {obs_space_p0}")
     print(f"Action space (p0):      {act_space_p0}")
 
+    # ── BC path resolution + LR auto-adjust (must be before config) ──────
+    bc_path = load_discrete_bc or load_bc
+    if lr is None:
+        lr = 2e-4 if bc_path else 3e-4
+    print(f"[LR] lr={lr:.1e} ({'BC hotstart — 0.67× cold-start' if bc_path else 'cold-start — standard'})")
+
     # ── PPOConfig with Parameter-Shared MAPPO ──────────────────────────
     config = (
         PPOConfig()
@@ -254,11 +260,7 @@ def train(
     algo = config.build()
     print(f"[RLlib MAPPO] Algorithm built: {type(algo).__name__}")
 
-    # ── LR auto-adjust: BC hotstart → 0.67× base LR to protect pretrained features ─
-    bc_path = load_discrete_bc or load_bc
-    if lr is None:
-        lr = 2e-4 if bc_path else 3e-4
-    print(f"[LR] lr={lr:.1e} ({'BC hotstart — reduced to 0.67×' if bc_path and lr == 2e-4 else 'cold-start — standard'})")
+    # ── BC weight hot-loading ─────────────────────────────────────────────
     if bc_path:
         success = load_bc_weights(algo, bc_path, ["shared_policy"])
         if not success:
