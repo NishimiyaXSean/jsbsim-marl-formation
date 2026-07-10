@@ -277,16 +277,19 @@ def plot_fig3(grouped: dict, save_path: str):
                     edgecolor="white", linewidth=0.5,
                     label=f"Interceptor (n={len(i_pool)})")
 
-    # Annotate significance
+    # Annotate significance with explicit p-value labels
     for idx in range(3):
         diff = s_pool_mean[idx] - i_pool_mean[idx]
         se_diff = np.sqrt(s_pool_sem[idx]**2 + i_pool_sem[idx]**2)
         z = abs(diff) / max(se_diff, 1e-9)
-        sig = "***" if z > 3 else "**" if z > 2 else "*" if z > 1.5 else "ns"
+        if z > 3: sig = "p<0.001"
+        elif z > 2: sig = "p<0.01"
+        elif z > 1.5: sig = "p<0.05"
+        else: sig = "n.s."
         y_max = max(s_pool_mean[idx] + s_pool_sem[idx],
                     i_pool_mean[idx] + i_pool_sem[idx])
         ax3.text(x[idx], y_max + 0.02, sig, ha="center", fontsize=8,
-                 fontweight="bold" if sig != "ns" else "normal")
+                 fontweight="bold" if sig != "n.s." else "normal")
 
     ax3.axhline(y=1/3, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
     ax3.text(2.5, 1/3, "uniform (1/3)", fontsize=6, va="center", color="gray")
@@ -296,7 +299,7 @@ def plot_fig3(grouped: dict, save_path: str):
     ax3.set_ylabel("Pool Weight", fontsize=9)
     ax3.set_ylim(0, 0.7)
     ax3.set_title("Learned Attention Pooling by Role\n"
-                   "(mean ± SEM, *** p<0.001 by z-test)",
+                   "(mean +- SEM, significance by z-test)",
                    fontsize=9)
     ax3.legend(fontsize=8, framealpha=0.8)
     ax3.grid(True, alpha=0.2, axis="y")
