@@ -60,18 +60,22 @@ def env_creator(config: EnvContext):
 def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
     """Inject BC-pretrained Actor weights into RLlib policies.
 
-    Maps AttentionFormationActor state_dict keys from the BC checkpoint
-    into RLlib's TorchModelV2 namespace (prefix: "actor.").
+    Supports two checkpoint formats:
+      1. Continuous BC:
+         {"actor_state": AttentionFormationActor.state_dict(), "val_loss": ..., "epoch": ...}
+      2. Discrete BC:
+         {"actor_state": AttentionFormationActor.state_dict(),   ← backbone
+          "turn_head.weight": ..., "turn_head.bias": ...,         ← discrete heads (top-level)
+          "speed_head.weight": ..., "speed_head.bias": ...,
+          "val_loss": ..., "epoch": ...}
 
-    BC checkpoint format:
-      {"actor_state": AttentionFormationActor.state_dict(), "val_loss": ..., "epoch": ...}
-    or:
-      {"actor": AttentionFormationActor.state_dict(), ...}
+    Backbone keys are prefixed with "actor." (RLlibAttentionActor.actor).
+    Discrete head keys map directly (RLlibAttentionActor.turn_head / .speed_head).
 
     Args:
         algo: Built RLlib PPO algorithm instance.
         bc_ckpt_path: Path to BC checkpoint .pth file.
-        policy_ids: List of policy IDs to load weights into (e.g., ["p0_policy", "p1_policy"]).
+        policy_ids: List of policy IDs to load weights into (e.g., ["shared_policy"]).
 
     Returns:
         True if successful, False if checkpoint couldn't be loaded.
@@ -82,7 +86,14 @@ def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
         print(f"[BC Load] ERROR: Cannot load checkpoint: {e}")
         return False
 
-    # Determine the correct key for actor state dict
+    # ── Determine discrete vs continuous ───────────────────────────────────
+    DISCRETE_HEAD_KEYS = {
+        "turn_head.weight", "turn_head.bias",
+        "speed_head.weight", "speed_head.bias",
+    }
+    has_discrete_heads = any(k in bc_ckpt for k in DISCRETE_HEAD_KEYS)
+
+    # Determine the backbone state dict key
     if "actor_state" in bc_ckpt:
         bc_state = bc_ckpt["actor_state"]
         key_name = "actor_state"
@@ -93,22 +104,28 @@ def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
         print(f"[BC Load] ERROR: Unknown checkpoint format. Keys: {list(bc_ckpt.keys())}")
         return False
 
-    print(f"[BC Load] Loading BC weights from '{key_name}' "
-          f"({len(bc_state)} params, val_loss={bc_ckpt.get('val_loss', 'N/A')})")
+    bc_type = "discrete" if has_discrete_heads else "continuous"
+    print(f"[BC Load] Loading {bc_type} BC weights from '{key_name}' "
+          f"({len(bc_state)} backbone params, val_loss={bc_ckpt.get('val_loss', 'N/A')})")
+    if has_discrete_heads:
+        tw = bc_ckpt.get('turn_head.weight', None)
+        sw = bc_ckpt.get('speed_head.weight', None)
+        print(f"[BC Load]   + discrete heads: turn_head ({tw.shape if tw is not None else 'N/A'}), "
+              f"speed_head ({sw.shape if sw is not None else 'N/A'})")
 
     for policy_id in policy_ids:
         policy = algo.get_policy(policy_id)
         rllib_model = policy.model  # RLlibAttentionActor instance
 
-        # Map BC keys to RLlib namespace: bc_key → "actor.{bc_key}"
         rllib_state = rllib_model.state_dict()
         mapped_state = {}
         skipped = 0
+        head_loaded = 0
 
+        # ── Phase 1: Backbone keys (actor_state → "actor.*") ───────────
         for bc_key, bc_val in bc_state.items():
             rllib_key = f"actor.{bc_key}"
             if rllib_key in rllib_state:
-                # Check shape match
                 if rllib_state[rllib_key].shape == bc_val.shape:
                     mapped_state[rllib_key] = bc_val
                 else:
@@ -118,6 +135,25 @@ def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
             else:
                 skipped += 1
 
+        # ── Phase 2: Discrete head keys (top-level → direct mapping) ───
+        if has_discrete_heads:
+            for bc_key in DISCRETE_HEAD_KEYS:
+                if bc_key not in bc_ckpt:
+                    continue
+                bc_val = bc_ckpt[bc_key]
+                # Direct mapping: turn_head.weight → turn_head.weight (no prefix)
+                if bc_key in rllib_state:
+                    if rllib_state[bc_key].shape == bc_val.shape:
+                        mapped_state[bc_key] = bc_val
+                        head_loaded += 1
+                    else:
+                        print(f"  [WARN] Shape mismatch for discrete head {bc_key}: "
+                              f"RLlib={rllib_state[bc_key].shape}, BC={bc_val.shape}")
+                        skipped += 1
+                else:
+                    print(f"  [WARN] Discrete head key {bc_key} not found in RLlib model")
+                    skipped += 1
+
         if not mapped_state:
             print(f"[BC Load] WARNING: No keys matched for {policy_id}. "
                   f"Available RLlib keys: {list(rllib_state.keys())[:5]}...")
@@ -125,7 +161,8 @@ def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
 
         # Load with strict=False: Critic keys (not in BC) stay random-initialized
         missing, unexpected = rllib_model.load_state_dict(mapped_state, strict=False)
-        print(f"[BC Load] {policy_id}: loaded {len(mapped_state)} keys, "
+        print(f"[BC Load] {policy_id}: loaded {len(mapped_state)} keys "
+              f"(backbone={len(mapped_state) - head_loaded}, heads={head_loaded}), "
               f"skipped={skipped}, missing_critic={len(missing)}")
 
     return True
@@ -146,6 +183,7 @@ def train(
     checkpoint_freq: int = 50,
     eval_interval: int = 25,
     eval_episodes: int = 20,
+    lr: float | None = None,
     seed: int = 42,
 ):
     # ── Setup ────────────────────────────────────────────────────────────
@@ -198,7 +236,7 @@ def train(
             policies_to_train=["shared_policy"],
         )
         .training(
-            lr=3e-4,
+            lr=lr,
             train_batch_size=8192,
             minibatch_size=1024,
             num_epochs=10,
@@ -216,8 +254,11 @@ def train(
     algo = config.build()
     print(f"[RLlib MAPPO] Algorithm built: {type(algo).__name__}")
 
-    # ── BC weight hot-loading ─────────────────────────────────────────────
+    # ── LR auto-adjust: BC hotstart → 0.67× base LR to protect pretrained features ─
     bc_path = load_discrete_bc or load_bc
+    if lr is None:
+        lr = 2e-4 if bc_path else 3e-4
+    print(f"[LR] lr={lr:.1e} ({'BC hotstart — reduced to 0.67×' if bc_path and lr == 2e-4 else 'cold-start — standard'})")
     if bc_path:
         success = load_bc_weights(algo, bc_path, ["shared_policy"])
         if not success:
@@ -459,6 +500,8 @@ if __name__ == "__main__":
                        help="Skip BC loading")
 
     # Checkpointing
+    parser.add_argument("--lr", type=float, default=None,
+                       help="Learning rate (default: 2e-4 with BC, 3e-4 cold-start)")
     parser.add_argument("--checkpoint-freq", type=int, default=50,
                        help="Save checkpoint every N iterations")
     parser.add_argument("--eval-interval", type=int, default=25,
@@ -496,5 +539,6 @@ if __name__ == "__main__":
         checkpoint_freq=args.checkpoint_freq,
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
+        lr=args.lr,
         seed=args.seed,
     )
