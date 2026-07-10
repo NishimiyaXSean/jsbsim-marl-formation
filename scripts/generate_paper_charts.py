@@ -73,8 +73,8 @@ def chart1_action_distribution():
         return result / result.sum()
 
     np.random.seed(42)
-    turn_names = ["急左转", "缓左转", "直飞", "缓右转", "急右转"]
-    speed_names = ["慢速", "巡航", "快速"]
+    turn_names = ["Hard L", "Soft L", "Straight", "Soft R", "Hard R"]
+    speed_names = ["Slow", "Cruise", "Fast"]
 
     turn_data = np.zeros((len(iters), 5))
     speed_data = np.zeros((len(iters), 3))
@@ -86,8 +86,8 @@ def chart1_action_distribution():
     speed_colors = ["#006d2c", "#31a354", "#a1d99b"]
 
     for ax, data, names, colors, title in [
-        (ax1, turn_data, turn_names, turn_colors, "Turn (航向) 分布"),
-        (ax2, speed_data, speed_names, speed_colors, "Speed (速度) 分布"),
+        (ax1, turn_data, turn_names, turn_colors, "Turn Distribution"),
+        (ax2, speed_data, speed_names, speed_colors, "Speed Distribution"),
     ]:
         bottom = np.zeros(len(iters))
         for j in range(data.shape[1]):
@@ -97,14 +97,14 @@ def chart1_action_distribution():
 
         ax.set_xticks(range(len(iters)))
         ax.set_xticklabels([str(i) for i in iters], fontsize=8)
-        ax.set_xlabel("训练轮数", fontsize=9)
-        ax.set_ylabel("动作选择比例 (%)", fontsize=9)
+        ax.set_xlabel("Iteration", fontsize=9)
+        ax.set_ylabel("Action Selection (%)", fontsize=9)
         ax.set_title(title, fontsize=10, color=NAVY)
         ax.legend(loc="upper right", framealpha=0.85, fontsize=7, ncol=1)
         ax.set_ylim(0, 100)
         ax.grid(axis="y", alpha=0.2)
 
-    fig.suptitle("离散动作分布演变 (Exp 4a-v2: Self-Attention 冷启动, 320轮)",
+    fig.suptitle("Discrete Action Distribution Shift (Exp 4a-v2: Cold-Start Self-Attn, 320 iters)",
                  fontsize=11, color=NAVY, y=1.01)
     fig.tight_layout()
     path = os.path.join(OUT, "chart1_action_distribution.pdf")
@@ -192,13 +192,13 @@ def chart2_spatial_kde():
 
         ax.set_xlim(-2500, 2500)
         ax.set_ylim(-2500, 2500)
-        ax.set_xlabel("东向 (m)", fontsize=9)
-        ax.set_ylabel("北向 (m)", fontsize=9)
-        ax.set_title(f"{label} — 空间 KDE 热力分布\n({len(data):,} 帧)", fontsize=10, color=NAVY)
+        ax.set_xlabel("East (m)", fontsize=9)
+        ax.set_ylabel("North (m)", fontsize=9)
+        ax.set_title(f"{label} — Spatial KDE Heatmap\n({len(data):,} frames)", fontsize=10, color=NAVY)
         ax.set_aspect("equal")
         ax.grid(alpha=0.15)
 
-    fig.suptitle("双机相对敌机空间分布 (50 集 Eval, 目标在原点, 机头朝北)",
+    fig.suptitle("Spatial KDE — P0/P1 Relative to Target (50 eval episodes, Target at origin)",
                  fontsize=11, color=NAVY, y=1.01)
     fig.tight_layout()
     path = os.path.join(OUT, "chart2_spatial_kde.pdf")
@@ -223,11 +223,11 @@ def chart3_reward_breakdown():
     timeout_pen = -30 * np.ones(len(phases)) + np.random.default_rng(47).normal(0, 3, len(phases))
 
     components = {
-        "Progress (追击进度)": (progress_r, TEAL),
-        "ATA (机头指向)": (ata_r, "#31a354"),
-        "Pincer (合围角)": (pincer_r, CORAL),
+        "Progress": (progress_r, TEAL),
+        "ATA Alignment": (ata_r, "#31a354"),
+        "Pincer Angle": (pincer_r, CORAL),
         "AND-gate Bonus": (and_bonus, "#ffd700"),
-        "Asym Penalty (不对称惩罚)": (asym_pen, GRAY),
+        "Asymmetry Penalty": (asym_pen, GRAY),
         "Timeout Penalty": (timeout_pen, "#999999"),
     }
 
@@ -241,9 +241,9 @@ def chart3_reward_breakdown():
     ax.axvline(x=24, color="black", linestyle="--", linewidth=1, alpha=0.4)
     ax.text(25, ax.get_ylim()[1]*0.85, "Phase 2\nAND-gate", fontsize=7, color="black", alpha=0.6)
 
-    ax.set_xlabel("训练轮数", fontsize=9)
-    ax.set_ylabel("单集奖励贡献 (估计值)", fontsize=9)
-    ax.set_title("奖励成分解耦 — 课程学习效果演示\n(基于 Exp 3v3 动态退火课程训练结构)", fontsize=10, color=NAVY)
+    ax.set_xlabel("Iteration", fontsize=9)
+    ax.set_ylabel("Reward Contribution (estimated)", fontsize=9)
+    ax.set_title("Reward Component Breakdown — Curriculum Learning Effect\n(Exp 3v3 Dynamic Annealing Structure)", fontsize=10, color=NAVY)
     ax.legend(loc="upper left", framealpha=0.85, fontsize=7, ncol=3)
     ax.grid(alpha=0.15)
     ax.set_xlim(0, 300)
@@ -262,7 +262,7 @@ def chart4_termination_reasons():
     """Grouped bar comparing Exp 3 (continuous AND-gate) vs Exp 4b (discrete + annealing)."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
-    categories = ["Timeout\n(走满600步)", "单机入线\n(Single-Entry)", "双机同步\n(Sync-Entry)", "坠毁/失速\n(Deck Hit)", "目标丢失\n(Lost Target)"]
+    categories = ["Timeout\n(600 steps)", "Single-Entry\n(OR-gate)", "Sync-Entry\n(AND-gate)", "Crash/Stall", "Lost Target\n(>10km)"]
 
     # Exp 3 (continuous AND-gate) — from autopsy
     exp3 = [0, 40, 0, 10, 50]
@@ -272,8 +272,8 @@ def chart4_termination_reasons():
     x = np.arange(len(categories))
     width = 0.35
 
-    b1 = ax.bar(x - width/2, exp3, width, color=GRAY, alpha=0.8, label="Exp 3 (连续 AND-gate)", edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x + width/2, exp4b, width, color=TEAL, alpha=0.85, label="Exp 4b (离散+退火)", edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(x - width/2, exp3, width, color=GRAY, alpha=0.8, label="Exp 3 (Continuous AND)", edgecolor="white", linewidth=0.5)
+    b2 = ax.bar(x + width/2, exp4b, width, color=TEAL, alpha=0.85, label="Exp 4b (Discrete + Anneal)", edgecolor="white", linewidth=0.5)
 
     # Value labels
     for bars in [b1, b2]:
@@ -285,8 +285,8 @@ def chart4_termination_reasons():
 
     ax.set_xticks(x)
     ax.set_xticklabels(categories, fontsize=8)
-    ax.set_ylabel("episode 占比 (%)", fontsize=9)
-    ax.set_title("终止原因分布对比 — 离散化 + 退火课程的根本性改善", fontsize=10, color=NAVY)
+    ax.set_ylabel("% of Episodes", fontsize=9)
+    ax.set_title("Termination Reason Distribution — Discrete + Annealing vs Continuous AND", fontsize=10, color=NAVY)
     ax.legend(fontsize=8, framealpha=0.85)
     ax.set_ylim(0, 65)
     ax.grid(axis="y", alpha=0.2)
@@ -317,7 +317,7 @@ def chart5_health_metrics():
     ax1.axhline(y=np.log(8), color=GRAY, linestyle=":", linewidth=0.8, alpha=0.5)
     ax1.text(x[-1]+5, np.log(8), "Max H=log(8)≈2.08", fontsize=7, color=GRAY, va="center")
     ax1.set_ylabel("Policy Entropy (nats)", fontsize=9)
-    ax1.set_title("策略熵 — 健康收敛 (2.49 → 1.87)", fontsize=10, color=NAVY)
+    ax1.set_title("Policy Entropy — Healthy Convergence (2.49 → 1.87)", fontsize=10, color=NAVY)
     ax1.legend(fontsize=8, framealpha=0.85)
     ax1.grid(alpha=0.2)
 
@@ -326,13 +326,13 @@ def chart5_health_metrics():
     ax2.plot(x, kl, color=CORAL, linewidth=1.5, marker="s", markersize=4, label="KL Divergence")
     ax2.axhline(y=0.015, color=GRAY, linestyle=":", linewidth=0.8, alpha=0.5)
     ax2.text(x[-1]+5, 0.015, "KL target", fontsize=7, color=GRAY, va="center")
-    ax2.set_xlabel("训练轮数", fontsize=9)
+    ax2.set_xlabel("Iteration", fontsize=9)
     ax2.set_ylabel("KL Divergence", fontsize=9)
-    ax2.set_title("KL 散度 — 策略更新平稳可控 (0.004 → 0.015)", fontsize=10, color=NAVY)
+    ax2.set_title("KL Divergence — Controlled Updates (0.004 → 0.015)", fontsize=10, color=NAVY)
     ax2.legend(fontsize=8, framealpha=0.85)
     ax2.grid(alpha=0.2)
 
-    fig.suptitle("训练健康指标 — 离散 Self-Attention MAPPO (Exp 4a-v2, 320轮)",
+    fig.suptitle("Training Health Metrics — Discrete Self-Attn MAPPO (Exp 4a-v2, 320 iters)",
                  fontsize=11, color=NAVY, y=1.01)
     fig.tight_layout()
     path = os.path.join(OUT, "chart5_health_metrics.pdf")
