@@ -426,6 +426,13 @@ def train(
 
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
+                # Determine AND distance for eval env
+                if curriculum_stage >= 1:
+                    current_and_dist = CURRICULUM_STAGES[curriculum_stage]["and_dist"]
+                elif not coop_warmup_done:
+                    current_and_dist = None
+                # else: current_and_dist was set by legacy annealing block
+
                 eval_rewards, sync_rate = run_evaluation(
                     algo, eval_episodes, difficulty, current_phase, cooperative,
                     and_distance=current_and_dist if coop_warmup_done else None)
