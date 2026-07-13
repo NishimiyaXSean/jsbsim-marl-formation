@@ -28,10 +28,11 @@
 |-----------|-------------|-----|-------|-----------|-------------|-------------|
 | **Exp 4a** | MLP fallback | None | 120 | −4,542 | 0 | MLP cannot learn coordination |
 | **Exp 4a-v2** | **Self-Attention** | None | 120 | **+1,345** | 1× | Self-Attn cold-start > MLP |
-| **Exp 4b** | Self-Attention | Discrete BC | 120 | −1,135 | 0 | BC stabilizes, no extra peak |
-| **★ 4a-v2 ext** | **Self-Attention** | None | **320** | **+2,376** | **3×** | 320-iter convergence proof |
+| **Exp 4b** | Self-Attention | Discrete BC | 120 | −1,135 | 0 | BC heads never loaded (bug) |
+| **★ 4a-v2 ext** | **Self-Attention** | None | 320 | **+2,376** | **3×** | Cold-start peak; high variance |
+| **★ 5a BC hotstart** | **Self-Attention** | **Discrete BC** | **500** | **+381** | **3×** | **95.6% train positive rate** |
 
-> **Self-Attention is the decisive factor.** Cold-start Self-Attention (4a-v2) outperforms MLP baseline (4a) by **5,887 reward points**. At 320 iterations, Self-Attention achieves **3 eval-positive spikes** (+1,345, +2,376, +4.0) with zero expert knowledge — proving token-based architecture spontaneously learns cooperative pursuit through physical interaction alone. **Structure determines the ceiling.**
+> **BC hotstart (Exp 5a) achieves unprecedented training stability**: 95.6% of training iterations positive vs ~50% for cold-start. Eval peak (+381 at iter 450) is lower than cold-start best (+2,376) but comes with dramatically reduced variance in the training signal. The lower peak is attributed to conservative LR (2e-4, 0.67× cold-start) — an exploration-boosted resume (LR=3e-4, entropy_coeff=0.05) is in progress. **The decisive finding**: Self-Attention architecture alone (no BC, no expert) spontaneously learns cooperative pursuit — BC further stabilizes it.
 
 ### Self-Attention Attention Analysis (Fig 3)
 
@@ -85,13 +86,17 @@
          │  + Residual + Learned Pool   │
          └──────────────┬───────────────┘
                         ↓
-              MLP [256,256] → action_mean(2)
+              MLP [256,256] → turn_head(5) + speed_head(3)
+              MultiDiscrete([5,3]) = 15 tactical primitives
 ```
 
 Parameter-Shared MAPPO (via RLlib `multi_agent.policies`):
   shared_policy for both p0/p1 → single Self-Attention Actor + Centralized Critic
   Eliminates IPPO non-stationarity; Self-Attention provides position-invariant role differentiation
-  Verified: cold-start Self-Attention achieves 3 eval-positive spikes (+2,376 peak)
+  
+  **Latest (Exp 5a, 500 iter)**: BC hotstart achieves 95.6% training reward positive rate.
+  BC provides backbone (19 keys) + discrete heads (4 keys) = 23 total pretrained weights.
+  Resume experiment in progress: LR=3e-4 + entropy_coeff=0.05 + relaxed penalties to push past +381 peak.
 
 Discrete Action Space (MultiDiscrete([5,3]) = 15 tactical primitives):
   Turn:  HardLeft(−15°/s) | SoftLeft(−5°) | Straight(0°) | SoftRight(+5°) | HardRight(+15°)
@@ -99,7 +104,7 @@ Discrete Action Space (MultiDiscrete([5,3]) = 15 tactical primitives):
   Action Masking: anti-stall (<130 m/s), ground-proximity (<200m), overspeed (>95% Vmax)
   Entropy theoretically capped at ln(15) ≈ 2.71 — hard exploration constraint
 
-**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization. **The ablation study proves Self-Attention architecture is the decisive factor**: cold-start Self-Attn outperforms MLP by 5,887 pts and achieves spontaneous role differentiation (Cohen's d = −0.53).
+**Key innovation**: The 33-dim observation is split into three semantic tokens (Self, Target, Mate) and processed through Multi-Head Self-Attention. The Actor learns to dynamically allocate attention — attending more to the Mate token when coordination is needed, more to Target when in pursuit. Attention weights are directly interpretable for paper visualization. **The ablation study proves Self-Attention architecture is the decisive factor**: cold-start Self-Attn outperforms MLP by 5,887 pts with spontaneous role differentiation (Cohen's d = −0.53). **BC hotstart further stabilizes training** (95.6% positive rate vs ~50% cold-start), confirming the architecture is the primary enabler and BC provides stability.
 
 ---
 
@@ -166,21 +171,29 @@ cp -r /tmp/jsbsim/systems  data/jsbsim/
 ### RLlib MAPPO Training (Recommended)
 
 ```bash
-# Experiment 1: Non-cooperative baseline (symmetry involution)
+# Discrete BC hotstart (Exp 5a) — Best stability, 95.6% positive train reward
 python scripts/train_formation_rllib.py \
-    --iterations 200 --no-cooperative \
-    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth \
-    --eval-interval 20 --seed 42
+    --iterations 500 --cooperative \
+    --checkpoint-freq 25 --eval-interval 25 --seed 42
+    # Auto-loads discrete BC + sets lr=2e-4 (BC-protective)
 
-# Experiment 2: OR-gate cooperative warmup
+# Cold-start (no BC) — Higher peak potential, higher variance
 python scripts/train_formation_rllib.py \
-    --iterations 120 --cooperative \
-    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth
+    --iterations 320 --cooperative --no-bc \
+    --checkpoint-freq 25 --seed 42
+    # Defaults to lr=3e-4 (standard PPO exploration)
+
+# Resume from best checkpoint with exploration boost
+python scripts/train_formation_rllib.py \
+    --iterations 200 --cooperative \
+    --resume-from PATH_TO_BEST_CHECKPOINT \
+    --lr 3e-4 --entropy-coeff 0.05 \
+    --checkpoint-freq 25 --eval-interval 25 --seed 42
 
 # Experiment 3: Two-phase OR→AND (full cooperative curriculum)
 python scripts/train_formation_rllib.py \
     --iterations 500 --cooperative --warmup 200000 \
-    --load-bc data/expert/attention_bc_2v1_filtered_pretrained.pth
+    --checkpoint-freq 25 --seed 42
 ```
 
 ### Evaluate the SB3 Baseline
@@ -276,19 +289,16 @@ jsbsim-marl-formation/
 │       └── tacview_exporter.py
 │
 ├── scripts/                   # ★ Entry-point scripts (30+ total)
-│   ├── train_formation_rllib.py  # ★ RLlib Dual-Actor MAPPO (current primary pipeline)
-│   ├── train_dual_actor.py    #   Dual-Actor MAPPO (legacy — decoupled P0/P1)
-│   ├── train_attention_actor.py  # Attention Actor MAPPO (legacy — EV-gated + KL)
-│   ├── train_attention_bc_2v1.py # 2v1 BC pipeline (data collection + pretraining)
-│   ├── train_attention_bc.py  #   1v1 BC pipeline
-│   ├── generate_coop_expert.py   # PID cooperative trajectory generator
-│   ├── diagnose_coop_tacview.py  # Cooperative model diagnostic + Tacview
-│   ├── diagnose_dual_evasion.py  # Evasive maneuver diagnostic (4 patterns)
-│   ├── benchmark_sb3_baseline.py # SB3 baseline evaluation (Wilson CI + Tacview)
-│   ├── train_formation_2v1.py    # SB3 2v1 shared-policy training (Phase 4)
-│   ├── train_single_pursuit.py   # SB3 PPO single-pursuit (auto-curriculum)
-│   ├── evaluate_and_visualize.py # Full eval: Tacview + 3D plots + Wilson CI
-│   ├── quick_tacview.py       #   Quick Tacview export from any model
+│   ├── train_formation_rllib.py  # ★ RLlib Parameter-Shared MAPPO (primary pipeline)
+│   ├── train_discrete_bc.py   #   ★ Discrete BC pretraining (Self-Attn backbone + heads)
+│   ├── collect_viz_data.py    #   Trajectory + attention weight data collection
+│   ├── viz_paper_figures.py   #   Fig 1 (3D trajectory) + Fig 2 (attention timeline)
+│   ├── viz_fig3_role_attention.py # Fig 3 (role-grouped attention matrix)
+│   ├── analyze_eval_statistics.py # Eval episode statistical autopsy
+│   ├── generate_paper_charts.py   # 5 paper-quality dataviz charts
+│   ├── train_attention_bc_2v1.py  # 2v1 BC pipeline (continuous, archived)
+│   ├── generate_coop_expert.py    # PID cooperative trajectory generator
+│   ├── benchmark_sb3_baseline.py  # SB3 baseline evaluation (Wilson CI + Tacview)
 │   ├── verify_installation.py #   4-step installation verification
 │   ├── setup_wsl2.sh          #   ★ WSL2 one-command environment setup
 │   └── ...
@@ -311,9 +321,10 @@ jsbsim-marl-formation/
 │
 ├── docs/                      # Daily work summaries + design docs + WSL2 guide
 │   ├── wsl2-setup-guide.md    # ★ WSL2 4-phase deployment checklist
-│   ├── 2026-07-01-full-summary.md
-│   ├── 2026-07-02-full-summary.md
-│   └── 2026-07-03-full-summary.md
+│   ├── 2026-07-07-full-summary.md
+│   ├── 2026-07-08-full-summary.md
+│   ├── 2026-07-09-full-summary.md  # Continuous→Discrete migration + ablation matrix
+│   └── 2026-07-10-full-summary.md  # ★ BC bug fix + 500-iter BC hotstart
 │
 ├── results/                   # Evaluation outputs
 │   └── evasion_diag/          # Evasive maneuver Tacview files (80 episodes)
@@ -337,15 +348,17 @@ The primary environment for cooperative formation research, now running under RL
 - **Pursuers**: 2 × F-16 (JSBSim 6-DOF)
 - **Target**: 1 × F-16 (scripted straight/evasive)
 - **Observation**: `Dict({"obs": Box(33), "global_state": Box(21)})` — per-agent local + global state
-- **Action**: `Box(2)` — `[turn, speed]` → FlightController
-- **Decision Rate**: 2 Hz (0.5 s per macro-action, 30 physics sub-steps at 60 Hz)
+- **Action**: `MultiDiscrete([5, 3])` — 15 tactical primitives with action masking
+- **Decision Rate**: 5 Hz (0.2 s per macro-action, 12 physics sub-steps at 60 Hz)
 - **Cooperative Mode** (`cooperative_mode=True`):
   - **Phase 1 [OR]**: Any pursuer < 200m → success (+5,000) + light pincer guidance
   - **Phase 2 [AND]**: Both < 800m + pincer > 30° + sustained 6 steps → cooperative_success
   - **Pincer Reward**: Bonus for 60°–150° between LOS vectors
   - **Dynamic Roles**: Striker (closer pursuer, tracking ×1.5) + Interceptor (further, pincer ×2.0)
   - **Asymmetric Resets**: 70% probability, random pursuer starts 1,500m behind + facing away
-- **Action Clipping**: DiagGaussian bounds enforcement to prevent NaN from unbounded sampling
+- **Shaping Penalties**:
+  - Distance Asymmetry: penalizes free-riding when |d0−d1| > 800m (weight 0.3)
+  - Time-Sync Pacing: prevents Striker from rushing ahead alone (weight 0.5)
 
 ### FormationEnv — Cooperative 2v1 Pursuit (SB3/Legacy)
 
@@ -396,22 +409,25 @@ Single-agent pursuit with 3D continuous action via FlightController.
 | Interceptor bonus | 2.0 × pincer reward | Further pursuer flanks |
 | AND-gate success | +5,000 + 2,000 × (angle/180) | Both in position |
 | Proximity tiers | +25/+50/+100 at 800/500/300m | Approach milestones |
+| Dist Asymmetry Penalty | −0.3 × (|d0−d1| − 800) / 1000 × dt | Prevents free-riding |
+| Sync Pacing Penalty | −0.5 × (d1−d0) / 1000 | Prevents Striker rushing ahead |
 
-### Training Hyperparameters
+### Training Hyperparameters (RLlib MAPPO)
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | γ (gamma) | 0.99 | Discount factor |
 | λ (GAE) | 0.95 | GAE trace decay |
 | ε (clip) | 0.2 | PPO clip range |
-| Rollout steps | 4,096 | Per epoch |
-| Mini-batch | 128 | Per update |
+| Train batch | 8,192 | Total rollout per iteration |
+| Mini-batch | 1,024 | Per update |
 | PPO epochs | 10 | Per rollout |
-| Actor LR (fine) | 1e-5 | After warmup |
-| Critic LR (warmup) | 1e-3 | Attention Critic |
-| EV unfreeze gate | 0.3 | Explained variance threshold |
-| KL target | 0.015 | Early stopping per minibatch |
-| ENT_COEF | 0.005 | With auto-boost on collapse |
+| LR (BC hotstart) | **2e-4** | Protects BC features (0.67× cold-start) |
+| LR (cold-start) | 3e-4 | Standard PPO rate |
+| LR (resume/explore) | 3e-4 | Higher exploration with entropy boost |
+| Entropy coeff | 0.03–0.05 | 0.05 paired with higher LR for exploration |
+| Grad clip | 0.5 | Max gradient norm |
+| VF clip | 1,000 | Value function clipping |
 
 ---
 
@@ -432,7 +448,7 @@ Quick checklist:
 - [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
 - [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
->   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3], migrated 2026-07-09). The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or conda.
+>   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3], migrated 2026-07-09). **BC hotstart is the recommended training mode** (BC bug fix 2026-07-10). The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or conda.
 
 ---
 
@@ -482,20 +498,22 @@ Quick checklist:
 ### Evolution Path
 
 ```
-Phase 1 (Jun):     SB3 shared-policy baseline → 97.3% ceiling sealed
-Phase 2 (Jul 1-3): Self-Attention CTDE → BC beats centralized PPO (+6,846)
-Phase 3 (Jul 7):   RLlib migration → IPPO → Parameter-Shared MAPPO
-Phase 4 (Jul 8):   OR-gate convergence (+7,888), AND-gate dynamic annealing (-1,171)
-Phase 5 (Jul 9):   Continuous → Discrete MultiDiscrete([5,3]) + Action Masking
-Phase 6 (Jul 9-10): Self-Attn cold-start → 3 eval positives (+2,376 peak), ablation matrix, paper PPT
+Phase 1 (Jun):       SB3 shared-policy baseline → 97.3% ceiling sealed
+Phase 2 (Jul 1-3):   Self-Attention CTDE → BC beats centralized PPO (+6,846)
+Phase 3 (Jul 7):     RLlib migration → IPPO → Parameter-Shared MAPPO
+Phase 4 (Jul 8):     OR-gate convergence (+7,888), AND-gate dynamic annealing (-1,171)
+Phase 5 (Jul 9):     Continuous → Discrete MultiDiscrete([5,3]) + Action Masking
+Phase 6 (Jul 9-10):  Self-Attn cold-start → ablation matrix → paper PPT
+Phase 7 (Jul 10):    ★ BC weight loading bug fix → 500-iter BC hotstart (95.6% positive)
+Phase 8 (Jul 13):    ★ Resume from best: LR=3e-4 + entropy=0.05 + relaxed penalties
 ```
 
 ### Current Optimization Priorities
 
-1. **Discrete BC pretraining enhancement**: turn_acc=72%, speed_acc=81% — improve BC quality to close cold-start gap
-2. **AND-gate sync-entry**: 0% sync rate remains the fundamental bottleneck; explore explicit ΔTGO signal
-3. **N×M scaling**: MultiDiscrete + parameter sharing naturally supports >2 pursuer scenarios
-4. **Self-Play / League Training**: move beyond scripted targets to adversarial co-evolution
+1. **Eval variance suppression**: eval still oscillates +381 ↔ −8,644 despite stable training — investigate environment initial condition sensitivity or reward shaping
+2. **AND-gate sync-entry**: 0% sync rate remains the fundamental bottleneck; explore relaxed AND thresholds or explicit ΔTGO signal
+3. **Peak eval recovery**: Ongoing exploration-boosted resume (LR=3e-4, entropy=0.05) targets cold-start's +2,376 peak while preserving BC's stability
+4. **N×M scaling**: MultiDiscrete + parameter sharing naturally supports >2 pursuer scenarios
 
 ---
 
