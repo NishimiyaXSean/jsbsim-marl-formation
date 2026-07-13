@@ -115,12 +115,28 @@ OBS_PER_PURSUER = 33
 
 # ── Discrete action space ──────────────────────────────────────────────────
 # MultiDiscrete([5, 3]) = 15 tactical primitives
-# Turn:  0=HardLeft(-15°/s), 1=SoftLeft(-5°), 2=Straight(0°), 3=SoftRight(+5°), 4=HardRight(+15°)
+# Turn:  0=HardLeft, 1=SoftLeft, 2=Straight, 3=SoftRight, 4=HardRight
 # Speed: 0=Slow(180m/s), 1=Cruise(250m/s), 2=Fast(320m/s)
-TURN_RATES = [-15.0, -5.0, 0.0, 5.0, 15.0]
+# Turn rates are speed-dependent: slower speeds allow more aggressive turning
+# because the airframe can sustain higher angular rates at lower g-loading.
+#   At 180 m/s: 20°/s = 6.2g  (F-16 can sustain 7g+)
+#   At 250 m/s: 15°/s = 6.7g  (near optimal corner speed)
+#   At 320 m/s: 12°/s = 6.9g  (approaching structural limits)
 SPEEDS     = [180.0, 250.0, 320.0]
-N_TURN = len(TURN_RATES)    # 5
 N_SPEED = len(SPEEDS)       # 3
+
+# Speed-dependent turn rate scaling factors (applied to base grid)
+_TURN_SCALE = {0: 1.33, 1: 1.0, 2: 0.8}  # Slow: +33%, Cruise: nominal, Fast: -20%
+
+def _get_turn_rates(speed_idx: int) -> list[float]:
+    """Return turn rates scaled for the given speed band."""
+    base = [-15.0, -5.0, 0.0, 5.0, 15.0]
+    scale = _TURN_SCALE.get(speed_idx, 1.0)
+    return [r * scale for r in base]
+
+# Nominal turn rates (for action space definition — Cruise-speed baseline)
+TURN_RATES = _get_turn_rates(1)  # [-15, -5, 0, 5, 15]
+N_TURN = len(TURN_RATES)    # 5
 N_ACTIONS = N_TURN + N_SPEED  # 8 total logits
 
 
@@ -387,10 +403,11 @@ class FormationRLlibEnv(MultiAgentEnv):
             a = np.asarray(a, dtype=np.int64)
             turn_idx = int(np.clip(a[0], 0, N_TURN - 1))
             speed_idx = int(np.clip(a[1], 0, N_SPEED - 1))
+            turn_rates = _get_turn_rates(speed_idx)  # speed-dependent scaling
             actions[aid] = {
                 'turn_idx': turn_idx,
                 'speed_idx': speed_idx,
-                'cmd_turn_rate': TURN_RATES[turn_idx],
+                'cmd_turn_rate': turn_rates[turn_idx],
                 'cmd_speed': SPEEDS[speed_idx],
             }
 
