@@ -184,6 +184,7 @@ def train(
     eval_interval: int = 25,
     eval_episodes: int = 20,
     lr: float | None = None,
+    entropy_coeff: float = 0.03,
     seed: int = 42,
 ):
     # ── Setup ────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ def train(
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=0.03,          # higher for discrete exploration
+            entropy_coeff=entropy_coeff,
             vf_clip_param=1000.0,
             grad_clip=0.5,
             model={"vf_share_layers": False},
@@ -504,6 +505,8 @@ if __name__ == "__main__":
     # Checkpointing
     parser.add_argument("--lr", type=float, default=None,
                        help="Learning rate (default: 2e-4 with BC, 3e-4 cold-start)")
+    parser.add_argument("--entropy-coeff", type=float, default=0.03,
+                       help="Entropy coefficient for PPO (higher = more exploration)")
     parser.add_argument("--checkpoint-freq", type=int, default=50,
                        help="Save checkpoint every N iterations")
     parser.add_argument("--eval-interval", type=int, default=25,
@@ -542,5 +545,6 @@ if __name__ == "__main__":
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
         lr=args.lr,
+        entropy_coeff=args.entropy_coeff,
         seed=args.seed,
     )

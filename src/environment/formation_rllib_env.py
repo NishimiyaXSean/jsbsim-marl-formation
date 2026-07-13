@@ -97,14 +97,17 @@ ASYMMETRIC_DIST_FAR = 1500.0
 ASYMMETRIC_HEADING_OFF = 120.0
 
 # Distance asymmetry penalty (continuous shaping — prevents free-riding)
-DIST_ASYMMETRY_THRESH = 500.0   # start penalizing when dist diff > 500m
-DIST_ASYMMETRY_WEIGHT = 0.5     # penalty coefficient per m over threshold
+# Relaxed for exploration phase: wider threshold + softer weight to let policy
+# experiment with more aggressive asymmetric tactics without being over-penalized.
+DIST_ASYMMETRY_THRESH = 800.0   # start penalizing when dist diff > 800m (was 500)
+DIST_ASYMMETRY_WEIGHT = 0.3     # penalty coefficient (was 0.5)
 DIST_ASYMMETRY_NORM = 1000.0    # normalization factor
 
 # Time-sync pacing penalty (prevents Striker from rushing ahead alone)
+# Also relaxed: reduced weight so Striker can push forward more aggressively.
 SYNC_PACING_STRIKER_DIST = 1200.0   # Striker within this range triggers sync check
 SYNC_PACING_INTERCEPTOR_DIST = 1500.0  # Interceptor beyond this range → too far behind
-SYNC_PACING_WEIGHT = 1.0              # penalty weight: (d1−d0)/1000 per step
+SYNC_PACING_WEIGHT = 0.5              # penalty weight (was 1.0)
 
 # Global state: per-entity features
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
