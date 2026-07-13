@@ -214,7 +214,10 @@ def train(
     bc_path = load_discrete_bc or load_bc
     if lr is None:
         lr = 2e-4 if bc_path else 3e-4
-    print(f"[LR] lr={lr:.1e} ({'BC hotstart — 0.67× cold-start' if bc_path else 'cold-start — standard'})")
+    if resume_from:
+        print(f"[LR] lr={lr:.1e} (resume — explicit or default)")
+    else:
+        print(f"[LR] lr={lr:.1e} ({'BC hotstart — 0.67× cold-start' if bc_path else 'cold-start — standard'})")
 
     # ── PPOConfig with Parameter-Shared MAPPO ──────────────────────────
     config = (
@@ -261,8 +264,8 @@ def train(
     algo = config.build()
     print(f"[RLlib MAPPO] Algorithm built: {type(algo).__name__}")
 
-    # ── BC weight hot-loading ─────────────────────────────────────────────
-    if bc_path:
+    # ── BC weight hot-loading (skip when resuming — checkpoint has weights) ─
+    if bc_path and not resume_from:
         success = load_bc_weights(algo, bc_path, ["shared_policy"])
         if not success:
             print("[BC Load] Continuing with random initialization...")
