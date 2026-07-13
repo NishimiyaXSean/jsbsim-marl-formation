@@ -264,6 +264,9 @@ class FormationRLlibEnv(MultiAgentEnv):
             asymmetric = True
             disadvantaged_idx = rng.integers(0, self.N)
             self._striker_idx = 1 if disadvantaged_idx == 0 else 0
+        # Expose for sensitivity analysis scripts
+        self._last_asymmetric = asymmetric
+        self._last_disadvantaged = disadvantaged_idx
 
         for i, ps in enumerate(self.pursuers):
             if asymmetric and i == disadvantaged_idx:
