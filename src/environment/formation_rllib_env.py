@@ -221,6 +221,10 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._coop_sustain_counter: int = 0
         self._coop_phase: int = COOP_PHASE_OR
         self._and_dist: float = COOP_PHASE2_AND_DIST_INIT  # dynamic, annealed from outside
+        self._and_angle: float = COOP_PHASE2_AND_ANGLE     # dynamic, adjusted per curriculum stage
+        self._init_bearing_range: tuple = (-180.0, 180.0)   # dynamic, per-stage constraint
+        self._curriculum_stage: int = 0                      # 0=pre-curriculum, 1/2/3=stages
+        self._last_termination_reason: str = "none"          # for sync-rate tracking
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -377,11 +381,48 @@ class FormationRLlibEnv(MultiAgentEnv):
                 ps.aircraft.position_ned - self.targets[0].aircraft.position_ned))
             ps.episode_start_dist = ps.prev_dist
 
+        # ── Curriculum: constrain initial bearing error ──────────────────
+        if self._init_bearing_range[0] > -180.0 or self._init_bearing_range[1] < 180.0:
+            self._apply_bearing_constraint()
+
         self._step_counter = 0
         self._coop_sustain_counter = 0
         self._tacview_frames = []
 
         return self._get_obs(), {}
+
+    def _apply_bearing_constraint(self) -> None:
+        """Constrain initial bearing error of each pursuer to the configured range.
+
+        After target spawn, computes the bearing error for each pursuer. If it
+        falls outside [_init_bearing_range[0], _init_bearing_range[1]], rotates
+        the pursuer's heading toward the target until within range.
+        """
+        t_pos = self.targets[0].aircraft.position_ned
+        bearing_min, bearing_max = self._init_bearing_range
+
+        for ps in self.pursuers:
+            p_pos = ps.aircraft.position_ned
+            p_yaw = float(ps.aircraft.state["yaw_deg"])
+
+            # Compute bearing to target
+            vec = t_pos - p_pos
+            target_bearing = float(np.degrees(np.arctan2(vec[1], vec[0]))) % 360.0
+
+            # Compute bearing error (signed, normalized to [-180, 180])
+            bearing_err = (target_bearing - p_yaw + 180.0) % 360.0 - 180.0
+
+            if bearing_err < bearing_min:
+                # Rotate pursuer to bearing_min (toward target)
+                new_yaw = (target_bearing - bearing_min) % 360.0
+                ps.aircraft.state["yaw_deg"] = new_yaw
+                ps.ref_hdg = new_yaw
+            elif bearing_err > bearing_max:
+                # Rotate pursuer to bearing_max (toward target)
+                new_yaw = (target_bearing - bearing_max) % 360.0
+                ps.aircraft.state["yaw_deg"] = new_yaw
+                ps.ref_hdg = new_yaw
+            # else: bearing error within range, no adjustment needed
 
     # ── Step ────────────────────────────────────────────────────────────────
 
@@ -618,7 +659,7 @@ class FormationRLlibEnv(MultiAgentEnv):
                 if self._coop_phase == COOP_PHASE_AND:
                     both_in_kill = (d0 < self._and_dist and
                                    d1 < self._and_dist and
-                                   pincer_angle >= COOP_PHASE2_AND_ANGLE)
+                                   pincer_angle >= self._and_angle)
                     if both_in_kill:
                         self._coop_sustain_counter += 1
                     else:
@@ -691,6 +732,9 @@ class FormationRLlibEnv(MultiAgentEnv):
             reason = "timeout"
             for aid in self._agent_ids:
                 rewards[aid] += REWARD_TIMEOUT
+
+        # Store for curriculum scheduler (sync-rate tracking)
+        self._last_termination_reason = reason
 
         # ── Build RLlib-format returns ────────────────────────────────────
         obs = self._get_obs()
@@ -906,6 +950,43 @@ class FormationRLlibEnv(MultiAgentEnv):
             dist: New AND-gate distance threshold in meters (clamped ≥ 800)
         """
         self._and_dist = max(COOP_PHASE2_AND_DIST, float(dist))
+
+    def set_and_angle(self, angle: float) -> None:
+        """Dynamically adjust AND-gate pincer angle threshold.
+
+        Args:
+            angle: New AND-gate angle threshold in degrees (clamped >= 10)
+        """
+        self._and_angle = max(float(angle), 10.0)
+
+    def set_initial_bearing_range(self, min_deg: float, max_deg: float) -> None:
+        """Constrain initial bearing error range for curriculum learning.
+
+        Stage 1 (greenhouse): bearing error in [-20, +20]
+        Stage 2 (envelope):   bearing error in [-45, +45]
+        Stage 3 (full):       bearing error unrestricted [-180, +180]
+
+        Args:
+            min_deg: Minimum initial bearing error in degrees
+            max_deg: Maximum initial bearing error in degrees
+        """
+        self._init_bearing_range = (float(min_deg), float(max_deg))
+
+    def set_curriculum_stage(self, stage: int, and_dist: float, and_angle: float,
+                              bearing_min: float, bearing_max: float) -> None:
+        """Set all curriculum parameters atomically for a given stage.
+
+        Args:
+            stage: Curriculum stage number (1, 2, or 3)
+            and_dist: AND-gate distance threshold (m)
+            and_angle: AND-gate pincer angle threshold (deg)
+            bearing_min: Initial bearing error lower bound (deg)
+            bearing_max: Initial bearing error upper bound (deg)
+        """
+        self._curriculum_stage = int(stage)
+        self._and_dist = max(float(and_dist), COOP_PHASE2_AND_DIST)
+        self._and_angle = max(float(and_angle), 10.0)
+        self._init_bearing_range = (float(bearing_min), float(bearing_max))
 
     @property
     def and_distance(self) -> float:

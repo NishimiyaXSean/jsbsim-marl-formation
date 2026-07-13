@@ -39,6 +39,35 @@ from ray.rllib.env.env_context import EnvContext
 from src.environment.formation_rllib_env import FormationRLlibEnv, COOP_PHASE_OR, COOP_PHASE_AND
 from src.models.formation_rllib_model import RLlibAttentionActor
 
+# ── AND-gate curriculum stages ──────────────────────────────────────────────
+# Performance-based scheduler: progression gated by eval sync-entry rate.
+# Each stage defines: (and_dist, and_angle, bearing_min, bearing_max)
+CURRICULUM_STAGES = {
+    1: {"and_dist": 2000.0, "and_angle": 40.0, "bearing_min": -20.0, "bearing_max": 20.0},
+    2: {"and_dist": 1500.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0},
+    3: {"and_dist": 1000.0, "and_angle": 20.0, "bearing_min": -180.0, "bearing_max": 180.0},
+}
+CURRICULUM_WINDOW = 3        # number of eval rounds for moving-average sync rate
+CURRICULUM_MIN_WINDOW = 3    # minimum evals before checking gate
+CURRICULUM_STAGE1_GATE = 0.60  # stage 1→2: >60% sync rate
+CURRICULUM_STAGE2_GATE = 0.50  # stage 2→3: >50% sync rate
+
+
+def _apply_curriculum_stage(algo, stage: int) -> None:
+    """Hot-update all env runners to use a new curriculum stage."""
+    params = CURRICULUM_STAGES[stage]
+
+    def _set_stage(env):
+        if hasattr(env, "set_curriculum_stage"):
+            env.set_curriculum_stage(
+                stage, params["and_dist"], params["and_angle"],
+                params["bearing_min"], params["bearing_max"])
+
+    try:
+        algo.env_runner_group.foreach_env(_set_stage)
+    except Exception as e:
+        print(f"  [WARN] Could not apply curriculum stage {stage}: {e}")
+
 os.environ.setdefault("JSBSIM_DEBUG", "0")
 warnings.filterwarnings("ignore")
 logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
@@ -277,6 +306,8 @@ def train(
     current_phase = COOP_PHASE_OR
     coop_warmup_done = False
     best_avg_reward = -float("inf")
+    curriculum_stage = 0     # 0=pre-AND, 1/2/3=curriculum stages
+    sync_history = []        # rolling window of sync rates for stage gating
 
     # If --resume-from is set, restore checkpoint and skip warmup
     and_start_iter = 0
@@ -338,29 +369,33 @@ def train(
             # ── Cooperative phase switching ──────────────────────────────
             if cooperative and not coop_warmup_done and warmup_steps > 0:
                 # Use iteration counter * train_batch_size as step estimate
-                # (RLlib old API doesn't expose num_env_steps_sampled reliably)
                 total_env_steps = (i + 1) * 8192
                 if total_env_steps >= warmup_steps:
                     current_phase = COOP_PHASE_AND
                     coop_warmup_done = True
+                    curriculum_stage = 1
                     and_start_iter = i + 1
-                    print(f"\n>>> Phase 2: Switching to AND-gate "
-                          f"at iter {and_start_iter} "
-                          f"(~{total_env_steps} steps)")
-                    print(f"    AND distance: 2000m → 800m "
-                          f"(linear decay over {200 - and_start_iter} iters)\n")
-                    # Set phase on all env runners
-                    def set_and_phase(env):
+                    print(f"\n>>> AND-gate Activated: Curriculum Stage 1 (Greenhouse) "
+                          f"at iter {and_start_iter} (~{total_env_steps} steps)")
+                    # Apply Stage 1 on all workers
+                    def _start_curriculum(env):
                         if hasattr(env, 'set_coop_phase'):
                             env.set_coop_phase(COOP_PHASE_AND)
+                        if hasattr(env, 'set_curriculum_stage'):
+                            p = CURRICULUM_STAGES[1]
+                            env.set_curriculum_stage(1, p["and_dist"], p["and_angle"],
+                                                     p["bearing_min"], p["bearing_max"])
                     try:
-                        algo.env_runner_group.foreach_env(set_and_phase)
+                        algo.env_runner_group.foreach_env(_start_curriculum)
+                        print(f"    AND: {CURRICULUM_STAGES[1]}")
                     except Exception as e:
-                        print(f"  [WARN] Could not set coop phase on workers: {e}")
+                        print(f"  [WARN] Could not start curriculum: {e}")
+                    print()
 
-            # ── Dynamic AND-distance annealing (Phase 2 only) ────────────
-            if coop_warmup_done and cooperative:
-                # Linear decay: 2000m → 800m over [and_start_iter, 200]
+            # ── Dynamic AND-distance annealing (legacy, skipped in curriculum mode) ──
+            if coop_warmup_done and cooperative and curriculum_stage == 0:
+                # Legacy annealing: only used if warmup was set but curriculum
+                # was somehow not activated (backward compat)
                 from src.environment.formation_rllib_env import (
                     COOP_PHASE2_AND_DIST_INIT, COOP_PHASE2_AND_DIST)
                 decay_end_iter = 200
@@ -391,12 +426,12 @@ def train(
 
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
-                eval_rewards = run_evaluation(
+                eval_rewards, sync_rate = run_evaluation(
                     algo, eval_episodes, difficulty, current_phase, cooperative,
                     and_distance=current_and_dist if coop_warmup_done else None)
                 avg_eval = np.mean(eval_rewards) if eval_rewards else 0.0
                 print(f"  [EVAL] iter={i+1:4d}  avg_rew={avg_eval:8.1f}  "
-                      f"n={len(eval_rewards)}")
+                      f"sync={sync_rate:.0%}  n={len(eval_rewards)}")
 
                 if avg_eval > best_avg_reward:
                     best_avg_reward = avg_eval
@@ -405,6 +440,29 @@ def train(
                         f"best_iter_{i+1:04d}_rew_{avg_eval:.0f}")
                     algo.save(best_path)
                     print(f"  [SAVE] New best: {best_path}")
+
+                # ── AND-gate curriculum: performance-based stage advancement ──
+                if coop_warmup_done and curriculum_stage < 3:
+                    sync_history.append(sync_rate)
+                    if len(sync_history) > CURRICULUM_WINDOW:
+                        sync_history = sync_history[-CURRICULUM_WINDOW:]
+                    recent_sync = np.mean(sync_history)
+
+                    if curriculum_stage == 1 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
+                            and recent_sync > CURRICULUM_STAGE1_GATE:
+                        curriculum_stage = 2
+                        print(f"\n>>> Curriculum Stage 2: Pushing the Envelope "
+                              f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE1_GATE:.0%})\n")
+                        _apply_curriculum_stage(algo, 2)
+                        sync_history = []
+
+                    elif curriculum_stage == 2 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
+                            and recent_sync > CURRICULUM_STAGE2_GATE:
+                        curriculum_stage = 3
+                        print(f"\n>>> Curriculum Stage 3: Full Deployment "
+                              f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE2_GATE:.0%})\n")
+                        _apply_curriculum_stage(algo, 3)
+                        sync_history = []
 
             # ── Periodic checkpoint ──────────────────────────────────────
             if checkpoint_freq > 0 and i > 0 and (i + 1) % checkpoint_freq == 0:
@@ -428,10 +486,12 @@ def train(
 
 def run_evaluation(algo, n_episodes: int, difficulty: float,
                    coop_phase: int, cooperative_mode: bool = True,
-                   and_distance: float | None = None) -> list[float]:
+                   and_distance: float | None = None) -> tuple[list[float], float]:
     """Evaluate the current policy in a separate env instance.
 
-    Returns per-episode total reward.
+    Returns:
+        (episode_rewards, sync_entry_rate) — sync rate is fraction of episodes
+        that ended with cooperative_success (AND-gate) termination.
     """
     env = FormationRLlibEnv({
         "difficulty_level": difficulty,
@@ -446,6 +506,7 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
     env._difficulty = difficulty
 
     episode_rewards = []
+    coop_success_count = 0
 
     for _ in range(n_episodes):
         obs_dict, _ = env.reset()
@@ -462,15 +523,22 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
                         explore=False,
                     )
 
-            obs_dict, rewards, terminateds, truncateds, _ = env.step(actions)
+            obs_dict, rewards, terminateds, truncateds, infos = env.step(actions)
             total_r += sum(rewards.values())
 
+            # Track cooperative success in AND-gate phase
             done = terminateds.get("__all__", False) or truncateds.get("__all__", False)
+            if done:
+                # Check if termination was cooperative_success via env's internal state
+                reason = getattr(env, "_last_termination_reason", "timeout")
+                if reason == "cooperative_success":
+                    coop_success_count += 1
 
         episode_rewards.append(total_r)
 
+    sync_rate = coop_success_count / n_episodes if n_episodes > 0 else 0.0
     env.close()
-    return episode_rewards
+    return episode_rewards, sync_rate
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
