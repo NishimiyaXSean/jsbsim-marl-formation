@@ -56,6 +56,7 @@ REWARD_SUCCESS = 5000.0
 REWARD_CRASH = -200.0
 REWARD_LOST_TARGET = -200.0
 REWARD_TIMEOUT = -500.0
+REWARD_OR_FALLBACK = 1000.0   # one-shot in AND phase: pursuer reaches 200m (no episode termination)
 STEP_PENALTY = 0.25
 ANTI_STALL_WINDOW = 35
 ANTI_STALL_MIN_VC = 15.0
@@ -239,6 +240,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._last_termination_reason: str = "none"          # for sync-rate tracking
         self._lost_pursuer_steps: int = 0                    # counter for early termination
         self._ooc_counters: list[int] = [0, 0]               # per-pursuer OOC step counters
+        self._or_triggered: list[bool] = [False, False]      # per-pursuer one-shot OR fallback flag
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -403,6 +405,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._step_counter = 0
         self._coop_sustain_counter = 0
         self._ooc_counters = [0, 0]
+        self._or_triggered = [False, False]
         self._tacview_frames = []
 
         return self._get_obs(), {}
@@ -681,6 +684,14 @@ class FormationRLlibEnv(MultiAgentEnv):
                                    pincer_angle >= self._and_angle)
                     if both_in_kill:
                         and_met_this_step = True
+
+                    # ── One-shot OR fallback (event trigger, NOT continuous) ──
+                    # Each pursuer gets +1000 ONCE per episode for reaching 200m.
+                    # Flag locks after trigger — no looping, no camping at 199m.
+                    for i, dist in enumerate(pursuer_dists):
+                        if dist < COOP_PHASE1_OR_DIST and not self._or_triggered[i]:
+                            rewards[self._agent_ids[i]] += REWARD_OR_FALLBACK
+                            self._or_triggered[i] = True
                 else:
                     # Phase 1: OR-gate
                     for i, ps in enumerate(self.pursuers):
@@ -748,11 +759,15 @@ class FormationRLlibEnv(MultiAgentEnv):
                 kill_aid = self._agent_ids[closer_idx]
 
         # ── OOC penalty: per-agent anti-camping pressure ────────────────
-        # If a pursuer hangs back beyond AND_dist + margin, increment its
-        # OOC counter. Once past threshold, penalize every decision step.
+        # If a pursuer hangs back beyond threshold, increment its OOC counter.
+        # Once past OOC_PENALTY_STEPS, penalize every decision step.
         # Counters are independent — P1 can't hide behind P0's progress.
-        if self._coop_phase == COOP_PHASE_AND and not terminated:
-            ooc_threshold = self._and_dist + OOC_MARGIN
+        # Runs in BOTH phases: warmup uses 2000m threshold, AND uses AND_dist.
+        if not terminated:
+            if self._coop_phase == COOP_PHASE_AND:
+                ooc_threshold = self._and_dist + OOC_MARGIN
+            else:
+                ooc_threshold = PINCER_DIST_MAX + OOC_MARGIN  # 2400m during OR warmup
             for i, dist in enumerate(pursuer_dists):
                 if dist > ooc_threshold:
                     self._ooc_counters[i] += 1

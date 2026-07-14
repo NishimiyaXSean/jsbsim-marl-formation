@@ -56,8 +56,10 @@ CURRICULUM_STAGE1_GATE = 0.60  # stage 1→2: >60% sync rate
 CURRICULUM_STAGE2_GATE = 0.50  # stage 2→3: >50% sync rate
 
 
+TRANSITION_ITERS = 15  # iterations over which to smoothly interpolate stage params
+
 def _apply_curriculum_stage(algo, stage: int) -> None:
-    """Hot-update all env runners to use a new curriculum stage."""
+    """Hot-update all env runners to use a new curriculum stage (immediate)."""
     params = CURRICULUM_STAGES[stage]
 
     def _set_stage(env):
@@ -72,6 +74,39 @@ def _apply_curriculum_stage(algo, stage: int) -> None:
         algo.env_runner_group.foreach_env(_set_stage)
     except Exception as e:
         print(f"  [WARN] Could not apply curriculum stage {stage}: {e}")
+
+
+def _interpolate_params(old_stage: int, new_stage: int, progress: float) -> dict:
+    """Linearly interpolate curriculum params between two stages."""
+    old = CURRICULUM_STAGES[old_stage]
+    new = CURRICULUM_STAGES[new_stage]
+    t = max(0.0, min(1.0, progress))
+    return {
+        "stage": new_stage,
+        "and_dist": old["and_dist"] * (1 - t) + new["and_dist"] * t,
+        "and_angle": old["and_angle"] * (1 - t) + new["and_angle"] * t,
+        "bearing_min": old["bearing_min"] * (1 - t) + new["bearing_min"] * t,
+        "bearing_max": old["bearing_max"] * (1 - t) + new["bearing_max"] * t,
+        "target_dist_min": old.get("target_dist_min", 900) * (1 - t) + new.get("target_dist_min", 900) * t,
+        "target_dist_max": old.get("target_dist_max", 1300) * (1 - t) + new.get("target_dist_max", 1300) * t,
+    }
+
+
+def _apply_smooth_transition(algo, old_stage: int, new_stage: int, progress: float) -> None:
+    """Apply interpolated curriculum params during transition."""
+    p = _interpolate_params(old_stage, new_stage, progress)
+
+    def _set_transition(env):
+        if hasattr(env, "set_curriculum_stage_full"):
+            env.set_curriculum_stage_full(
+                p["stage"], p["and_dist"], p["and_angle"],
+                p["bearing_min"], p["bearing_max"],
+                p["target_dist_min"], p["target_dist_max"])
+
+    try:
+        algo.env_runner_group.foreach_env(_set_transition)
+    except Exception as e:
+        print(f"  [WARN] Transition update failed: {e}")
 
 os.environ.setdefault("JSBSIM_DEBUG", "0")
 warnings.filterwarnings("ignore")
@@ -313,6 +348,10 @@ def train(
     best_avg_reward = -float("inf")
     curriculum_stage = 0     # 0=pre-AND, 1/2/3=curriculum stages
     sync_history = []        # rolling window of sync rates for stage gating
+    # Smooth transition state
+    transition_active = False
+    transition_start_iter = 0
+    target_stage = 0
 
     # If --resume-from is set, restore checkpoint and skip warmup
     and_start_iter = 0
@@ -466,26 +505,45 @@ def train(
 
                 # ── AND-gate curriculum: performance-based stage advancement ──
                 if coop_warmup_done and curriculum_stage < 3:
-                    sync_history.append(sync_rate)
-                    if len(sync_history) > CURRICULUM_WINDOW:
-                        sync_history = sync_history[-CURRICULUM_WINDOW:]
-                    recent_sync = np.mean(sync_history)
+                    # Drive any in-progress smooth transition
+                    if transition_active:
+                        transition_progress = (i - transition_start_iter) / TRANSITION_ITERS
+                        if transition_progress >= 1.0:
+                            transition_active = False
+                            curriculum_stage = target_stage
+                            print(f"    Transition complete → Stage {target_stage}\n")
+                        else:
+                            _apply_smooth_transition(algo, curriculum_stage, target_stage,
+                                                     transition_progress)
 
-                    if curriculum_stage == 1 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
-                            and recent_sync > CURRICULUM_STAGE1_GATE:
-                        curriculum_stage = 2
-                        print(f"\n>>> Curriculum Stage 2: Pushing the Envelope "
-                              f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE1_GATE:.0%})\n")
-                        _apply_curriculum_stage(algo, 2)
-                        sync_history = []
+                    # Check for stage advancement (only when not already transitioning)
+                    if not transition_active:
+                        sync_history.append(sync_rate)
+                        if len(sync_history) > CURRICULUM_WINDOW:
+                            sync_history = sync_history[-CURRICULUM_WINDOW:]
+                        recent_sync = np.mean(sync_history)
 
-                    elif curriculum_stage == 2 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
-                            and recent_sync > CURRICULUM_STAGE2_GATE:
-                        curriculum_stage = 3
-                        print(f"\n>>> Curriculum Stage 3: Full Deployment "
-                              f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE2_GATE:.0%})\n")
-                        _apply_curriculum_stage(algo, 3)
-                        sync_history = []
+                        if curriculum_stage == 1 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
+                                and recent_sync > CURRICULUM_STAGE1_GATE:
+                            old_stage = curriculum_stage
+                            target_stage = 2
+                            transition_active = True
+                            transition_start_iter = i + 1
+                            sync_history = []
+                            print(f"\n>>> Curriculum Stage 1→2: smooth transition "
+                                  f"({TRANSITION_ITERS} iters) "
+                                  f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE1_GATE:.0%})\n")
+
+                        elif curriculum_stage == 2 and len(sync_history) >= CURRICULUM_MIN_WINDOW \
+                                and recent_sync > CURRICULUM_STAGE2_GATE:
+                            old_stage = curriculum_stage
+                            target_stage = 3
+                            transition_active = True
+                            transition_start_iter = i + 1
+                            sync_history = []
+                            print(f"\n>>> Curriculum Stage 2→3: smooth transition "
+                                  f"({TRANSITION_ITERS} iters) "
+                                  f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE2_GATE:.0%})\n")
 
             # ── Periodic checkpoint ──────────────────────────────────────
             if checkpoint_freq > 0 and i > 0 and (i + 1) % checkpoint_freq == 0:
