@@ -43,9 +43,12 @@ from src.models.formation_rllib_model import RLlibAttentionActor
 # Performance-based scheduler: progression gated by eval sync-entry rate.
 # Each stage defines: (and_dist, and_angle, bearing_min, bearing_max)
 CURRICULUM_STAGES = {
-    1: {"and_dist": 2000.0, "and_angle": 40.0, "bearing_min": -20.0, "bearing_max": 20.0},
-    2: {"and_dist": 1500.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0},
-    3: {"and_dist": 1000.0, "and_angle": 20.0, "bearing_min": -180.0, "bearing_max": 180.0},
+    1: {"and_dist": 1200.0, "and_angle": 35.0, "bearing_min": -30.0, "bearing_max": 30.0,
+        "target_dist_min": 1600.0, "target_dist_max": 2200.0},
+    2: {"and_dist": 1000.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0,
+        "target_dist_min": 1200.0, "target_dist_max": 2000.0},
+    3: {"and_dist": 800.0, "and_angle": 20.0, "bearing_min": -180.0, "bearing_max": 180.0,
+        "target_dist_min": 900.0, "target_dist_max": 1800.0},
 }
 CURRICULUM_WINDOW = 3        # number of eval rounds for moving-average sync rate
 CURRICULUM_MIN_WINDOW = 3    # minimum evals before checking gate
@@ -58,10 +61,12 @@ def _apply_curriculum_stage(algo, stage: int) -> None:
     params = CURRICULUM_STAGES[stage]
 
     def _set_stage(env):
-        if hasattr(env, "set_curriculum_stage"):
-            env.set_curriculum_stage(
+        if hasattr(env, "set_curriculum_stage_full"):
+            env.set_curriculum_stage_full(
                 stage, params["and_dist"], params["and_angle"],
-                params["bearing_min"], params["bearing_max"])
+                params["bearing_min"], params["bearing_max"],
+                params.get("target_dist_min", 900.0),
+                params.get("target_dist_max", 1300.0))
 
     try:
         algo.env_runner_group.foreach_env(_set_stage)
@@ -381,10 +386,13 @@ def train(
                     def _start_curriculum(env):
                         if hasattr(env, 'set_coop_phase'):
                             env.set_coop_phase(COOP_PHASE_AND)
-                        if hasattr(env, 'set_curriculum_stage'):
+                        if hasattr(env, 'set_curriculum_stage_full'):
                             p = CURRICULUM_STAGES[1]
-                            env.set_curriculum_stage(1, p["and_dist"], p["and_angle"],
-                                                     p["bearing_min"], p["bearing_max"])
+                            env.set_curriculum_stage_full(
+                                1, p["and_dist"], p["and_angle"],
+                                p["bearing_min"], p["bearing_max"],
+                                p.get("target_dist_min", 900.0),
+                                p.get("target_dist_max", 1300.0))
                     try:
                         algo.env_runner_group.foreach_env(_start_curriculum)
                         print(f"    AND: {CURRICULUM_STAGES[1]}")
@@ -426,16 +434,16 @@ def train(
 
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
-                # Determine AND distance for eval env
+                # Determine AND distance and stage params for eval env
                 if curriculum_stage >= 1:
-                    current_and_dist = CURRICULUM_STAGES[curriculum_stage]["and_dist"]
-                elif not coop_warmup_done:
-                    current_and_dist = None
-                # else: current_and_dist was set by legacy annealing block
+                    eval_stage_params = dict(CURRICULUM_STAGES[curriculum_stage])
+                    eval_stage_params["stage"] = curriculum_stage
+                else:
+                    eval_stage_params = None
 
                 eval_rewards, sync_rate = run_evaluation(
                     algo, eval_episodes, difficulty, current_phase, cooperative,
-                    and_distance=current_and_dist if coop_warmup_done else None)
+                    stage_params=eval_stage_params)
                 avg_eval = np.mean(eval_rewards) if eval_rewards else 0.0
                 print(f"  [EVAL] iter={i+1:4d}  avg_rew={avg_eval:8.1f}  "
                       f"sync={sync_rate:.0%}  n={len(eval_rewards)}")
@@ -493,7 +501,8 @@ def train(
 
 def run_evaluation(algo, n_episodes: int, difficulty: float,
                    coop_phase: int, cooperative_mode: bool = True,
-                   and_distance: float | None = None) -> tuple[list[float], float]:
+                   and_distance: float | None = None,
+                   stage_params: dict | None = None) -> tuple[list[float], float]:
     """Evaluate the current policy in a separate env instance.
 
     Returns:
@@ -508,7 +517,17 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
     })
     if cooperative_mode:
         env.set_coop_phase(coop_phase)
-    if and_distance is not None:
+    if stage_params is not None:
+        if hasattr(env, 'set_curriculum_stage_full'):
+            env.set_curriculum_stage_full(
+                stage_params.get("stage", 1),
+                stage_params.get("and_dist", 2000.0),
+                stage_params.get("and_angle", 40.0),
+                stage_params.get("bearing_min", -20.0),
+                stage_params.get("bearing_max", 20.0),
+                stage_params.get("target_dist_min", 900.0),
+                stage_params.get("target_dist_max", 1300.0))
+    elif and_distance is not None:
         env.set_and_distance(and_distance)
     env._difficulty = difficulty
 

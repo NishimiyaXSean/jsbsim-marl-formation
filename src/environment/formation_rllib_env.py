@@ -89,6 +89,10 @@ COOP_PHASE2_AND_DIST_INIT = 2000.0  # initial value for dynamic annealing
 COOP_PHASE2_AND_ANGLE = 30.0
 COOP_SUSTAIN_STEPS = 6
 
+# Early termination: if BOTH pursuers are beyond this distance, episode is hopeless
+LOST_PURSUER_DIST = 6000.0      # min(d0, d1) > 6km → irrecoverable
+LOST_PURSUER_STEPS = 30         # sustain for 30 decision steps (6s) before terminating
+
 STRIKER_TRACKING_BONUS = 1.5
 INTERCEPTOR_PINCER_BONUS = 2.0
 
@@ -223,8 +227,10 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._and_dist: float = COOP_PHASE2_AND_DIST_INIT  # dynamic, annealed from outside
         self._and_angle: float = COOP_PHASE2_AND_ANGLE     # dynamic, adjusted per curriculum stage
         self._init_bearing_range: tuple = (-180.0, 180.0)   # dynamic, per-stage constraint
+        self._target_dist_range: tuple = (900.0, 1300.0)    # dynamic, per-stage target spawn distance
         self._curriculum_stage: int = 0                      # 0=pre-curriculum, 1/2/3=stages
         self._last_termination_reason: str = "none"          # for sync-rate tracking
+        self._lost_pursuer_steps: int = 0                    # counter for early termination
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -323,7 +329,8 @@ class FormationRLlibEnv(MultiAgentEnv):
 
         # Target spawn
         for j, ts in enumerate(self.targets):
-            target_dist = rng.uniform(900 + d * 1100, 1300 + d * 1700)
+            dist_min, dist_max = self._target_dist_range
+            target_dist = rng.uniform(dist_min + d * 200, dist_max + d * 500)
             bearing_offset = rng.uniform(-d * 45.0, d * 45.0)
             heading_diff = rng.uniform(-d * 30.0, d * 30.0)
 
@@ -731,6 +738,20 @@ class FormationRLlibEnv(MultiAgentEnv):
                 reason = "cooperative_success"
                 kill_aid = self._agent_ids[closer_idx]
 
+        # ── Early termination: single pursuer hopelessly lost ────────────
+        if self._coop_phase == COOP_PHASE_AND and not terminated:
+            min_dist = min(pursuer_dists[0], pursuer_dists[1])
+            if min_dist > LOST_PURSUER_DIST:
+                self._lost_pursuer_steps += 1
+            else:
+                self._lost_pursuer_steps = 0
+
+            if self._lost_pursuer_steps >= LOST_PURSUER_STEPS:
+                terminated = True
+                reason = "lost_target"
+                for aid in self._agent_ids:
+                    rewards[aid] += REWARD_TIMEOUT
+
         # ── Timeout ──────────────────────────────────────────────────────
         current_time = self._step_counter / CTRL_FREQ
         if not terminated and not truncated and current_time >= MAX_EPISODE_TIME:
@@ -993,6 +1014,21 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._and_dist = max(float(and_dist), COOP_PHASE2_AND_DIST)
         self._and_angle = max(float(and_angle), 10.0)
         self._init_bearing_range = (float(bearing_min), float(bearing_max))
+
+    def set_curriculum_stage_full(self, stage: int, and_dist: float, and_angle: float,
+                                   bearing_min: float, bearing_max: float,
+                                   target_dist_min: float, target_dist_max: float) -> None:
+        """Set all curriculum parameters including target spawn distance.
+
+        This extended version also controls how far the target spawns,
+        ensuring pursuers start OUTSIDE the AND envelope and must
+        actively close distance to succeed.
+        """
+        self._curriculum_stage = int(stage)
+        self._and_dist = max(float(and_dist), COOP_PHASE2_AND_DIST)
+        self._and_angle = max(float(and_angle), 10.0)
+        self._init_bearing_range = (float(bearing_min), float(bearing_max))
+        self._target_dist_range = (float(target_dist_min), float(target_dist_max))
 
     @property
     def and_distance(self) -> float:
