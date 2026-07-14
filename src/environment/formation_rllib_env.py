@@ -53,8 +53,9 @@ MAX_LOS_RATE = 0.5
 REWARD_PROGRESS = 1.0       # was 1.5 — reduced so pincer cooperation outweighs solo rushing
 REWARD_ATA = 8.0
 REWARD_SUCCESS = 5000.0
-REWARD_CRASH = -200.0
-REWARD_LOST_TARGET = -200.0
+REWARD_CRASH = -3000.0        # was -200 — suicide must be worse than engagement
+REWARD_LOST_TARGET = -3000.0  # was -200 — suicide must never be profitable
+REWARD_OOB = -3000.0          # new — out-of-bounds must equal crash/ lost penalty
 REWARD_TIMEOUT = -500.0
 REWARD_OR_FALLBACK = 1000.0   # one-shot in AND phase: pursuer reaches 200m (no episode termination)
 STEP_PENALTY = 0.25
@@ -77,7 +78,7 @@ FORMATION_COLLISION_DIST = 50.0
 FORMATION_COLLISION_PENALTY = -3000.0
 
 # ── Phase 5: Cooperative 2v1 ───────────────────────────────────────────────
-PINCER_IDEAL_ANGLE_MIN = 60.0
+PINCER_IDEAL_ANGLE_MIN = 20.0   # was 60.0 — lowered for DENSE shaping (any angle >20° earns)
 PINCER_IDEAL_ANGLE_MAX = 150.0
 PINCER_WEIGHT = 30.0        # was 15.0 — doubled to make flanking worth more than solo closure
 PINCER_DIST_MAX = 2000.0
@@ -737,6 +738,8 @@ class FormationRLlibEnv(MultiAgentEnv):
                     reason = "ground_crash"
                     break
                 if alt > 12000.0:
+                    for aid in self._agent_ids:
+                        rewards[aid] += REWARD_OOB
                     terminated = True
                     reason = "out_of_bounds"
                     break
