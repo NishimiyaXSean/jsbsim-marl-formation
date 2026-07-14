@@ -44,11 +44,11 @@ from src.models.formation_rllib_model import RLlibAttentionActor
 # Each stage defines: (and_dist, and_angle, bearing_min, bearing_max)
 CURRICULUM_STAGES = {
     1: {"and_dist": 1200.0, "and_angle": 35.0, "bearing_min": -30.0, "bearing_max": 30.0,
-        "target_dist_min": 1600.0, "target_dist_max": 2200.0},
+        "target_dist_min": 1600.0, "target_dist_max": 2200.0, "sustain_steps": 2},
     2: {"and_dist": 1000.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0,
-        "target_dist_min": 1200.0, "target_dist_max": 2000.0},
+        "target_dist_min": 1200.0, "target_dist_max": 2000.0, "sustain_steps": 4},
     3: {"and_dist": 800.0, "and_angle": 20.0, "bearing_min": -180.0, "bearing_max": 180.0,
-        "target_dist_min": 900.0, "target_dist_max": 1800.0},
+        "target_dist_min": 900.0, "target_dist_max": 1800.0, "sustain_steps": 6},
 }
 CURRICULUM_WINDOW = 3        # number of eval rounds for moving-average sync rate
 CURRICULUM_MIN_WINDOW = 3    # minimum evals before checking gate
@@ -68,7 +68,8 @@ def _apply_curriculum_stage(algo, stage: int) -> None:
                 stage, params["and_dist"], params["and_angle"],
                 params["bearing_min"], params["bearing_max"],
                 params.get("target_dist_min", 900.0),
-                params.get("target_dist_max", 1300.0))
+                params.get("target_dist_max", 1300.0),
+                params.get("sustain_steps", 6))
 
     try:
         algo.env_runner_group.foreach_env(_set_stage)
@@ -89,6 +90,7 @@ def _interpolate_params(old_stage: int, new_stage: int, progress: float) -> dict
         "bearing_max": old["bearing_max"] * (1 - t) + new["bearing_max"] * t,
         "target_dist_min": old.get("target_dist_min", 900) * (1 - t) + new.get("target_dist_min", 900) * t,
         "target_dist_max": old.get("target_dist_max", 1300) * (1 - t) + new.get("target_dist_max", 1300) * t,
+        "sustain_steps": round(old.get("sustain_steps", 6) * (1 - t) + new.get("sustain_steps", 6) * t),
     }
 
 
@@ -392,7 +394,8 @@ def train(
                         1, p["and_dist"], p["and_angle"],
                         p["bearing_min"], p["bearing_max"],
                         p.get("target_dist_min", 900.0),
-                        p.get("target_dist_max", 1300.0))
+                        p.get("target_dist_max", 1300.0),
+                        p.get("sustain_steps", 2))
             try:
                 algo.env_runner_group.foreach_env(_resume_stage1)
             except Exception as e:
@@ -457,7 +460,8 @@ def train(
                                 1, p["and_dist"], p["and_angle"],
                                 p["bearing_min"], p["bearing_max"],
                                 p.get("target_dist_min", 900.0),
-                                p.get("target_dist_max", 1300.0))
+                                p.get("target_dist_max", 1300.0),
+                                p.get("sustain_steps", 2))
                     try:
                         algo.env_runner_group.foreach_env(_start_curriculum)
                         print(f"    AND: {CURRICULUM_STAGES[1]}")
@@ -609,7 +613,8 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
                 stage_params.get("bearing_min", -20.0),
                 stage_params.get("bearing_max", 20.0),
                 stage_params.get("target_dist_min", 900.0),
-                stage_params.get("target_dist_max", 1300.0))
+                stage_params.get("target_dist_max", 1300.0),
+                stage_params.get("sustain_steps", 6))
     elif and_distance is not None:
         env.set_and_distance(and_distance)
     env._difficulty = difficulty

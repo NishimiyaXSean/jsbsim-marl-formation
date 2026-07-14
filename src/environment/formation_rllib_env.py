@@ -78,9 +78,11 @@ FORMATION_COLLISION_DIST = 50.0
 FORMATION_COLLISION_PENALTY = -3000.0
 
 # ── Phase 5: Cooperative 2v1 ───────────────────────────────────────────────
-PINCER_IDEAL_ANGLE_MIN = 20.0   # was 60.0 — lowered for DENSE shaping (any angle >20° earns)
-PINCER_IDEAL_ANGLE_MAX = 150.0
-PINCER_WEIGHT = 30.0        # was 15.0 — doubled to make flanking worth more than solo closure
+# Potential pincer shaping: linear reward c * min(theta, AND_angle) when
+# both in range. Pushes pursuers apart to build pincer angle, caps at the
+# AND-gate threshold so the real payoff comes from cooperative_success.
+PINCER_SHAPING_COEFF = 35.0  # c in: c * min(pincer_angle, and_angle) * dt
+PINCER_DIST_MAX = 2000.0     # both must be within this range for pincer shaping
 PINCER_DIST_MAX = 2000.0
 
 COOP_PHASE_OR = 0
@@ -232,6 +234,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         # Cooperative state
         self._striker_idx: int = 0
         self._coop_sustain_counter: int = 0
+        self._sustain_required: int = COOP_SUSTAIN_STEPS  # dynamic per curriculum stage
         self._coop_phase: int = COOP_PHASE_OR
         self._and_dist: float = COOP_PHASE2_AND_DIST_INIT  # dynamic, annealed from outside
         self._and_angle: float = COOP_PHASE2_AND_ANGLE     # dynamic, adjusted per curriculum stage
@@ -630,12 +633,11 @@ class FormationRLlibEnv(MultiAgentEnv):
 
                 both_in_range = (d0 < PINCER_DIST_MAX and d1 < PINCER_DIST_MAX)
 
-                # Pincer reward (both in range + angle in ideal range)
-                if both_in_range and PINCER_IDEAL_ANGLE_MIN <= pincer_angle <= PINCER_IDEAL_ANGLE_MAX:
-                    angle_qual = ((pincer_angle - PINCER_IDEAL_ANGLE_MIN) /
-                                  (PINCER_IDEAL_ANGLE_MAX - PINCER_IDEAL_ANGLE_MIN))
-                    pincer_r = PINCER_WEIGHT * angle_qual * dt
-                    # Split pincer reward between both agents
+                # Potential pincer shaping: c * min(theta, and_angle) when both in range
+                # Linear push toward the AND-gate threshold, no reward beyond.
+                if both_in_range and pincer_angle > 0:
+                    shaped_angle = min(pincer_angle, self._and_angle)
+                    pincer_r = PINCER_SHAPING_COEFF * shaped_angle * dt
                     for aid in self._agent_ids:
                         rewards[aid] += pincer_r * 0.5
 
@@ -652,10 +654,10 @@ class FormationRLlibEnv(MultiAgentEnv):
                                 max(striker_ata, -0.2) * dt * striker_factor)
                 rewards[self._agent_ids[closer_idx]] += striker_bonus
 
-                # Interceptor (further): pincer bonus
-                if both_in_range and pincer_angle >= PINCER_IDEAL_ANGLE_MIN:
+                # Interceptor (further): pincer bonus scaled to AND threshold
+                if both_in_range and pincer_angle > 0:
                     interceptor_bonus = (INTERCEPTOR_PINCER_BONUS *
-                                        (pincer_angle / 180.0) * dt)
+                                        min(pincer_angle, self._and_angle) / 180.0 * dt)
                     rewards[self._agent_ids[further_idx]] += interceptor_bonus
 
                 # Distance asymmetry penalty (continuous — both pay when one lags)
@@ -753,7 +755,7 @@ class FormationRLlibEnv(MultiAgentEnv):
             else:
                 self._coop_sustain_counter = 0
 
-            if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
+            if self._coop_sustain_counter >= self._sustain_required:
                 for aid in self._agent_ids:
                     rewards[aid] += REWARD_SUCCESS
                 coop_bonus = 2000.0 * (pincer_angle / 180.0)
@@ -1081,18 +1083,22 @@ class FormationRLlibEnv(MultiAgentEnv):
 
     def set_curriculum_stage_full(self, stage: int, and_dist: float, and_angle: float,
                                    bearing_min: float, bearing_max: float,
-                                   target_dist_min: float, target_dist_max: float) -> None:
+                                   target_dist_min: float, target_dist_max: float,
+                                   sustain_steps: int = 6) -> None:
         """Set all curriculum parameters including target spawn distance.
 
         This extended version also controls how far the target spawns,
         ensuring pursuers start OUTSIDE the AND envelope and must
         actively close distance to succeed.
+
+        sustain_steps: AND-gate consecutive decision steps required (Stage 1=2, 2=4, 3=6)
         """
         self._curriculum_stage = int(stage)
         self._and_dist = max(float(and_dist), COOP_PHASE2_AND_DIST)
         self._and_angle = max(float(and_angle), 10.0)
         self._init_bearing_range = (float(bearing_min), float(bearing_max))
         self._target_dist_range = (float(target_dist_min), float(target_dist_max))
+        self._sustain_required = int(sustain_steps)
 
     @property
     def and_distance(self) -> float:
