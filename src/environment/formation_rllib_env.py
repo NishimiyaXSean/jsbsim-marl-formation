@@ -461,7 +461,10 @@ class FormationRLlibEnv(MultiAgentEnv):
         rewards = {aid: 0.0 for aid in self._agent_ids}
 
         # ═══════════════════════════════════════════════════════════════
-        #  Micro-step loop (30 steps × 1/60s)
+        # ── AND-gate sustain tracking (per decision step, not per physics sub-step) ─
+        and_met_this_step = False
+
+        #  Micro-step loop (12 steps × 1/60s)
         # ═══════════════════════════════════════════════════════════════
         for _ in range(DECISION_STEPS):
             # ── Control pursuers ──────────────────────────────────────
@@ -655,27 +658,13 @@ class FormationRLlibEnv(MultiAgentEnv):
                     for aid in self._agent_ids:
                         rewards[aid] -= sync_penalty
 
-                # Cooperative success (phase-aware)
+                # Cooperative success check (flag at decision-step level)
                 if self._coop_phase == COOP_PHASE_AND:
                     both_in_kill = (d0 < self._and_dist and
                                    d1 < self._and_dist and
                                    pincer_angle >= self._and_angle)
                     if both_in_kill:
-                        self._coop_sustain_counter += 1
-                    else:
-                        self._coop_sustain_counter = 0
-
-                    if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
-                        for aid in self._agent_ids:
-                            rewards[aid] += REWARD_SUCCESS
-                        coop_bonus = 2000.0 * (pincer_angle / 180.0)
-                        # Split coop bonus
-                        for aid in self._agent_ids:
-                            rewards[aid] += coop_bonus * 0.5
-                        terminated = True
-                        reason = "cooperative_success"
-                        kill_aid = self._agent_ids[closer_idx]
-                        break
+                        and_met_this_step = True
                 else:
                     # Phase 1: OR-gate
                     for i, ps in enumerate(self.pursuers):
@@ -724,6 +713,23 @@ class FormationRLlibEnv(MultiAgentEnv):
                     break
             if terminated:
                 break
+
+        # ── AND-gate sustain counter (per decision step, NOT per physics sub-step) ─
+        if self._coop_phase == COOP_PHASE_AND and not terminated:
+            if and_met_this_step:
+                self._coop_sustain_counter += 1
+            else:
+                self._coop_sustain_counter = 0
+
+            if self._coop_sustain_counter >= COOP_SUSTAIN_STEPS:
+                for aid in self._agent_ids:
+                    rewards[aid] += REWARD_SUCCESS
+                coop_bonus = 2000.0 * (pincer_angle / 180.0)
+                for aid in self._agent_ids:
+                    rewards[aid] += coop_bonus * 0.5
+                terminated = True
+                reason = "cooperative_success"
+                kill_aid = self._agent_ids[closer_idx]
 
         # ── Timeout ──────────────────────────────────────────────────────
         current_time = self._step_counter / CTRL_FREQ
