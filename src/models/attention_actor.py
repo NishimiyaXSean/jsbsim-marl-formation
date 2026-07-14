@@ -75,12 +75,13 @@ TARGET_DIM = len(TARGET_INDICES)  # 14
 MATE_INDICES = [
     27, 28, 29,   # mate relative position in body frame (3)
     30, 31, 32,   # mate relative velocity in body frame (3)
+    33, 34, 35, 36,  # mate broadcast: cmd_turn, cmd_speed, cos(hdg), sin(hdg) (4)
 ]
-MATE_DIM = len(MATE_INDICES)  # 6
+MATE_DIM = len(MATE_INDICES)  # 10 (was 6)
 
-# Verify: 13 + 14 + 6 = 33 ✓
-assert SELF_DIM + TARGET_DIM + MATE_DIM == 33, \
-    f"Segment dims don't sum to 33: {SELF_DIM}+{TARGET_DIM}+{MATE_DIM}={SELF_DIM+TARGET_DIM+MATE_DIM}"
+# Verify: 13 + 14 + 10 = 37 ✓
+assert SELF_DIM + TARGET_DIM + MATE_DIM == 37, \
+    f"Segment dims don't sum to 37: {SELF_DIM}+{TARGET_DIM}+{MATE_DIM}={SELF_DIM+TARGET_DIM+MATE_DIM}"
 
 
 def segment_obs(obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

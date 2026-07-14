@@ -123,7 +123,7 @@ SYNC_PACING_WEIGHT = 0.5              # penalty weight (was 1.0)
 
 # Global state: per-entity features
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
-OBS_PER_PURSUER = 33
+OBS_PER_PURSUER = 37  # was 33 — +4 mate broadcast dims (cmd_turn, cmd_speed, cos/ sin hdg)
 
 # ── Discrete action space ──────────────────────────────────────────────────
 # MultiDiscrete([5, 3]) = 15 tactical primitives
@@ -241,6 +241,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._lost_pursuer_steps: int = 0                    # counter for early termination
         self._ooc_counters: list[int] = [0, 0]               # per-pursuer OOC step counters
         self._or_triggered: list[bool] = [False, False]      # per-pursuer one-shot OR fallback flag
+        self._last_actions: dict = {}                         # store last action per agent for broadcast
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -470,6 +471,7 @@ class FormationRLlibEnv(MultiAgentEnv):
                 'cmd_turn_rate': turn_rates[turn_idx],
                 'cmd_speed': SPEEDS[speed_idx],
             }
+        self._last_actions = actions  # store for mate broadcast in observation
 
         terminated = False
         truncated = False
@@ -989,8 +991,22 @@ class FormationRLlibEnv(MultiAgentEnv):
                 mate_body_vel[0] / MAX_VEL, mate_body_vel[1] / MAX_VEL,
                 mate_body_vel[2] / MAX_VEL,
             ], dtype=np.float32)
+
+            # ── Broadcast: mate's tactical intent (4 dims) ────────────────
+            mate_aid = self._agent_ids[mate_idx]
+            mate_act = self._last_actions.get(mate_aid, {})
+            mate_cmd_turn = mate_act.get('cmd_turn_rate', 0.0) / 20.0  # [-1, 1]
+            mate_cmd_spd  = (mate_act.get('cmd_speed', 250.0) - 180.0) / 140.0  # [0, 1]
+            mate_ref_hdg  = np.deg2rad(self.pursuers[mate_idx].ref_hdg)
+            mate_broadcast = np.array([
+                mate_cmd_turn,
+                mate_cmd_spd,
+                np.cos(mate_ref_hdg),   # heading intent (dim 1)
+                np.sin(mate_ref_hdg),   # heading intent (dim 2)
+            ], dtype=np.float32)
+            mate = np.concatenate([mate, mate_broadcast])
         else:
-            mate = np.zeros(6, dtype=np.float32)
+            mate = np.zeros(10, dtype=np.float32)
 
         return np.clip(np.concatenate([base, mate]), -1, 1)
 
