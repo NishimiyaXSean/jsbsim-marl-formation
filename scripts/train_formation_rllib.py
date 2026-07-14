@@ -479,6 +479,17 @@ def train(
                     print(f"    [AND-curriculum] iter={i+1:3d}  "
                           f"AND_dist={current_and_dist:.0f}m")
 
+            # ── Smooth curriculum transition (every iter, not just eval) ───
+            if coop_warmup_done and transition_active:
+                transition_progress = (i - transition_start_iter) / TRANSITION_ITERS
+                if transition_progress >= 1.0:
+                    transition_active = False
+                    curriculum_stage = target_stage
+                    print(f"    Transition complete → Stage {target_stage}\n")
+                else:
+                    _apply_smooth_transition(algo, curriculum_stage, target_stage,
+                                             transition_progress)
+
             # ── Evaluation ───────────────────────────────────────────────
             if eval_interval > 0 and (i + 1) % eval_interval == 0:
                 # Determine AND distance and stage params for eval env
@@ -504,20 +515,8 @@ def train(
                     print(f"  [SAVE] New best: {best_path}")
 
                 # ── AND-gate curriculum: performance-based stage advancement ──
-                if coop_warmup_done and curriculum_stage < 3:
-                    # Drive any in-progress smooth transition
-                    if transition_active:
-                        transition_progress = (i - transition_start_iter) / TRANSITION_ITERS
-                        if transition_progress >= 1.0:
-                            transition_active = False
-                            curriculum_stage = target_stage
-                            print(f"    Transition complete → Stage {target_stage}\n")
-                        else:
-                            _apply_smooth_transition(algo, curriculum_stage, target_stage,
-                                                     transition_progress)
-
-                    # Check for stage advancement (only when not already transitioning)
-                    if not transition_active:
+                if coop_warmup_done and curriculum_stage < 3 \
+                        and not transition_active:
                         sync_history.append(sync_rate)
                         if len(sync_history) > CURRICULUM_WINDOW:
                             sync_history = sync_history[-CURRICULUM_WINDOW:]
