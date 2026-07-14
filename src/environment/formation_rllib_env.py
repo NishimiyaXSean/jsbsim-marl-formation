@@ -50,7 +50,7 @@ MAX_AOA = 30.0
 MAX_LOS_RATE = 0.5
 
 # Reward weights
-REWARD_PROGRESS = 1.5
+REWARD_PROGRESS = 1.0       # was 1.5 — reduced so pincer cooperation outweighs solo rushing
 REWARD_ATA = 8.0
 REWARD_SUCCESS = 5000.0
 REWARD_CRASH = -200.0
@@ -78,7 +78,7 @@ FORMATION_COLLISION_PENALTY = -3000.0
 # ── Phase 5: Cooperative 2v1 ───────────────────────────────────────────────
 PINCER_IDEAL_ANGLE_MIN = 60.0
 PINCER_IDEAL_ANGLE_MAX = 150.0
-PINCER_WEIGHT = 15.0
+PINCER_WEIGHT = 30.0        # was 15.0 — doubled to make flanking worth more than solo closure
 PINCER_DIST_MAX = 2000.0
 
 COOP_PHASE_OR = 0
@@ -92,6 +92,13 @@ COOP_SUSTAIN_STEPS = 6
 # Early termination: if BOTH pursuers are beyond this distance, episode is hopeless
 LOST_PURSUER_DIST = 6000.0      # min(d0, d1) > 6km → irrecoverable
 LOST_PURSUER_STEPS = 30         # sustain for 30 decision steps (6s) before terminating
+
+# Out-of-Combat (OOC) penalty: per-agent anti-camping pressure.
+# If a single pursuer hangs back beyond AND_dist + margin for too long,
+# it gets penalized individually. This breaks the "one works, one watches" stalemate.
+OOC_MARGIN = 400.0              # threshold = AND_dist + 400m (Stage 1: 1600m)
+OOC_PENALTY_STEPS = 30          # sustain for 30 decision steps (6s) before penalizing
+OOC_PENALTY_PER_STEP = 2.0      # penalty per agent per decision step while OOC
 
 STRIKER_TRACKING_BONUS = 1.5
 INTERCEPTOR_PINCER_BONUS = 2.0
@@ -231,6 +238,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._curriculum_stage: int = 0                      # 0=pre-curriculum, 1/2/3=stages
         self._last_termination_reason: str = "none"          # for sync-rate tracking
         self._lost_pursuer_steps: int = 0                    # counter for early termination
+        self._ooc_counters: list[int] = [0, 0]               # per-pursuer OOC step counters
 
         # ── Build aircraft ──────────────────────────────────────────────
         self.pursuers: List[_Pursuer] = []
@@ -394,6 +402,7 @@ class FormationRLlibEnv(MultiAgentEnv):
 
         self._step_counter = 0
         self._coop_sustain_counter = 0
+        self._ooc_counters = [0, 0]
         self._tacview_frames = []
 
         return self._get_obs(), {}
@@ -737,6 +746,21 @@ class FormationRLlibEnv(MultiAgentEnv):
                 terminated = True
                 reason = "cooperative_success"
                 kill_aid = self._agent_ids[closer_idx]
+
+        # ── OOC penalty: per-agent anti-camping pressure ────────────────
+        # If a pursuer hangs back beyond AND_dist + margin, increment its
+        # OOC counter. Once past threshold, penalize every decision step.
+        # Counters are independent — P1 can't hide behind P0's progress.
+        if self._coop_phase == COOP_PHASE_AND and not terminated:
+            ooc_threshold = self._and_dist + OOC_MARGIN
+            for i, dist in enumerate(pursuer_dists):
+                if dist > ooc_threshold:
+                    self._ooc_counters[i] += 1
+                else:
+                    self._ooc_counters[i] = 0
+
+                if self._ooc_counters[i] >= OOC_PENALTY_STEPS:
+                    rewards[self._agent_ids[i]] -= OOC_PENALTY_PER_STEP
 
         # ── Early termination: single pursuer hopelessly lost ────────────
         if self._coop_phase == COOP_PHASE_AND and not terminated:
