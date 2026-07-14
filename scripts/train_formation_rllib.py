@@ -191,6 +191,24 @@ def load_bc_weights(algo, bc_ckpt_path: str, policy_ids: list[str]) -> bool:
         skipped = 0
         head_loaded = 0
 
+        # ── Phase 0: Surgical padding for mate_proj (6→10 dims) ─────
+        # If BC was trained on 33-dim obs (mate=6) but model expects
+        # 37-dim obs (mate=10), pad mate_proj.weight with zeros for the
+        # 4 new broadcast dimensions. Preserves 100% of BC knowledge.
+        if "mate_proj.weight" in bc_state:
+            bc_mate_w = bc_state["mate_proj.weight"]
+            rllib_mate_key = "actor.mate_proj.weight"
+            if rllib_mate_key in rllib_state:
+                if bc_mate_w.shape != rllib_state[rllib_mate_key].shape:
+                    old_w = bc_mate_w  # [d_model, 6]
+                    new_w = torch.zeros(rllib_state[rllib_mate_key].shape,
+                                        dtype=old_w.dtype, device=old_w.device)
+                    new_w[:, :old_w.shape[1]] = old_w  # copy old cols
+                    # new cols 6-9 remain zero → neutral init for broadcast dims
+                    bc_state["mate_proj.weight"] = new_w
+                    print(f"[BC Load]   + surgically padded mate_proj.weight: "
+                          f"{list(old_w.shape)} → {list(new_w.shape)}")
+
         # ── Phase 1: Backbone keys (actor_state → "actor.*") ───────────
         for bc_key, bc_val in bc_state.items():
             rllib_key = f"actor.{bc_key}"
