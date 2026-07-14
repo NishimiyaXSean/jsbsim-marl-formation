@@ -322,16 +322,24 @@ def train(
         if cooperative and warmup_steps > 0:
             coop_warmup_done = True
             current_phase = COOP_PHASE_AND
-            and_start_iter = 0  # start annealing from iter 0 after resume
-            print(f"[Resume] Warmup skipped — starting directly in AND-gate phase")
-            print(f"[Resume] AND distance curriculum: 2000m → 800m")
-            def set_and_phase(env):
+            curriculum_stage = 1
+            and_start_iter = 0
+            print(f"[Resume] Warmup skipped — starting directly in AND-gate Stage 1")
+            p = CURRICULUM_STAGES[1]
+            print(f"[Resume]    AND: {p}")
+            def _resume_stage1(env):
                 if hasattr(env, 'set_coop_phase'):
                     env.set_coop_phase(COOP_PHASE_AND)
+                if hasattr(env, 'set_curriculum_stage_full'):
+                    env.set_curriculum_stage_full(
+                        1, p["and_dist"], p["and_angle"],
+                        p["bearing_min"], p["bearing_max"],
+                        p.get("target_dist_min", 900.0),
+                        p.get("target_dist_max", 1300.0))
             try:
-                algo.env_runner_group.foreach_env(set_and_phase)
+                algo.env_runner_group.foreach_env(_resume_stage1)
             except Exception as e:
-                print(f"  [WARN] Could not set coop phase on workers: {e}")
+                print(f"  [WARN] Could not set stage 1 on workers: {e}")
 
     print(f"\n{'='*60}")
     print(f"RLlib MAPPO 2v1 Cooperative Formation Training")
