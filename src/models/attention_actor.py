@@ -57,8 +57,9 @@ SELF_INDICES = [
     22,           # alpha / MAX_AOA
     23,           # airspeed / MAX_VEL
     24,           # placeholder (was Ps)
+    27, 28,       # agent one-hot ID: [1,0]=P0, [0,1]=P1 — breaks symmetry
 ]
-SELF_DIM = len(SELF_INDICES)  # 13
+SELF_DIM = len(SELF_INDICES)  # 15 (was 13)
 
 # Target-related features: what the pursuer perceives about the target
 TARGET_INDICES = [
@@ -73,15 +74,15 @@ TARGET_DIM = len(TARGET_INDICES)  # 14
 
 # Mate-related features: what the pursuer perceives about its wingman
 MATE_INDICES = [
-    27, 28, 29,   # mate relative position in body frame (3)
-    30, 31, 32,   # mate relative velocity in body frame (3)
-    33, 34, 35, 36,  # mate broadcast: cmd_turn, cmd_speed, cos(hdg), sin(hdg) (4)
+    29, 30, 31,   # mate relative position in body frame (3)
+    32, 33, 34,   # mate relative velocity in body frame (3)
+    35, 36, 37, 38,  # mate broadcast: cmd_turn, cmd_speed, cos(hdg), sin(hdg) (4)
 ]
-MATE_DIM = len(MATE_INDICES)  # 10 (was 6)
+MATE_DIM = len(MATE_INDICES)  # 10
 
-# Verify: 13 + 14 + 10 = 37 ✓
-assert SELF_DIM + TARGET_DIM + MATE_DIM == 37, \
-    f"Segment dims don't sum to 37: {SELF_DIM}+{TARGET_DIM}+{MATE_DIM}={SELF_DIM+TARGET_DIM+MATE_DIM}"
+# Verify: 15 + 14 + 10 = 39 ✓
+assert SELF_DIM + TARGET_DIM + MATE_DIM == 39, \
+    f"Segment dims don't sum to 39: {SELF_DIM}+{TARGET_DIM}+{MATE_DIM}={SELF_DIM+TARGET_DIM+MATE_DIM}"
 
 
 def segment_obs(obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

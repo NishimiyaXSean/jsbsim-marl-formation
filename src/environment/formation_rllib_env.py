@@ -123,7 +123,7 @@ SYNC_PACING_WEIGHT = 0.5              # penalty weight (was 1.0)
 
 # Global state: per-entity features
 GLOBAL_DIM_PER_AIRCRAFT = 7  # pos(3) + vel(3) + heading(1)
-OBS_PER_PURSUER = 37  # was 33 — +4 mate broadcast dims (cmd_turn, cmd_speed, cos/ sin hdg)
+OBS_PER_PURSUER = 39  # was 33 → 37 (+4 broadcast) → 39 (+2 agent onehot)
 
 # ── Discrete action space ──────────────────────────────────────────────────
 # MultiDiscrete([5, 3]) = 15 tactical primitives
@@ -967,6 +967,12 @@ class FormationRLlibEnv(MultiAgentEnv):
             alpha / MAX_AOA, spd / MAX_VEL, 0.0,  # Ps placeholder
             lambda_dot_norm, berr_norm,
         ], dtype=np.float32)
+
+        # Agent one-hot ID: breaks symmetry so the shared policy can develop
+        # consistent role preferences ("I'm P0, I flank left; I'm P1, I go right")
+        agent_onehot = np.array([1.0, 0.0] if idx == 0 else [0.0, 1.0], dtype=np.float32)
+
+        base = np.concatenate([base, agent_onehot])  # base: 27→29 dims
 
         # Mate observation (indices 27-32)
         if self.N >= 2:
