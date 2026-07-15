@@ -103,6 +103,12 @@ OOC_MARGIN = 400.0              # threshold = AND_dist + 400m (Stage 1: 1600m)
 OOC_PENALTY_STEPS = 30          # sustain for 30 decision steps (6s) before penalizing
 OOC_PENALTY_PER_STEP = 2.0      # penalty per agent per decision step while OOC
 
+# Closing velocity penalty: anti-loiter outside AND envelope.
+# If a pursuer is beyond AND_dist and closing slower than this threshold
+# (or moving away), penalize proportional to the deficit.
+CLOSING_VEL_THRESHOLD = 30.0    # m/s — must close at least 30 m/s toward target
+CLOSING_VEL_PENALTY = 0.5       # penalty coefficient per m/s below threshold
+
 STRIKER_TRACKING_BONUS = 1.5
 INTERCEPTOR_PINCER_BONUS = 2.0
 
@@ -486,6 +492,11 @@ class FormationRLlibEnv(MultiAgentEnv):
         rewards = {aid: 0.0 for aid in self._agent_ids}
 
         # ═══════════════════════════════════════════════════════════════
+        # ── Per-step state for closing-velocity penalty ──────────────────
+        _step_start_dists = [float(np.linalg.norm(
+            ps.aircraft.position_ned - self.targets[0].aircraft.position_ned))
+            for ps in self.pursuers]
+
         # ── AND-gate sustain tracking (per decision step, not per physics sub-step) ─
         and_met_this_step = False
 
@@ -631,18 +642,16 @@ class FormationRLlibEnv(MultiAgentEnv):
                 else:
                     pincer_angle = 0.0
 
-                # Hard multiplicative distance mask for pincer shaping.
-                # mask=1.0 only when BOTH pursuers are within the soft envelope
-                # (1.2× AND_dist). If either exits, mask→0 instantly — no state
-                # leakage possible. No if-else that could silently latch.
-                pincer_gate = (self._and_dist * 1.2) if self._coop_phase == COOP_PHASE_AND else PINCER_DIST_MAX
-                mask_uav0 = 1.0 if d0 < pincer_gate else 0.0
-                mask_uav1 = 1.0 if d1 < pincer_gate else 0.0
-                combined_mask = mask_uav0 * mask_uav1
-
-                if combined_mask > 0 and pincer_angle > 0:
+                # ── Pincer shaping: exponential distance-decay (no hard gate) ─
+                # R = c * min(theta, AND_angle) * exp(-d0/tau) * exp(-d1/tau)
+                # tau = AND_dist. At d=tau: 37%, at d=2*tau: 14% (effectively zero).
+                # Continuous gradient everywhere — no dead zone, no binary cliff.
+                # Far-distance angle farming is economically impossible.
+                if pincer_angle > 0:
+                    tau = max(self._and_dist, 100.0)  # avoid div-by-zero
+                    decay = np.exp(-d0 / tau) * np.exp(-d1 / tau)
                     shaped_angle = min(pincer_angle, self._and_angle)
-                    pincer_r = combined_mask * PINCER_SHAPING_COEFF * shaped_angle * dt
+                    pincer_r = decay * PINCER_SHAPING_COEFF * shaped_angle * dt
                     for aid in self._agent_ids:
                         rewards[aid] += pincer_r * 0.5
 
@@ -659,9 +668,9 @@ class FormationRLlibEnv(MultiAgentEnv):
                                 max(striker_ata, -0.2) * dt * striker_factor)
                 rewards[self._agent_ids[closer_idx]] += striker_bonus
 
-                # Interceptor (further): pincer bonus with same hard mask
-                if combined_mask > 0 and pincer_angle > 0:
-                    interceptor_bonus = (combined_mask * INTERCEPTOR_PINCER_BONUS *
+                # Interceptor (further): pincer bonus with same exponential decay
+                if pincer_angle > 0:
+                    interceptor_bonus = (decay * INTERCEPTOR_PINCER_BONUS *
                                         min(pincer_angle, self._and_angle) / 180.0 * dt)
                     rewards[self._agent_ids[further_idx]] += interceptor_bonus
 
@@ -769,6 +778,19 @@ class FormationRLlibEnv(MultiAgentEnv):
                 terminated = True
                 reason = "cooperative_success"
                 kill_aid = self._agent_ids[closer_idx]
+
+        # ── Closing velocity penalty: anti-loiter outside AND envelope ───
+        # If a pursuer is beyond AND_dist and not closing fast enough (or
+        # moving away), penalize. Directly targets the '79% Slow' loiter
+        # strategy observed in V6 P1 autopsy.
+        if not terminated:
+            for i, dist in enumerate(pursuer_dists):
+                if dist > self._and_dist and self._coop_phase == COOP_PHASE_AND:
+                    closing = (_step_start_dists[i] - dist) / DECISION_DT  # m/s, + closing
+                    if closing < CLOSING_VEL_THRESHOLD:
+                        deficit = CLOSING_VEL_THRESHOLD - closing
+                        penalty = CLOSING_VEL_PENALTY * deficit * DECISION_DT
+                        rewards[self._agent_ids[i]] -= penalty
 
         # ── OOC penalty: per-agent anti-camping pressure ────────────────
         # If a pursuer hangs back beyond threshold, increment its OOC counter.
