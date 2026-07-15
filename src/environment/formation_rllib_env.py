@@ -82,8 +82,7 @@ FORMATION_COLLISION_PENALTY = -3000.0
 # both in range. Pushes pursuers apart to build pincer angle, caps at the
 # AND-gate threshold so the real payoff comes from cooperative_success.
 PINCER_SHAPING_COEFF = 35.0  # c in: c * min(pincer_angle, and_angle) * dt
-PINCER_DIST_MAX = 2000.0     # both must be within this range for pincer shaping
-PINCER_DIST_MAX = 2000.0
+PINCER_DIST_MAX = 2000.0     # legacy — replaced by dynamic AND_dist in pincer gate
 
 COOP_PHASE_OR = 0
 COOP_PHASE_AND = 1
@@ -632,10 +631,12 @@ class FormationRLlibEnv(MultiAgentEnv):
                 else:
                     pincer_angle = 0.0
 
-                both_in_range = (d0 < PINCER_DIST_MAX and d1 < PINCER_DIST_MAX)
+                # Tight gate: use current AND distance (not fixed 2000m)
+                # Prevents 'parallel cruising at 1500m' from farming pincer reward
+                pincer_gate = self._and_dist if self._coop_phase == COOP_PHASE_AND else PINCER_DIST_MAX
+                both_in_range = (d0 < pincer_gate and d1 < pincer_gate)
 
-                # Potential pincer shaping: c * min(theta, and_angle) when both in range
-                # Linear push toward the AND-gate threshold, no reward beyond.
+                # Potential pincer shaping: c * min(theta, and_angle) when both in AND range
                 if both_in_range and pincer_angle > 0:
                     shaped_angle = min(pincer_angle, self._and_angle)
                     pincer_r = PINCER_SHAPING_COEFF * shaped_angle * dt
