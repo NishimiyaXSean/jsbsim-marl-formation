@@ -631,9 +631,11 @@ class FormationRLlibEnv(MultiAgentEnv):
                 else:
                     pincer_angle = 0.0
 
-                # Tight gate: use current AND distance (not fixed 2000m)
-                # Prevents 'parallel cruising at 1500m' from farming pincer reward
-                pincer_gate = self._and_dist if self._coop_phase == COOP_PHASE_AND else PINCER_DIST_MAX
+                # Dynamic soft-envelope pincer gate: 1.2× AND_dist in AND phase.
+                # Stage 1: 1440m, Stage 2: 1200m, Stage 3: 960m.
+                # Provides gentle angular guidance during approach without letting
+                # agents farm pincer reward from >1.5km away.
+                pincer_gate = (self._and_dist * 1.2) if self._coop_phase == COOP_PHASE_AND else PINCER_DIST_MAX
                 both_in_range = (d0 < pincer_gate and d1 < pincer_gate)
 
                 # Potential pincer shaping: c * min(theta, and_angle) when both in AND range
