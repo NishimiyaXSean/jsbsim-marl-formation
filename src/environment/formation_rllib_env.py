@@ -631,17 +631,18 @@ class FormationRLlibEnv(MultiAgentEnv):
                 else:
                     pincer_angle = 0.0
 
-                # Dynamic soft-envelope pincer gate: 1.2× AND_dist in AND phase.
-                # Stage 1: 1440m, Stage 2: 1200m, Stage 3: 960m.
-                # Provides gentle angular guidance during approach without letting
-                # agents farm pincer reward from >1.5km away.
+                # Hard multiplicative distance mask for pincer shaping.
+                # mask=1.0 only when BOTH pursuers are within the soft envelope
+                # (1.2× AND_dist). If either exits, mask→0 instantly — no state
+                # leakage possible. No if-else that could silently latch.
                 pincer_gate = (self._and_dist * 1.2) if self._coop_phase == COOP_PHASE_AND else PINCER_DIST_MAX
-                both_in_range = (d0 < pincer_gate and d1 < pincer_gate)
+                mask_uav0 = 1.0 if d0 < pincer_gate else 0.0
+                mask_uav1 = 1.0 if d1 < pincer_gate else 0.0
+                combined_mask = mask_uav0 * mask_uav1
 
-                # Potential pincer shaping: c * min(theta, and_angle) when both in AND range
-                if both_in_range and pincer_angle > 0:
+                if combined_mask > 0 and pincer_angle > 0:
                     shaped_angle = min(pincer_angle, self._and_angle)
-                    pincer_r = PINCER_SHAPING_COEFF * shaped_angle * dt
+                    pincer_r = combined_mask * PINCER_SHAPING_COEFF * shaped_angle * dt
                     for aid in self._agent_ids:
                         rewards[aid] += pincer_r * 0.5
 
@@ -658,9 +659,9 @@ class FormationRLlibEnv(MultiAgentEnv):
                                 max(striker_ata, -0.2) * dt * striker_factor)
                 rewards[self._agent_ids[closer_idx]] += striker_bonus
 
-                # Interceptor (further): pincer bonus scaled to AND threshold
-                if both_in_range and pincer_angle > 0:
-                    interceptor_bonus = (INTERCEPTOR_PINCER_BONUS *
+                # Interceptor (further): pincer bonus with same hard mask
+                if combined_mask > 0 and pincer_angle > 0:
+                    interceptor_bonus = (combined_mask * INTERCEPTOR_PINCER_BONUS *
                                         min(pincer_angle, self._and_angle) / 180.0 * dt)
                     rewards[self._agent_ids[further_idx]] += interceptor_bonus
 
