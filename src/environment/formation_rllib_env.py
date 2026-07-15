@@ -242,6 +242,7 @@ class FormationRLlibEnv(MultiAgentEnv):
         self._target_dist_range: tuple = (900.0, 1300.0)    # dynamic, per-stage target spawn distance
         self._curriculum_stage: int = 0                      # 0=pre-curriculum, 1/2/3=stages
         self._last_termination_reason: str = "none"          # for sync-rate tracking
+        self._reward_breakdown: dict = {}                    # per-episode reward component totals (diagnostic)
         self._lost_pursuer_steps: int = 0                    # counter for early termination
         self._ooc_counters: list[int] = [0, 0]               # per-pursuer OOC step counters
         self._or_triggered: list[bool] = [False, False]      # per-pursuer one-shot OR fallback flag
