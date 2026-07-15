@@ -637,7 +637,7 @@ class FormationRLlibEnv(MultiAgentEnv):
 
                 if n0 > 1.0 and n1 > 1.0:
                     cos_pincer = np.clip(
-                        float(np.dot(los0_h, los1_h)) / (n0 * n1), -1.0, 1.0)
+                        float(np.dot(los0_h, los1_h)) / (n0 * n1 + 1e-6), -1.0, 1.0)
                     pincer_angle = float(np.degrees(np.arccos(cos_pincer)))
                 else:
                     pincer_angle = 0.0
@@ -811,7 +811,7 @@ class FormationRLlibEnv(MultiAgentEnv):
                     fleeing = False
                     if los_norm > 1.0 and speed_mps > 1.0:
                         vel = ps.aircraft.velocity_ned
-                        cos_heading_to_target = float(np.dot(vel, los)) / (speed_mps * los_norm)
+                        cos_heading_to_target = float(np.dot(vel, los)) / (speed_mps * los_norm + 1e-6)
                         fleeing = (cos_heading_to_target < 0.0)  # >90° = moving away
 
                     if is_slow or fleeing:
