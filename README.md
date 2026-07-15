@@ -31,8 +31,12 @@
 | **Exp 4b** | Self-Attention | Discrete BC | 120 | −1,135 | 0 | BC heads never loaded (bug) |
 | **★ 4a-v2 ext** | **Self-Attention** | None | 320 | **+2,376** | **3×** | Cold-start peak; high variance |
 | **★ 5a BC hotstart** | **Self-Attention** | **Discrete BC** | **500** | **+381** | **3×** | **95.6% train positive rate** |
+| **Exp 5b AND-gate** | Self-Attn + Curric. | Discrete BC | 500 | +4,283 | — | AND-gate sync 55% (Stage 1 greenhouse) |
+| **Exp 6a V5 full-stack** | Self-Attn + Comm + ID | Discrete BC | 500 | +178 | — | Sync 15% — CTDE implicit ceiling proved |
+| **Exp 6b V6 indep. Actor** | **Independent Actors** | Discrete BC | 500 | −3,815 | — | +12,388 train rew but 0% sync — solo flight only |
+| **★ V7 (running)** | Shared Attn + 6 fixes | Discrete BC | 500 | TBD | — | Expo. pincer + anti-loiter + soft collision |
 
-> **BC hotstart (Exp 5a) achieves unprecedented training stability**: 95.6% of training iterations positive vs ~50% for cold-start. Eval peak (+381 at iter 450) is lower than cold-start best (+2,376) but comes with dramatically reduced variance in the training signal. The lower peak is attributed to conservative LR (2e-4, 0.67× cold-start) — an exploration-boosted resume (LR=3e-4, entropy_coeff=0.05) is in progress. **The decisive finding**: Self-Attention architecture alone (no BC, no expert) spontaneously learns cooperative pursuit — BC further stabilizes it.
+> **CTDE implicit coordination ceiling proved at ~15% sync rate.** After 6 experiment versions testing reward rebalancing (V4), communication channels (V5), independent actors (V6), and exponential pincer shaping with anti-loiter penalties (V7), the fundamental finding is: parameter-shared MAPPO with token-based Self-Attention spontaneously learns role differentiation (Cohen's d=−0.53) but cannot reliably synchronize pincer formation. The 86% lost_target rate in V6 autopsy confirmed independent actors produce strong solo flight but zero coordination. V7 combines all lessons: shared Actor preserves gradient-driven role differentiation, exponential pincer decay provides continuous shaping, enhanced anti-loiter (-10/step) eliminates spectator behavior, and soft collision shaping replaces termination cliffs with smooth repulsion.
 
 ### Self-Attention Attention Analysis (Fig 3)
 
@@ -448,7 +452,7 @@ Quick checklist:
 - [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
 - [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
->   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3], migrated 2026-07-09). **BC hotstart is the recommended training mode** (BC bug fix 2026-07-10). The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or conda.
+>   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3]). **BC hotstart is the recommended training mode** (BC bug fix 2026-07-10). **V7 (current)** combines shared Actor CTDE with exponential pincer decay, enhanced anti-loiter (-10/step), soft collision shaping, agent one-hot ID, mate broadcast channel, and 3-stage curriculum with temporal relaxation. The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API.
 
 ---
 
@@ -504,16 +508,18 @@ Phase 3 (Jul 7):     RLlib migration → IPPO → Parameter-Shared MAPPO
 Phase 4 (Jul 8):     OR-gate convergence (+7,888), AND-gate dynamic annealing (-1,171)
 Phase 5 (Jul 9):     Continuous → Discrete MultiDiscrete([5,3]) + Action Masking
 Phase 6 (Jul 9-10):  Self-Attn cold-start → ablation matrix → paper PPT
-Phase 7 (Jul 10):    ★ BC weight loading bug fix → 500-iter BC hotstart (95.6% positive)
-Phase 8 (Jul 13):    ★ Resume from best: LR=3e-4 + entropy=0.05 + relaxed penalties
+Phase 7 (Jul 10):    BC bug fix → 500-iter BC hotstart (95.6% positive)
+Phase 8 (Jul 13):    Sensitivity analysis → speed-dependent turns → Env-V2 (+3,421)
+Phase 9 (Jul 14):    AND-gate curriculum → reward rebalance → CTDE ceiling at 15% sync
+Phase 10 (Jul 15):   V5 full-stack (Comm+ID+Shaping) → V6 independent actors → V7 final
 ```
 
 ### Current Optimization Priorities
 
-1. **Eval variance suppression**: eval still oscillates +381 ↔ −8,644 despite stable training — investigate environment initial condition sensitivity or reward shaping
-2. **AND-gate sync-entry**: 0% sync rate remains the fundamental bottleneck; explore relaxed AND thresholds or explicit ΔTGO signal
-3. **Peak eval recovery**: Ongoing exploration-boosted resume (LR=3e-4, entropy=0.05) targets cold-start's +2,376 peak while preserving BC's stability
-4. **N×M scaling**: MultiDiscrete + parameter sharing naturally supports >2 pursuer scenarios
+1. **AND-gate sync rate breakthrough**: 15% ceiling across 6 experiment versions. V7 (exponential pincer + anti-loiter + soft collision) aims to push past this.
+2. **Anti-spectator enforcement**: V6 autopsy revealed P1's 79% Slow + 44% SoftLeft loiter strategy. Enhanced −10/step penalty in V7 directly targets this.
+3. **Collision shaping**: Soft repulsive force replacing −3000+termination cliff — allows safe-proximity learning.
+4. **Paper writing**: 10 experiment versions, sensitivity analysis, trajectory comparisons, and CTDE ceiling proof ready for manuscript.
 
 ---
 
