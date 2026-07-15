@@ -74,8 +74,9 @@ ATA_DEGRADATION_WEIGHT = 1.0
 TERMINAL_PULL_MAX = 50.0
 
 # Formation collision
-FORMATION_COLLISION_DIST = 50.0
-FORMATION_COLLISION_PENALTY = -3000.0
+FORMATION_COLLISION_DIST = 100.0   # soft repulsion starts at 100m (was 50m hard cutoff)
+FORMATION_COLLISION_PENALTY = -3000.0  # only on actual contact (<10m)
+COLLISION_SHAPING_WEIGHT = 10.0  # penalty = weight * (100 - dist)^2 per second
 
 # ── Phase 5: Cooperative 2v1 ───────────────────────────────────────────────
 # Potential pincer shaping: linear reward c * min(theta, AND_angle) when
@@ -103,11 +104,10 @@ OOC_MARGIN = 400.0              # threshold = AND_dist + 400m (Stage 1: 1600m)
 OOC_PENALTY_STEPS = 30          # sustain for 30 decision steps (6s) before penalizing
 OOC_PENALTY_PER_STEP = 2.0      # penalty per agent per decision step while OOC
 
-# Closing velocity penalty: anti-loiter outside AND envelope.
-# If a pursuer is beyond AND_dist and closing slower than this threshold
-# (or moving away), penalize proportional to the deficit.
-CLOSING_VEL_THRESHOLD = 30.0    # m/s — must close at least 30 m/s toward target
-CLOSING_VEL_PENALTY = 0.5       # penalty coefficient per m/s below threshold
+# Enhanced anti-loiter penalty: heavy fine for Slow/cross-range flight outside combat zone.
+# V6 autopsy: P1 used 79% Slow + 44% SoftLeft → effectively loitering at 2-3km.
+# -10.0/step when d > AND_dist AND (speed < 200m/s OR not closing toward target).
+ENHANCED_LOITER_PENALTY = 10.0  # per decision step, per agent
 
 STRIKER_TRACKING_BONUS = 1.5
 INTERCEPTOR_PINCER_BONUS = 2.0
@@ -728,17 +728,30 @@ class FormationRLlibEnv(MultiAgentEnv):
                             kill_aid = self._agent_ids[i]
                             break
 
-            # ── Collision between pursuers ────────────────────────────
+            # ── Soft repulsive force between pursuers ──────────────────
+            # Replaces the old -3000+terminate cliff with a smooth
+            # exponential repulsion: penalty grows as distance shrinks.
+            # No termination — agents learn safe proximity through gradient.
             for i in range(self.N):
                 for j in range(i + 1, self.N):
                     pi = self.pursuers[i].aircraft.position_ned
                     pj = self.pursuers[j].aircraft.position_ned
-                    if float(np.linalg.norm(pi - pj)) < FORMATION_COLLISION_DIST:
-                        for aid in self._agent_ids:
-                            rewards[aid] += FORMATION_COLLISION_PENALTY
-                        terminated = True
-                        reason = "formation_collision"
-                        break
+                    mate_dist = float(np.linalg.norm(pi - pj))
+                    if mate_dist < FORMATION_COLLISION_DIST:
+                        # Only terminate on actual collision (<10m overlap)
+                        if mate_dist < 10.0:
+                            for aid in self._agent_ids:
+                                rewards[aid] += FORMATION_COLLISION_PENALTY
+                            terminated = True
+                            reason = "formation_collision"
+                            break
+                        else:
+                            # Smooth repulsion: penalty grows as square of proximity
+                            # At 50m: -2500, at 100m: 0 → continuous gradient
+                            proximity_penalty = (COLLISION_SHAPING_WEIGHT *
+                                                (FORMATION_COLLISION_DIST - mate_dist) ** 2)
+                            for aid in self._agent_ids:
+                                rewards[aid] -= proximity_penalty * dt
                 if terminated:
                     break
             if terminated:
@@ -779,18 +792,30 @@ class FormationRLlibEnv(MultiAgentEnv):
                 reason = "cooperative_success"
                 kill_aid = self._agent_ids[closer_idx]
 
-        # ── Closing velocity penalty: anti-loiter outside AND envelope ───
-        # If a pursuer is beyond AND_dist and not closing fast enough (or
-        # moving away), penalize. Directly targets the '79% Slow' loiter
-        # strategy observed in V6 P1 autopsy.
-        if not terminated:
-            for i, dist in enumerate(pursuer_dists):
-                if dist > self._and_dist and self._coop_phase == COOP_PHASE_AND:
-                    closing = (_step_start_dists[i] - dist) / DECISION_DT  # m/s, + closing
-                    if closing < CLOSING_VEL_THRESHOLD:
-                        deficit = CLOSING_VEL_THRESHOLD - closing
-                        penalty = CLOSING_VEL_PENALTY * deficit * DECISION_DT
-                        rewards[self._agent_ids[i]] -= penalty
+        # ── Enhanced anti-loiter: heavy penalty for Slow/fleeing outside combat ─
+        # V6 autopsy: P1 used 79% Slow + 44% SoftLeft to loiter at 2-3km.
+        # Penalize if outside AND_dist AND either:
+        #   (a) flying Slow (<200 m/s) — can't build effective pincer at this speed
+        #   (b) velocity vector > 90° from target direction — actively fleeing
+        # Cruise/Fast pincer building (45-90° off LOS) is NOT penalized.
+        if not terminated and self._coop_phase == COOP_PHASE_AND:
+            for i, (ps, dist) in enumerate(zip(self.pursuers, pursuer_dists)):
+                if dist > self._and_dist:
+                    speed_mps = float(ps.aircraft.state["airspeed_mps"])
+                    is_slow = (speed_mps < 200.0)       # Slow(180) zone
+
+                    # Check if velocity is pointing AWAY from target (>90° off LOS)
+                    t_pos = self.targets[0].aircraft.position_ned
+                    los = t_pos - ps.aircraft.position_ned
+                    los_norm = float(np.linalg.norm(los))
+                    fleeing = False
+                    if los_norm > 1.0 and speed_mps > 1.0:
+                        vel = ps.aircraft.velocity_ned
+                        cos_heading_to_target = float(np.dot(vel, los)) / (speed_mps * los_norm)
+                        fleeing = (cos_heading_to_target < 0.0)  # >90° = moving away
+
+                    if is_slow or fleeing:
+                        rewards[self._agent_ids[i]] -= ENHANCED_LOITER_PENALTY
 
         # ── OOC penalty: per-agent anti-camping pressure ────────────────
         # If a pursuer hangs back beyond threshold, increment its OOC counter.
