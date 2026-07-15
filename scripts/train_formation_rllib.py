@@ -103,7 +103,8 @@ def _apply_smooth_transition(algo, old_stage: int, new_stage: int, progress: flo
             env.set_curriculum_stage_full(
                 p["stage"], p["and_dist"], p["and_angle"],
                 p["bearing_min"], p["bearing_max"],
-                p["target_dist_min"], p["target_dist_max"])
+                p["target_dist_min"], p["target_dist_max"],
+                p.get("sustain_steps", 6))
 
     try:
         algo.env_runner_group.foreach_env(_set_transition)
@@ -364,7 +365,7 @@ def train(
             print("[BC Load] Continuing with random initialization...")
         else:
             bc_type = "discrete" if load_discrete_bc else "continuous"
-            print(f"[BC Load] Successfully loaded {bc_type} BC weights into shared policy")
+            print(f"[BC Load] Successfully loaded {bc_type} BC weights into independent policies")
 
     # ── Training loop ─────────────────────────────────────────────────────
     current_phase = COOP_PHASE_OR

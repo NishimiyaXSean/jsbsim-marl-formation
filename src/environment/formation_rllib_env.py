@@ -889,31 +889,34 @@ class FormationRLlibEnv(MultiAgentEnv):
         target_pos = self.targets[0].aircraft.position_ned
         target_vel = self.targets[0].aircraft.velocity_ned
 
-        # Global state: all aircraft pos(3)+vel(3)+heading(1)
-        # Token order for Critic: [Self, Mate, Target]
-        # But global_state is the same for all — absolute, not ego-centric
-        global_parts = []
-        for ps in self.pursuers:
-            p = ps.aircraft.position_ned / np.array(
-                [MAX_DIST, MAX_DIST, MAX_HEIGHT])
-            v = ps.aircraft.velocity_ned / MAX_VEL
-            h = np.array([float(ps.aircraft.state["yaw_deg"]) / 180.0])
-            global_parts.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
-        for ts in self.targets:
-            p = ts.aircraft.position_ned / np.array(
-                [MAX_DIST, MAX_DIST, MAX_HEIGHT])
-            v = ts.aircraft.velocity_ned / MAX_VEL
-            h = np.array([float(ts.aircraft.state["yaw_deg"]) / 180.0])
-            global_parts.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
-        global_state = np.array(global_parts, dtype=np.float32)
-
         obs = {}
         for i, (ps, aid) in enumerate(zip(self.pursuers, self._agent_ids)):
             local = self._build_local_obs(i, ps, target_pos, target_vel)
             mask = self._build_action_mask(ps)
+
+            # Ego-centric global state: [Self, Mate, Target] token order.
+            # Critic's AttentionCritic expects token 0 = self, token 1 = mate.
+            # For P0: [P0, P1, Target]  ✓
+            # For P1: [P1, P0, Target]  (was bug: always [P0, P1, Target])
+            mate_idx = 1 - i
+            ego_pursuers = [self.pursuers[i], self.pursuers[mate_idx]]
+            global_parts = []
+            for p_agent in ego_pursuers:
+                p = p_agent.aircraft.position_ned / np.array(
+                    [MAX_DIST, MAX_DIST, MAX_HEIGHT])
+                v = p_agent.aircraft.velocity_ned / MAX_VEL
+                h = np.array([float(p_agent.aircraft.state["yaw_deg"]) / 180.0])
+                global_parts.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
+            for ts in self.targets:
+                p = ts.aircraft.position_ned / np.array(
+                    [MAX_DIST, MAX_DIST, MAX_HEIGHT])
+                v = ts.aircraft.velocity_ned / MAX_VEL
+                h = np.array([float(ts.aircraft.state["yaw_deg"]) / 180.0])
+                global_parts.extend(np.clip(np.concatenate([p, v, h]), -1, 1))
+
             obs[aid] = {
                 "obs": local.astype(np.float32),
-                "global_state": global_state,
+                "global_state": np.array(global_parts, dtype=np.float32),
                 "action_mask": mask.astype(np.float32),
             }
 
