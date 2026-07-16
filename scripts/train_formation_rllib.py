@@ -52,8 +52,8 @@ CURRICULUM_STAGES = {
 }
 CURRICULUM_WINDOW = 3        # number of eval rounds for moving-average sync rate
 CURRICULUM_MIN_WINDOW = 3    # minimum evals before checking gate
-CURRICULUM_STAGE1_GATE = 0.60  # stage 1→2: >60% sync rate
-CURRICULUM_STAGE2_GATE = 0.50  # stage 2→3: >50% sync rate
+CURRICULUM_STAGE1_GATE = 0.30  # stage 1→2: >30% MA sync (was 0.60, V10 hit 33%)
+CURRICULUM_STAGE2_GATE = 0.45  # stage 2→3: >45% MA sync (was 0.50)
 
 
 TRANSITION_ITERS = 15  # iterations over which to smoothly interpolate stage params
@@ -472,7 +472,7 @@ def train(
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=entropy_coeff,
+            entropy_coeff=[[0, 0.03], [100, 0.01], [250, 0.005]],
             vf_clip_param=1000.0,
             grad_clip=0.5,
             model={"vf_share_layers": False},
