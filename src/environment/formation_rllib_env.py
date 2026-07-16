@@ -642,7 +642,7 @@ class FormationRLlibEnv(MultiAgentEnv):
                 n0 = float(np.linalg.norm(los0_h))
                 n1 = float(np.linalg.norm(los1_h))
 
-                if n0 > 1.0 and n1 > 1.0:
+                if n0 > 1e-3 and n1 > 1e-3:
                     cos_pincer = np.clip(
                         float(np.dot(los0_h, los1_h)) / (n0 * n1 + 1e-6), -1.0, 1.0)
                     pincer_angle = float(np.degrees(np.arccos(cos_pincer)))

@@ -536,6 +536,30 @@ def train(
             except Exception as e:
                 print(f"  [WARN] Could not set stage 1 on workers: {e}")
 
+    # ── Warmup=0 bypass: skip OR-phase, start directly in AND-gate Stage 1 ──
+    if cooperative and warmup_steps == 0 and not resume_from:
+        current_phase = COOP_PHASE_AND
+        coop_warmup_done = True
+        curriculum_stage = 1
+        and_start_iter = 0
+        print("[Curriculum] 🚀 warmup=0 — 开局直接强袭 AND-gate Stage 1!")
+        p = CURRICULUM_STAGES[1]
+        print(f"[Curriculum]    AND: {p}")
+        def _init_env_stage1(env):
+            if hasattr(env, 'set_coop_phase'):
+                env.set_coop_phase(COOP_PHASE_AND)
+            if hasattr(env, 'set_curriculum_stage_full'):
+                env.set_curriculum_stage_full(
+                    1, p["and_dist"], p["and_angle"],
+                    p["bearing_min"], p["bearing_max"],
+                    p.get("target_dist_min", 1600.0),
+                    p.get("target_dist_max", 2200.0),
+                    p.get("sustain_steps", 2))
+        try:
+            algo.env_runner_group.foreach_env(_init_env_stage1)
+        except Exception as e:
+            print(f"  [WARN] Could not init Stage 1 on workers: {e}")
+
     print(f"\n{'='*60}")
     print(f"RLlib MAPPO 2v1 Cooperative Formation Training")
     print(f"Run: {run_name}")
