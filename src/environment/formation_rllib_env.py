@@ -442,17 +442,24 @@ class FormationRLlibEnv(MultiAgentEnv):
             # Compute bearing error (signed, normalized to [-180, 180])
             bearing_err = (target_bearing - p_yaw + 180.0) % 360.0 - 180.0
 
-            if bearing_err < bearing_min:
-                # Rotate pursuer to bearing_min (toward target)
-                new_yaw = (target_bearing - bearing_min) % 360.0
+            if bearing_err < bearing_min or bearing_err > bearing_max:
+                # Clamp bearing to allowed range
+                target_err = bearing_min if bearing_err < bearing_min else bearing_max
+                new_yaw = (target_bearing - target_err) % 360.0
+                delta_yaw_rad = np.radians(new_yaw - p_yaw)
+
+                # Rotate heading
                 ps.aircraft.state["yaw_deg"] = new_yaw
                 ps.ref_hdg = new_yaw
-            elif bearing_err > bearing_max:
-                # Rotate pursuer to bearing_max (toward target)
-                new_yaw = (target_bearing - bearing_max) % 360.0
-                ps.aircraft.state["yaw_deg"] = new_yaw
-                ps.ref_hdg = new_yaw
-            # else: bearing error within range, no adjustment needed
+
+                # Rotate velocity vector to match new heading (physics consistency)
+                # 2D rotation in North-East plane around the Down axis
+                vel = ps.aircraft.velocity_ned
+                cos_d, sin_d = np.cos(delta_yaw_rad), np.sin(delta_yaw_rad)
+                new_vn = vel[0] * cos_d - vel[1] * sin_d
+                new_ve = vel[0] * sin_d + vel[1] * cos_d
+                ps.aircraft.velocity_ned[0] = new_vn
+                ps.aircraft.velocity_ned[1] = new_ve
 
     # ── Step ────────────────────────────────────────────────────────────────
 
