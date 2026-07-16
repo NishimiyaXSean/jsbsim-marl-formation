@@ -472,7 +472,7 @@ def train(
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=[[0, 0.03], [100, 0.01], [250, 0.005]],
+            entropy_coeff=entropy_coeff,
             vf_clip_param=1000.0,
             grad_clip=0.5,
             model={"vf_share_layers": False},
