@@ -506,6 +506,7 @@ class FormationRLlibEnv(MultiAgentEnv):
 
         # ── AND-gate sustain tracking (per decision step, not per physics sub-step) ─
         and_met_this_step = False
+        pincer_angle = 0.0  # safe default before inner loop
 
         #  Micro-step loop (12 steps × 1/60s)
         # ═══════════════════════════════════════════════════════════════
