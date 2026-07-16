@@ -814,7 +814,7 @@ class FormationRLlibEnv(MultiAgentEnv):
                         cos_heading_to_target = float(np.dot(vel, los)) / (speed_mps * los_norm + 1e-6)
                         fleeing = (cos_heading_to_target < 0.0)  # >90° = moving away
 
-                    if is_slow or fleeing:
+                    if is_slow and fleeing:
                         rewards[self._agent_ids[i]] -= ENHANCED_LOITER_PENALTY
 
         # ── OOC penalty: per-agent anti-camping pressure ────────────────
@@ -825,6 +825,9 @@ class FormationRLlibEnv(MultiAgentEnv):
         if not terminated:
             if self._coop_phase == COOP_PHASE_AND:
                 ooc_threshold = self._and_dist + OOC_MARGIN
+                # Stage 1 grace: spawn at 1600-2200m, OOC gate at max(spawn_upper, AND+margin)
+                if self._curriculum_stage == 1:
+                    ooc_threshold = max(ooc_threshold, self._target_dist_range[1])
             else:
                 ooc_threshold = PINCER_DIST_MAX + OOC_MARGIN  # 2400m during OR warmup
             for i, dist in enumerate(pursuer_dists):

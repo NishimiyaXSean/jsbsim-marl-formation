@@ -327,17 +327,13 @@ def train(
         .env_runners(num_env_runners=2)
         .multi_agent(
             policies={
-                "policy_p0": (
+                "shared_policy": (
                     None, obs_space_p0, act_space_p0,
                     {"model": {"custom_model": "attention_formation"}}
                 ),
-                "policy_p1": (
-                    None, obs_space_p1, act_space_p1,
-                    {"model": {"custom_model": "attention_formation"}}
-                ),
             },
-            policy_mapping_fn=lambda agent_id, *args, **kwargs: f"policy_{agent_id}",
-            policies_to_train=["policy_p0", "policy_p1"],
+            policy_mapping_fn=lambda agent_id, *args, **kwargs: "shared_policy",
+            policies_to_train=["shared_policy"],
         )
         .training(
             lr=lr,
@@ -360,12 +356,12 @@ def train(
 
     # ── BC weight hot-loading (skip when resuming — checkpoint has weights) ─
     if bc_path and not resume_from:
-        success = load_bc_weights(algo, bc_path, ["policy_p0", "policy_p1"])
+        success = load_bc_weights(algo, bc_path, ["shared_policy"])
         if not success:
             print("[BC Load] Continuing with random initialization...")
         else:
             bc_type = "discrete" if load_discrete_bc else "continuous"
-            print(f"[BC Load] Successfully loaded {bc_type} BC weights into independent policies")
+            print(f"[BC Load] Successfully loaded {bc_type} BC weights into shared policy")
 
     # ── Training loop ─────────────────────────────────────────────────────
     current_phase = COOP_PHASE_OR
@@ -412,7 +408,7 @@ def train(
     print(f"Mode: {'Cooperative (OR→AND)' if cooperative else 'Non-cooperative'}")
     print(f"Iterations: {iterations}  |  Difficulty: {difficulty:.2f}  |  Seed: {seed}")
     print(f"BC Pretrain: {load_bc or 'None'}")
-    print(f"Architecture: Independent-Actor MAPPO (policy_p0 / policy_p1, no parameter sharing)")
+    print(f"Architecture: Shared-Actor MAPPO + Ego-centric Critic (V8)")
     print(f"Action Space: MultiDiscrete([5 turn, 3 speed]) = 15 primitives")
     print(f"Decision Rate: 5 Hz (DECISION_DT=0.2s)")
     print(f"{'='*60}\n")
@@ -426,23 +422,21 @@ def train(
             ep_rew = env_stats.get("episode_reward_mean", 0.0)
             ep_len = env_stats.get("episode_len_mean", 0.0)
 
-            # Independent policy metrics (avg across P0/P1)
+            # Shared policy metrics
             policy_rewards = env_stats.get("policy_reward_mean", {})
-            p0_r = policy_rewards.get("policy_p0", 0.0)
-            p1_r = policy_rewards.get("policy_p1", 0.0)
-            avg_policy_r = (p0_r + p1_r) / 2.0
+            shared_r = policy_rewards.get("shared_policy", 0.0)
 
-            # Entropy / KL (use policy_p0)
+            # Entropy / KL
             info = result.get("info", {})
             learner_info = info.get("learner", {})
-            p0_learner = learner_info.get("policy_p0", {})
-            learner_stats = p0_learner.get("learner_stats", p0_learner)
+            shared_learner = learner_info.get("shared_policy", {})
+            learner_stats = shared_learner.get("learner_stats", shared_learner)
             entropy = learner_stats.get("entropy", 0.0)
             kl = learner_stats.get("kl", 0.0)
 
             if i % 10 == 0:
                 print(f"[{i:4d}] ep_rew={ep_rew:8.1f}  "
-                      f"policy_r={avg_policy_r:8.1f}  "
+                      f"policy_r={shared_r:8.1f}  "
                       f"ep_len={ep_len:6.1f}  "
                       f"ent={entropy:.4f}  kl={kl:.4f}")
 
@@ -640,7 +634,7 @@ def run_evaluation(algo, n_episodes: int, difficulty: float,
                 if aid in obs_dict:
                     actions[aid] = algo.compute_single_action(
                         obs_dict[aid],
-                        policy_id=f"policy_{aid}",
+                        policy_id="shared_policy",
                         explore=False,
                     )
 
