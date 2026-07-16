@@ -43,12 +43,12 @@ from src.models.formation_rllib_model import RLlibAttentionActor
 # Performance-based scheduler: progression gated by eval sync-entry rate.
 # Each stage defines: (and_dist, and_angle, bearing_min, bearing_max)
 CURRICULUM_STAGES = {
-    1: {"and_dist": 1200.0, "and_angle": 35.0, "bearing_min": -30.0, "bearing_max": 30.0,
-        "target_dist_min": 1600.0, "target_dist_max": 2200.0, "sustain_steps": 2},
-    2: {"and_dist": 1000.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0,
-        "target_dist_min": 1200.0, "target_dist_max": 2000.0, "sustain_steps": 4},
+    1: {"and_dist": 1600.0, "and_angle": 25.0, "bearing_min": -20.0, "bearing_max": 20.0,
+        "target_dist_min": 1000.0, "target_dist_max": 1400.0, "sustain_steps": 1},
+    2: {"and_dist": 1200.0, "and_angle": 30.0, "bearing_min": -45.0, "bearing_max": 45.0,
+        "target_dist_min": 1400.0, "target_dist_max": 2000.0, "sustain_steps": 3},
     3: {"and_dist": 800.0, "and_angle": 20.0, "bearing_min": -180.0, "bearing_max": 180.0,
-        "target_dist_min": 900.0, "target_dist_max": 1800.0, "sustain_steps": 6},
+        "target_dist_min": 1000.0, "target_dist_max": 1800.0, "sustain_steps": 6},
 }
 CURRICULUM_WINDOW = 3        # number of eval rounds for moving-average sync rate
 CURRICULUM_MIN_WINDOW = 3    # minimum evals before checking gate
