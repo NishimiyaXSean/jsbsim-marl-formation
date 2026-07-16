@@ -111,6 +111,135 @@ def _apply_smooth_transition(algo, old_stage: int, new_stage: int, progress: flo
     except Exception as e:
         print(f"  [WARN] Transition update failed: {e}")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Training Health Monitor — circuit breakers + auto-reporting
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TrainingHealthMonitor:
+    """Watchdog with three circuit-breakers to detect and halt collapsed runs."""
+
+    def __init__(self, run_name: str, log_dir: str):
+        self.run_name = run_name
+        self.log_dir = log_dir
+        self.zero_kl_counter = 0
+        self.stagnant_sync_counter = 0
+
+    # ── Circuit-breaker thresholds ─────────────────────────────────────
+    OVERLOAD_ITER       = 30      # grace period before checking reward
+    OVERLOAD_REW_THRESH = -25000  # episode reward below this = collapse
+    STALL_ITER          = 50      # grace period before checking KL
+    STALL_KL_THRESH     = 0.001   # KL below this = frozen
+    STALL_KL_STRIKES    = 15      # consecutive frozen iters → trip
+    DESERT_ITER         = 150     # grace period before checking sync
+    DESERT_SYNC_THRESH  = 0.02    # sync rate below this = desert
+    DESERT_SYNC_STRIKES = 4       # consecutive eval rounds → trip
+
+    def check_health(self, iteration: int, metrics: dict,
+                     eval_sync_rate: float | None) -> tuple[bool, str]:
+        """Return (is_failed, reason_string)."""
+        env_stats = metrics.get("env_runners", metrics)
+        ep_rew = env_stats.get("episode_reward_mean", 0.0)
+
+        policy_learner = (metrics.get("info", {}).get("learner", {})
+                          .get("shared_policy", {}))
+        learner_stats = policy_learner.get("learner_stats", policy_learner)
+        kl = learner_stats.get("kl", 0.0)
+        entropy = learner_stats.get("entropy", 0.0)
+
+        # ── Gate 1: numerical overload ─────────────────────────────
+        if iteration > self.OVERLOAD_ITER and ep_rew < self.OVERLOAD_REW_THRESH:
+            return True, (f"[数值过载] Episode 平均奖励 ({ep_rew:.1f}) "
+                          f"跌破极端阈值 ({self.OVERLOAD_REW_THRESH})，"
+                          f"Critic 梯度方差已爆炸。")
+
+        # ── Gate 2: entropy stall ──────────────────────────────────
+        if iteration > self.STALL_ITER and kl < self.STALL_KL_THRESH:
+            self.zero_kl_counter += 1
+            if self.zero_kl_counter >= self.STALL_KL_STRIKES:
+                return True, (f"[策略僵死] KL 散度 ({kl:.5f}) 连续 "
+                              f"{self.STALL_KL_STRIKES} 代逼近零点，"
+                              f"策略熵 ({entropy:.2f})，更新已冻结。")
+        else:
+            self.zero_kl_counter = max(0, self.zero_kl_counter - 1)
+
+        # ── Gate 3: coordination desert ────────────────────────────
+        if eval_sync_rate is not None and iteration > self.DESERT_ITER:
+            if eval_sync_rate <= self.DESERT_SYNC_THRESH:
+                self.stagnant_sync_counter += 1
+                if self.stagnant_sync_counter >= self.DESERT_SYNC_STRIKES:
+                    return True, (f"[协同荒漠] 进入 AND 战场后连续 "
+                                  f"{self.DESERT_SYNC_STRIKES} 次评估 "
+                                  f"协同率 ≤ {self.DESERT_SYNC_THRESH:.0%}，"
+                                  f"当前奖励引导失效。")
+            else:
+                self.stagnant_sync_counter = 0
+
+        return False, "Healthy"
+
+    def generate_report(self, iteration: int, metrics: dict, fail_reason: str):
+        """Write Markdown postmortem / handoff report."""
+        import os as _os
+        report_path = _os.path.join(self.log_dir,
+                                     f"report_{self.run_name}_iter{iteration}.md")
+        _os.makedirs(self.log_dir, exist_ok=True)
+
+        env_stats = metrics.get("env_runners", metrics)
+        policy_rewards = env_stats.get("policy_reward_mean", {})
+        shared_r = policy_rewards.get("shared_policy", 0.0)
+
+        p_learner = (metrics.get("info", {}).get("learner", {})
+                     .get("shared_policy", {}))
+        l_stats = p_learner.get("learner_stats", p_learner)
+
+        lines = [
+            f"# 无人机协同对抗训练评估报告",
+            f"* **任务名称**: {self.run_name}",
+            f"* **终止时刻**: Iteration {iteration}",
+            f"* **状态判定**: {'❌ 触发自动熔断' if fail_reason != 'SUCCESS' else '✅ 正常结转'}",
+            f"",
+            f"## 终止原因",
+            f"> {fail_reason}",
+            f"",
+            f"## 终盘核心指标快照",
+            f"* **全队平均累计奖励**: {env_stats.get('episode_reward_mean', 0.0):.2f}",
+            f"* **共享策略奖励**: {shared_r:.2f}",
+            f"* **平均回合步数**: {env_stats.get('episode_len_mean', 0.0):.1f}",
+            f"* **当前策略熵**: {l_stats.get('entropy', 0.0):.4f}",
+            f"* **最后 KL 散度**: {l_stats.get('kl', 0.0):.5f}",
+            f"",
+            f"## 诊断建议",
+        ]
+
+        if "数值过载" in fail_reason:
+            lines.append("- **病因**: 惩罚过高导致值域崩溃。\n- **药方**: 调小 ENHANCED_LOITER_PENALTY，检查开局是否直接出界。")
+        elif "策略僵死" in fail_reason:
+            lines.append("- **病因**: PPO 裁剪域死锁或学习率过大导致起步坠机。\n- **药方**: 检查 GAE 优势归一化，降低初始 lr，增加 entropy_coeff。")
+        elif "协同荒漠" in fail_reason:
+            lines.append("- **病因**: AND 阶段几何空间约束过于严苛。\n- **药方**: 放宽 Stage 1 的 and_dist，或将 sustain_steps 临时压缩为 1 步做瞬触破冰。")
+        else:
+            lines.append("- **状态正常**: 请继续保持当前参数演进。")
+
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"\n[Monitor] 📝 终盘诊断报告已导出至: {report_path}\n")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Custom RLlib Callbacks — real-time geometric metrics
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from ray.rllib.algorithms.callbacks import DefaultCallbacks
+
+class AirCombatMetricsCallbacks(DefaultCallbacks):
+    def on_episode_end(self, *, worker, base_env, policies, episode, env_index,
+                       **kwargs):
+        p0_info = episode.last_info_for("p0") or {}
+        if "pincer_angle" in p0_info:
+            episode.custom_metrics["combat/final_pincer_angle"] = p0_info["pincer_angle"]
+            episode.custom_metrics["combat/p1_final_dist"] = p0_info["p1_dist"]
+            episode.custom_metrics["combat/p1_loiter_flag"] = p0_info["is_loitering"]
+
+
 os.environ.setdefault("JSBSIM_DEBUG", "0")
 warnings.filterwarnings("ignore")
 logging.getLogger("jsbsim").setLevel(logging.CRITICAL)
@@ -348,6 +477,7 @@ def train(
             grad_clip=0.5,
             model={"vf_share_layers": False},
         )
+        .callbacks(AirCombatMetricsCallbacks)
         .debugging(seed=seed)
     )
 
@@ -373,6 +503,10 @@ def train(
     transition_active = False
     transition_start_iter = 0
     target_stage = 0
+
+    # ── Health monitor ──────────────────────────────────────────────────
+    monitor = TrainingHealthMonitor(run_name, project_root)
+    last_eval_sync = None
 
     # If --resume-from is set, restore checkpoint and skip warmup
     and_start_iter = 0
@@ -525,6 +659,7 @@ def train(
                 eval_rewards, sync_rate = run_evaluation(
                     algo, eval_episodes, difficulty, current_phase, cooperative,
                     stage_params=eval_stage_params)
+                last_eval_sync = sync_rate
                 avg_eval = np.mean(eval_rewards) if eval_rewards else 0.0
                 print(f"  [EVAL] iter={i+1:4d}  avg_rew={avg_eval:8.1f}  "
                       f"sync={sync_rate:.0%}  n={len(eval_rewards)}")
@@ -566,6 +701,18 @@ def train(
                             print(f"\n>>> Curriculum Stage 2→3: smooth transition "
                                   f"({TRANSITION_ITERS} iters) "
                                   f"(sync={recent_sync:.0%} > {CURRICULUM_STAGE2_GATE:.0%})\n")
+
+            # ── Health check ────────────────────────────────────────────
+            is_failed, collapse_reason = monitor.check_health(i, result, last_eval_sync)
+            if is_failed:
+                print(f"\n🔥 [🚨 警告] 触发策略健康熔断保护!")
+                print(f"原因: {collapse_reason}")
+                monitor.generate_report(i, result, collapse_reason)
+                ckpt_path = os.path.join(project_root, "checkpoints",
+                                         f"collapsed_iter_{i+1}")
+                algo.save(ckpt_path)
+                print(f"[SAVE] Collapse checkpoint: {ckpt_path}")
+                break
 
             # ── Periodic checkpoint ──────────────────────────────────────
             if checkpoint_freq > 0 and i > 0 and (i + 1) % checkpoint_freq == 0:

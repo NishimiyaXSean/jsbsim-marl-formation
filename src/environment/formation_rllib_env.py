@@ -873,7 +873,15 @@ class FormationRLlibEnv(MultiAgentEnv):
 
         # ── Build RLlib-format returns ────────────────────────────────────
         obs = self._get_obs()
-        info = {"reason": reason, "kill_agent": kill_aid}
+        p1_d = pursuer_dists[1] if len(pursuer_dists) > 1 else 0.0
+        info = {
+            "reason": reason,
+            "kill_agent": kill_aid,
+            "pincer_angle": pincer_angle,
+            "p1_dist": p1_d,
+            "is_loitering": 1 if (self._coop_phase == COOP_PHASE_AND and
+                                   p1_d > self._and_dist) else 0,
+        }
 
         # Per-agent info
         infos = {aid: info for aid in self._agent_ids}
