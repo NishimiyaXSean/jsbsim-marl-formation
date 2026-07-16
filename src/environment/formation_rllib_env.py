@@ -756,10 +756,12 @@ class FormationRLlibEnv(MultiAgentEnv):
                         else:
                             # Smooth repulsion: penalty grows as square of proximity
                             # At 50m: -2500, at 100m: 0 → continuous gradient
-                            proximity_penalty = (COLLISION_SHAPING_WEIGHT *
-                                                (FORMATION_COLLISION_DIST - mate_dist) ** 2)
+                            proximity_penalty = COLLISION_SHAPING_WEIGHT * \
+                                (FORMATION_COLLISION_DIST - mate_dist) ** 2
+                            # Cap per-step bleed at -50 to prevent critic value explosion
+                            step_bleed = min(proximity_penalty * dt, 50.0)
                             for aid in self._agent_ids:
-                                rewards[aid] -= proximity_penalty * dt
+                                rewards[aid] -= step_bleed
                 if terminated:
                     break
             if terminated:

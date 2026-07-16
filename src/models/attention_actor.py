@@ -177,6 +177,17 @@ class AttentionFormationActor(nn.Module):
         self.mean = nn.Linear(mlp_hidden, act_dim)
         self.log_std = nn.Parameter(torch.ones(1, act_dim) * log_std_init)
 
+        # ── FiLM: deep feature modulation by agent identity ────────────────
+        # gamma(ID) * feat + beta(ID) — breaks symmetry at the feature level
+        # while preserving shared backbone weights. Initialized to identity
+        # mapping so BC pretrained weights are unaffected at t=0.
+        self.film_gamma = nn.Linear(2, mlp_hidden)
+        self.film_beta = nn.Linear(2, mlp_hidden)
+        nn.init.zeros_(self.film_gamma.weight)
+        nn.init.constant_(self.film_gamma.bias, 1.0)  # gamma → 1 → identity
+        nn.init.zeros_(self.film_beta.weight)
+        nn.init.constant_(self.film_beta.bias, 0.0)    # beta → 0 → no offset
+
         # ── Weight initialization ──────────────────────────────────────────
         self._init_weights()
 
@@ -257,15 +268,16 @@ class AttentionFormationActor(nn.Module):
         return loc, scale
 
     def forward_features(self, obs: torch.Tensor) -> torch.Tensor:
-        """Extract 256-dim intermediate features before the final output heads.
+        """Extract 256-dim features with FiLM identity modulation.
 
-        Used by discrete-action models that replace mean/scale with categorical heads.
+        The MLP head is split: first layer → FiLM(ID) → second layer.
+        gamma(ID) * feat + beta(ID) breaks symmetry at the deep feature
+        level while preserving shared backbone weights.
         """
         if isinstance(obs, np.ndarray):
             obs = torch.as_tensor(obs, dtype=torch.float32)
         if obs.dim() == 1:
             obs = obs.unsqueeze(0)
-        batch = obs.shape[0]
 
         self_feat, target_feat, mate_feat = segment_obs(obs)
         token_self = self.self_proj(self_feat)
@@ -282,7 +294,17 @@ class AttentionFormationActor(nn.Module):
             pool_scores / np.sqrt(self.d_model), dim=-1)
         pooled = torch.matmul(pool_weights, tokens_out).squeeze(1)
 
-        feat = self.mlp_head(pooled)  # [B, 256]
+        # ── MLP layer 1 ───────────────────────────────────────────────
+        feat = F.tanh(self.mlp_head[0](pooled))  # [B, 256]
+
+        # ── FiLM: deep identity modulation ─────────────────────────────
+        agent_id = obs[:, -2:]                    # onehot [B, 2]
+        gamma = self.film_gamma(agent_id)         # [B, 256]
+        beta = self.film_beta(agent_id)           # [B, 256]
+        feat = gamma * feat + beta                # modulated features
+
+        # ── MLP layer 2 ───────────────────────────────────────────────
+        feat = F.tanh(self.mlp_head[2](feat))    # [B, 256]
         return feat
 
     def set_mate_scale(self, scale: float):
