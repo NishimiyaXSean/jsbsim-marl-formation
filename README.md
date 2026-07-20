@@ -251,43 +251,56 @@ python scripts/train_attention_bc_2v1.py --train --epochs 80
 
 ---
 
+##   Training Call Chain
+
+```
+train_formation_rllib.py          ← V10 training entry (shared MAPPO + curriculum)
+  │
+  ├─ src/environment/formation_rllib_env.py  ← ★ MultiAgentEnv: obs, reward, AND-gate
+  │    ├─ src/dynamics/aircraft.py           ← JSBSim F-16 6-DOF FDM wrapper
+  │    ├─ src/dynamics/flight_controller.py  ← PID control (heading/altitude/speed)
+  │    ├─ src/dynamics/flight_envelope.py    ← V-n diagram, stall/overspeed limits
+  │    ├─ src/dynamics/autopilot.py          ← BFMAutopilot trim + gain scheduling
+  │    ├─ src/utils/geometry.py              ← Tactical angles (ATA/AA/HCA/pincer)
+  │    └─ src/utils/units.py                 ← kts ↔ m/s, ft ↔ m conversions
+  │
+  └─ src/models/formation_rllib_model.py     ← RLlib TorchModelV2 (CTDE Actor+Critic)
+       └─ src/models/attention_actor.py      ← Self-Attention + FiLM + token projection
+```
+
+| 层 | 文件 | 行数 | 功能 |
+|------|------|:--:|------|
+| **入口** | `scripts/train_formation_rllib.py` | ~730 | PPO 配置, BC 加载, 3-stage 课程调度, 健康看门狗 |
+| **环境** | `src/environment/formation_rllib_env.py` | ~1100 | 2v1 MultiAgentEnv, obs(39d), 奖励(progress/pincer/OOC/loiter), AND-gate, 碰撞, 终止, 课程参数热更新 |
+| **模型** | `src/models/formation_rllib_model.py` | ~180 | RLlib TorchModelV2: forward(), value_function(), action masking |
+| **模型** | `src/models/attention_actor.py` | ~320 | Self-Attention(4 heads), Token projection(Self/Target/Mate), FiLM modulation, Learned pooling, MLP head |
+| **动力学** | `src/dynamics/aircraft.py` | ~450 | JSBSim FGFDMExec wrapper: trim, state IO, control surfaces |
+| **动力学** | `src/dynamics/flight_controller.py` | ~300 | PID heading/altitude/speed tracking from RL action targets |
+| **动力学** | `src/dynamics/flight_envelope.py` | ~150 | Stall warning, overspeed, ground proximity detection |
+| **动力学** | `src/dynamics/autopilot.py` | ~500 | BFMAutopilot: trim schedules, gain scheduling, λ-G control law |
+| **工具** | `src/utils/geometry.py` | ~80 | ATA, AA, HCA, LOS, pincer angle computation |
+| **工具** | `src/utils/units.py` | ~30 | kts↔m/s, ft↔m, imperial↔metric |
+
 ##   Project Structure
 
 ```
 jsbsim-marl-formation/
 ├── src/
-│   ├── dynamics/              # JSBSim F-16 wrapper + flight control
-│   │   ├── aircraft.py        #   Aircraft — wraps JSBSim FGFDMExec
+│   ├── dynamics/              # JSBSim F-16 physics + flight control
+│   │   ├── aircraft.py        #   Aircraft — JSBSim FGFDMExec wrapper
 │   │   ├── autopilot.py       #   BFMAutopilot (λ-G), PIDController, GainScheduler
-│   │   ├── flight_controller.py # Stabilized FlightController (heading/alt/speed)
+│   │   ├── bfm_actions.py     #   Basic Fighter Maneuvers action primitives
+│   │   ├── flight_controller.py # Stabilized FlightController (heading/alt/speed PID)
 │   │   └── flight_envelope.py #   V-n diagram, GPWS, stall/overspeed limits
 │   │
-│   ├── environment/           # Gymnasium environments
-│   │   ├── formation_env.py   #   FormationEnv — NvM cooperative pursuit (Phase 5)
-│   │   ├── formation_rllib_env.py # ★ RLlib MultiAgentEnv wrapper (2v1 CTDE, Phase 5)
-│   │   ├── formation_mappo_env.py # RLlib MultiAgentEnv wrapper (legacy MLP)
-│   │   ├── single_pursuit_env.py  # SinglePursuitEnv — 3D continuous pursuit (25-dim)
-│   │   ├── continuous_pursuit_env.py # ContinuousPursuitEnv (27-dim obs)
-│   │   ├── air_combat_env.py  #   AirCombatEnv — 1v1 adversarial combat
-│   │   ├── observations.py    #   19-dim local + 26-dim global observation builders
-│   │   ├── rewards.py         #   RewardConfig: progress, ATA, pincer, proximity tiers
-│   │   ├── termination.py     #   Collision, CPA, ground/OOB/timeout checks
-│   │   ├── curriculum.py      #   3-stage curriculum + auto-advancement
-│   │   └── ablation_wrappers.py # FrameStack, CubicAction, LeadPursuitReward
+│   ├── environment/           # RLlib MultiAgentEnv
+│   │   └── formation_rllib_env.py # ★ 2v1 CTDE: obs, rewards, AND-gate, curriculum
 │   │
-│   ├── models/                # Neural network architectures
-│   │   ├── attention_actor.py #   ★ AttentionFormationActor + Tokenized AttentionCritic
-│   │   ├── formation_rllib_model.py # ★ RLlib TorchModelV2 — Self-Attention Actor+Critic
-│   │   ├── formation_mappo_model.py # RLlib CTDE model (legacy MLP)
-│   │   ├── mappo_model.py     #   RLlib 1v1 model (legacy MLP)
-│   │   └── tianshou_networks.py   # Pure PyTorch Actor/Critic for Tianshou MAPPO
+│   ├── models/                # Self-Attention + FiLM neural architectures
+│   │   ├── attention_actor.py #   ★ AttentionFormationActor + AttentionCritic
+│   │   └── formation_rllib_model.py # ★ RLlib TorchModelV2 wrapper
 │   │
-│   ├── training/              # RLlib pipelines (legacy — RLlib not recommended)
-│   │   ├── train_mappo.py     #   RLlib MAPPO 1v1 training (3-stage curriculum)
-│   │   ├── callbacks.py       #   AirCombatCallbacks — kill/crash/OOB tracking
-│   │   └── baselines.py       #   Random agent + pure pursuit baseline
-│   │
-│   ├── utils/                 # Math + geometry + guidance
+│   ├── utils/                 # Math + geometry
 │   │   ├── geometry.py        #   Tactical angles: ATA, AA, HCA, LOS, closing speed
 │   │   ├── kinematics.py      #   NED↔WGS-84 coordinate transforms
 │   │   ├── pn_guidance.py     #   Proportional Navigation with bearing bias
@@ -296,36 +309,28 @@ jsbsim-marl-formation/
 │   └── logging/               # Tacview ACMI telemetry export
 │       └── tacview_exporter.py
 │
-├── scripts/                   # ★ Active scripts
+├── scripts/                   # ★ Active scripts (13 total)
 │   │
-│   │   # ── Primary training pipeline ────────────────────────────────
-│   ├── train_formation_rllib.py  # ★ V10 MAPPO training (primary)
+│   │   # ── Primary training ───────────────────────────────────────
+│   ├── train_formation_rllib.py  # ★ V10 MAPPO cooperative training
 │   ├── train_discrete_bc.py   #   Discrete BC pretraining
 │   │
-│   │   # ── Visualization & analysis ─────────────────────────────────
-│   ├── collect_viz_data.py    #   Trajectory + attention data collection
-│   ├── viz_paper_figures.py   #   Fig 1 (3D) + Fig 2 (attention timeline)
+│   │   # ── Visualization ──────────────────────────────────────────
+│   ├── collect_viz_data.py    #   Trajectory + attention weight collection
+│   ├── viz_paper_figures.py   #   Fig 1 (3D trajectory) + Fig 2 (attention timeline)
 │   ├── viz_fig3_role_attention.py # Fig 3 (role-grouped attention matrix)
-│   ├── viz_trajectory_comparison.py # Multi-checkpoint 3D comparison
-│   ├── analyze_eval_statistics.py  # Eval episode autopsy
-│   ├── analyze_initial_state_sensitivity.py # 100-ep sensitivity analysis
-│   ├── generate_paper_charts.py    # 5 paper-quality charts
+│   ├── viz_trajectory_comparison.py # Multi-checkpoint 3D trajectory comparison
+│   ├── generate_paper_charts.py   # 5 paper-quality dataviz charts
 │   │
-│   │   # ── Diagnostics ──────────────────────────────────────────────
-│   ├── diagnose_v6_autopsy.py      # V6 per-episode reward+termination analysis
-│   ├── benchmark_sb3_baseline.py   # SB3 baseline (archived)
+│   │   # ── Analysis ───────────────────────────────────────────────
+│   ├── analyze_eval_statistics.py  # Per-episode statistical autopsy
+│   ├── analyze_initial_state_sensitivity.py # 100-ep initial-condition sensitivity
+│   ├── diagnose_v6_autopsy.py      # V6 reward+termination per-episode analysis
+│   ├── benchmark_sb3_baseline.py   # SB3 centralized-policy baseline
 │   │
-│   │   # ── Utilities ────────────────────────────────────────────────
-│   ├── verify_installation.py      # Installation verification
-│   ├── setup_wsl2.sh               # WSL2 one-command setup
-│   │
-│   │   # ── Legacy / archived ────────────────────────────────────────
-│   ├── train_attention_bc_2v1.py   # 2v1 BC (continuous, archived)
-│   ├── generate_coop_expert.py     # PID cooperative trajectory gen.
-│   ├── train_dual_actor.py         # Dual-Actor MAPPO (archived)
-│   ├── train_attention_actor.py    # Custom MAPPO (archived)
-│   ├── diagnose_coop_tacview.py    # Cooperative diagnostic (archived)
-│   └── ...
+│   │   # ── Utilities ──────────────────────────────────────────────
+│   ├── verify_installation.py      # 4-step installation verification
+│   └── setup_wsl2.sh               # WSL2 one-command environment setup
 │
 ├── benchmarks/
 │   ├── sb3_2v1_97p3/          # SB3 Phase 4.1 centralized ceiling archive
