@@ -34,9 +34,13 @@
 | **Exp 5b AND-gate** | Self-Attn + Curric. | Discrete BC | 500 | +4,283 | — | AND-gate sync 55% (Stage 1 greenhouse) |
 | **Exp 6a V5 full-stack** | Self-Attn + Comm + ID | Discrete BC | 500 | +178 | — | Sync 15% — CTDE implicit ceiling proved |
 | **Exp 6b V6 indep. Actor** | **Independent Actors** | Discrete BC | 500 | −3,815 | — | +12,388 train rew but 0% sync — solo flight only |
-| **★ V7 (running)** | Shared Attn + 6 fixes | Discrete BC | 500 | TBD | — | Expo. pincer + anti-loiter + soft collision |
+| **V7 indep+高压** | Indep. Actors | Discrete BC | 225 | −8,891 | — | Collapsed: penalty overload |
+| **V8 shared修复** | Shared + Loiter fix | Discrete BC | 58 | −8,223 | — | Collapsed: numerical overload |
+| **V9 FiLM** | Shared + FiLM mod. | Discrete BC | 155 | −6,602 | — | FiLM prevents collapse; 0% sync |
+| **★ V10 incubator** | **Shared+FiLM+Incubator** | Discrete BC | **500** | **+784** | **40% sync** 🔥 | **AND-gate sync 15%→40% breakthrough** |
+| V11 lower-gate | Shared+FiLM+30%gate | Discrete BC | 225 | −1,774 | 30% | entropy=0.03 suboptimal; use 0.05 |
 
-> **CTDE implicit coordination ceiling proved at ~15% sync rate.** After 6 experiment versions testing reward rebalancing (V4), communication channels (V5), independent actors (V6), and exponential pincer shaping with anti-loiter penalties (V7), the fundamental finding is: parameter-shared MAPPO with token-based Self-Attention spontaneously learns role differentiation (Cohen's d=−0.53) but cannot reliably synchronize pincer formation. The 86% lost_target rate in V6 autopsy confirmed independent actors produce strong solo flight but zero coordination. V7 combines all lessons: shared Actor preserves gradient-driven role differentiation, exponential pincer decay provides continuous shaping, enhanced anti-loiter (-10/step) eliminates spectator behavior, and soft collision shaping replaces termination cliffs with smooth repulsion.
+> **Incubator Stage 1 broke the 15% sync ceiling — from 15% to 40%.** V10 spawns pursuers inside the AND envelope (1000-1400m, AND=1600m), eliminating the long-approach tail-chase deadlock. Combined with FiLM deep identity modulation (gamma*feat+beta at MLP layer), soft collision shaping, AND-loiter penalty, and ego-centric Critic ordering. V11 confirmed entropy_coeff=0.05 is the correct exploration level for the incubator. Next: lower Stage 1→2 gate from 60% to 30% (V10 hit 33% MA) with entropy=0.05 to trigger curriculum advancement.
 
 ### Self-Attention Attention Analysis (Fig 3)
 
@@ -292,19 +296,35 @@ jsbsim-marl-formation/
 │   └── logging/               # Tacview ACMI telemetry export
 │       └── tacview_exporter.py
 │
-├── scripts/                   # ★ Entry-point scripts (30+ total)
-│   ├── train_formation_rllib.py  # ★ RLlib Parameter-Shared MAPPO (primary pipeline)
-│   ├── train_discrete_bc.py   #   ★ Discrete BC pretraining (Self-Attn backbone + heads)
-│   ├── collect_viz_data.py    #   Trajectory + attention weight data collection
-│   ├── viz_paper_figures.py   #   Fig 1 (3D trajectory) + Fig 2 (attention timeline)
+├── scripts/                   # ★ Active scripts
+│   │
+│   │   # ── Primary training pipeline ────────────────────────────────
+│   ├── train_formation_rllib.py  # ★ V10 MAPPO training (primary)
+│   ├── train_discrete_bc.py   #   Discrete BC pretraining
+│   │
+│   │   # ── Visualization & analysis ─────────────────────────────────
+│   ├── collect_viz_data.py    #   Trajectory + attention data collection
+│   ├── viz_paper_figures.py   #   Fig 1 (3D) + Fig 2 (attention timeline)
 │   ├── viz_fig3_role_attention.py # Fig 3 (role-grouped attention matrix)
-│   ├── analyze_eval_statistics.py # Eval episode statistical autopsy
-│   ├── generate_paper_charts.py   # 5 paper-quality dataviz charts
-│   ├── train_attention_bc_2v1.py  # 2v1 BC pipeline (continuous, archived)
-│   ├── generate_coop_expert.py    # PID cooperative trajectory generator
-│   ├── benchmark_sb3_baseline.py  # SB3 baseline evaluation (Wilson CI + Tacview)
-│   ├── verify_installation.py #   4-step installation verification
-│   ├── setup_wsl2.sh          #   ★ WSL2 one-command environment setup
+│   ├── viz_trajectory_comparison.py # Multi-checkpoint 3D comparison
+│   ├── analyze_eval_statistics.py  # Eval episode autopsy
+│   ├── analyze_initial_state_sensitivity.py # 100-ep sensitivity analysis
+│   ├── generate_paper_charts.py    # 5 paper-quality charts
+│   │
+│   │   # ── Diagnostics ──────────────────────────────────────────────
+│   ├── diagnose_v6_autopsy.py      # V6 per-episode reward+termination analysis
+│   ├── benchmark_sb3_baseline.py   # SB3 baseline (archived)
+│   │
+│   │   # ── Utilities ────────────────────────────────────────────────
+│   ├── verify_installation.py      # Installation verification
+│   ├── setup_wsl2.sh               # WSL2 one-command setup
+│   │
+│   │   # ── Legacy / archived ────────────────────────────────────────
+│   ├── train_attention_bc_2v1.py   # 2v1 BC (continuous, archived)
+│   ├── generate_coop_expert.py     # PID cooperative trajectory gen.
+│   ├── train_dual_actor.py         # Dual-Actor MAPPO (archived)
+│   ├── train_attention_actor.py    # Custom MAPPO (archived)
+│   ├── diagnose_coop_tacview.py    # Cooperative diagnostic (archived)
 │   └── ...
 │
 ├── benchmarks/
@@ -323,12 +343,14 @@ jsbsim-marl-formation/
 │   │   └── tiled_2v1_phase36.zip              # SB3 Phase 3.6 tiled weights
 │   └── jsbsim/                # JSBSim aircraft/engines/systems data
 │
-├── docs/                      # Daily work summaries + design docs + WSL2 guide
-│   ├── wsl2-setup-guide.md    # ★ WSL2 4-phase deployment checklist
-│   ├── 2026-07-07-full-summary.md
-│   ├── 2026-07-08-full-summary.md
-│   ├── 2026-07-09-full-summary.md  # Continuous→Discrete migration + ablation matrix
-│   └── 2026-07-10-full-summary.md  # ★ BC bug fix + 500-iter BC hotstart
+├── docs/                      # Daily work summaries (Jul 1-16)
+│   ├── wsl2-setup-guide.md    # ★ WSL2 deployment checklist
+│   ├── 2026-07-09-full-summary.md  # Continuous→Discrete migration
+│   ├── 2026-07-10-full-summary.md  # BC bug fix + 500-iter BC hotstart
+│   ├── 2026-07-13-full-summary.md  # Sensitivity analysis + Env-V2
+│   ├── 2026-07-14-full-summary.md  # AND-gate CTDE ceiling + V5 full-stack
+│   ├── 2026-07-15-full-summary.md  # V6 autopsy → V7 launch
+│   └── 2026-07-16-full-summary.md  # ★ V7→V10: incubator breaks 15%→40% sync
 │
 ├── results/                   # Evaluation outputs
 │   └── evasion_diag/          # Evasive maneuver Tacview files (80 episodes)
@@ -452,7 +474,7 @@ Quick checklist:
 - [ ] VS Code WSL plugin → "Connect to WSL" → Open Folder
 - [ ] `conda activate marl_env && python scripts/verify_installation.py`
 
->   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are now default** (MultiDiscrete[5,3]). **BC hotstart is the recommended training mode** (BC bug fix 2026-07-10). **V7 (current)** combines shared Actor CTDE with exponential pincer decay, enhanced anti-loiter (-10/step), soft collision shaping, agent one-hot ID, mate broadcast channel, and 3-stage curriculum with temporal relaxation. The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API.
+>   **RLlib is the primary training framework** (migrated 2026-07-07). **Discrete actions are default** (MultiDiscrete[5,3]). **V10 incubator is the current SOTA**: AND-gate sync 40% via shared Actor + FiLM identity modulation + ego-centric Critic + exponential pincer decay + AND-loiter penalty + soft collision shaping + 3-stage curriculum. The Self-Attention Actor is hosted inside RLlib's `TorchModelV2` API. `pyproject.toml` is outdated — use `scripts/setup_wsl2.sh` or conda.
 
 ---
 
@@ -511,7 +533,9 @@ Phase 6 (Jul 9-10):  Self-Attn cold-start → ablation matrix → paper PPT
 Phase 7 (Jul 10):    BC bug fix → 500-iter BC hotstart (95.6% positive)
 Phase 8 (Jul 13):    Sensitivity analysis → speed-dependent turns → Env-V2 (+3,421)
 Phase 9 (Jul 14):    AND-gate curriculum → reward rebalance → CTDE ceiling at 15% sync
-Phase 10 (Jul 15):   V5 full-stack (Comm+ID+Shaping) → V6 independent actors → V7 final
+Phase 10 (Jul 15):   V5 full-stack → V6 indep. actors → V7 high-pressure collapse
+Phase 11 (Jul 16):   V8 shared repair → V9 FiLM modulation → V10 incubator sync 40% 🔥
+Phase 12 (Jul 17):   V11 gate lowering + entropy lesson → V12 pending (30% gate + ent=0.05)
 ```
 
 ### Current Optimization Priorities
