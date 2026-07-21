@@ -53,16 +53,14 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
 
         # Discrete action space: MultiDiscrete([n_turn, n_speed])
         if hasattr(action_space, "nvec"):
-            self._n_turn = int(action_space.nvec[0])
-            self._n_speed = int(action_space.nvec[1])
+            self._action_dims = list(action_space.nvec)
         else:
-            self._n_turn = 5
-            self._n_speed = 3
+            self._action_dims = [5, 3]  # fallback: turn + speed
 
-        # num_outputs = n_turn + n_speed (categorical logits concatenated)
-        assert num_outputs == self._n_turn + self._n_speed, \
-            f"Expected num_outputs={self._n_turn + self._n_speed}, got {num_outputs}"
-        self._n_actions_total = num_outputs
+        # num_outputs = sum of all discrete dimensions
+        self._n_actions_total = sum(self._action_dims)
+        assert num_outputs == self._n_actions_total, \
+            f"Expected num_outputs={self._n_actions_total}, got {num_outputs}"
 
         # ── Embed full AttentionFormationActor (feature extractor) ──────
         # The actor's MLP head outputs [B, mlp_hidden] features.
@@ -85,12 +83,13 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
         )
 
         # ── Categorical output heads ─────────────────────────────────────
-        self.turn_head = nn.Linear(mlp_hidden, self._n_turn)
-        self.speed_head = nn.Linear(mlp_hidden, self._n_speed)
-        nn.init.orthogonal_(self.turn_head.weight, gain=0.01)
-        nn.init.constant_(self.turn_head.bias, 0.0)
-        nn.init.orthogonal_(self.speed_head.weight, gain=0.01)
-        nn.init.constant_(self.speed_head.bias, 0.0)
+        # Dynamic categorical heads — one per action dimension
+        self._heads = nn.ModuleList([
+            nn.Linear(mlp_hidden, dim) for dim in self._action_dims
+        ])
+        for head in self._heads:
+            nn.init.orthogonal_(head.weight, gain=0.01)
+            nn.init.constant_(head.bias, 0.0)
 
         # ── Embed full AttentionCritic ─────────────────────────────────
         # Critic expects (B, 3, 7) token sequence: [Self, Mate, Target]
@@ -143,9 +142,8 @@ class RLlibAttentionActor(TorchModelV2, nn.Module):
 
         # ── Actor: Self-Attention token pipeline → categorical heads ──
         feat = self.actor.forward_features(local)  # [B, 256]
-        turn_logits = self.turn_head(feat)
-        speed_logits = self.speed_head(feat)
-        logits = torch.cat([turn_logits, speed_logits], dim=1)
+        # Dynamic head outputs for MultiDiscrete action space
+        logits = torch.cat([head(feat) for head in self._heads], dim=1)
 
         # ── Action masking ───────────────────────────────────────────
         if action_mask is not None:

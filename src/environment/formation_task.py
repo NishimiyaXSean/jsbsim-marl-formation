@@ -431,7 +431,12 @@ class FormationTask(BaseTask):
             ], dtype=np.float32)
 
             # Broadcast: mate's hierarchical tactical intent (4 dims)
-            mate_aid = env._agent_ids[mate_idx] if hasattr(env, '_agent_ids') else self._agent_ids[mate_idx]
+            # _agent_ids may be a list or a set (RLlib compatibility)
+            if hasattr(env, '_agent_ids'):
+                agent_id_list = list(env._agent_ids)
+                mate_aid = agent_id_list[mate_idx]
+            else:
+                mate_aid = self._agent_ids[mate_idx]
             mate_act = self._last_actions.get(mate_aid, {})
             mate_delta_hdg = mate_act.get('delta_heading', 0.0) / 30.0   # [-1, 1]
             mate_delta_spd = mate_act.get('delta_speed', 0.0) / 20.0      # [-1, 1]

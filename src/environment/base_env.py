@@ -115,7 +115,9 @@ class BaseEnv(MultiAgentEnv):
         # Build aircraft based on task configuration
         self.N = getattr(self.task, 'N', 2)  # pursuers
         self.M = getattr(self.task, 'M', 1)  # targets
+        # Must be a list for indexed access (RLlib may convert to set later)
         self._agent_ids = list(self.task.agent_ids)
+        self.possible_agents = self._agent_ids  # RLlib MultiAgentEnv requires this
 
         # Shared difficulty
         self._difficulty = float(np.clip(config.get("difficulty_level", 0.0), 0.0, 1.0))
