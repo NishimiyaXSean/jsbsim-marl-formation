@@ -32,6 +32,9 @@ from src.dynamics.aircraft import Aircraft
 from src.dynamics.autopilot import BFMAutopilot, BFMAutopilotConfig, TrimSchedule, GainScheduler
 from src.dynamics.flight_envelope import FlightEnvelope, EnvelopeConfig
 from src.dynamics.flight_controller import FlightController, FlightControlTargets
+from src.dynamics.controller_base import FlightTarget
+from src.dynamics.pid_controller import PIDFlightController
+from src.dynamics.safety_interceptor import SafetyInterceptor
 from src.utils.units import kts_to_mps
 
 from .task_base import BaseTask
@@ -50,6 +53,7 @@ class _Pursuer:
     fc: FlightController
     envelope: FlightEnvelope
     autopilot: BFMAutopilot
+    controller: object = None  # SafetyInterceptor or BaseController (set after init)
     ref_hdg: float = 0.0
     ref_alt_m: float = 3000.0
     prev_dist: float = 0.0
@@ -68,6 +72,8 @@ class _Pursuer:
         self.closure_rates.clear()
         self.zone_death_counter = 0
         self.loiter_time = 0.0
+        if self.controller is not None:
+            self.controller.reset()
 
 
 @dataclass
@@ -121,14 +127,23 @@ class BaseEnv(MultiAgentEnv):
         # ── Build aircraft ──────────────────────────────────────────────
         jsbsim_data_dir = config.get("jsbsim_data_dir")
 
+        # Choose controller type from config
+        controller_type = config.get("controller_type", "pid")
+
         self.pursuers: List[_Pursuer] = []
         for _ in range(self.N):
             ac = Aircraft(jsbsim_data_dir)
             fc = FlightController()
             envelope = FlightEnvelope(EnvelopeConfig())
             ap = BFMAutopilot(BFMAutopilotConfig(), trim=TrimSchedule(), scheduler=GainScheduler())
+            # Build controller
+            if controller_type == "neural":
+                from src.dynamics.neural_controller import NeuralFlightController
+                ctrl = SafetyInterceptor(NeuralFlightController())
+            else:
+                ctrl = SafetyInterceptor(PIDFlightController())
             self.pursuers.append(_Pursuer(
-                aircraft=ac, fc=fc, envelope=envelope, autopilot=ap))
+                aircraft=ac, fc=fc, envelope=envelope, autopilot=ap, controller=ctrl))
 
         self.targets: List[_Target] = []
         for _ in range(self.M):
@@ -273,16 +288,17 @@ class BaseEnv(MultiAgentEnv):
 
         # ── ② 12-step physics loop ──────────────────────────────────────
         for _ in range(DECISION_STEPS):
-            # Control pursuers — PID compute + apply
+            # Control pursuers — delegate to controller (PID or Neural + Safety)
             for i, (ps, aid) in enumerate(zip(self.pursuers, self._agent_ids)):
                 s = ps.aircraft.state
                 cmd_speed = getattr(ps, '_cmd_speed', 250.0)
-                fc_tgt = FlightControlTargets(
+                target = FlightTarget(
                     heading_deg=ps.ref_hdg, altitude_m=ps.ref_alt_m,
                     speed_mps=cmd_speed)
-                thr, elev, ail, rud = ps.fc.compute(s, fc_tgt, dt)
-                ps.aircraft.set_controls(throttle=thr, elevator=elev,
-                                        aileron=ail, rudder=rud)
+                surfaces = ps.controller.predict(s, target, dt)
+                ps.aircraft.set_controls(
+                    throttle=surfaces.throttle, elevator=surfaces.elevator,
+                    aileron=surfaces.aileron, rudder=surfaces.rudder)
 
             # Control targets — straight-and-level
             for ts in self.targets:

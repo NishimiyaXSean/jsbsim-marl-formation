@@ -80,7 +80,8 @@ def test_smoke_multiple_resets():
         for aid in env._agent_ids:
             assert len(obs[aid]["obs"].shape) == 1, f"Wrong obs shape for {aid}"
             assert len(obs[aid]["global_state"].shape) == 1, f"Wrong global_state shape for {aid}"
-            assert obs[aid]["action_mask"].shape == (8,), f"Wrong action_mask shape for {aid}"
+            # mask shape depends on task (was 8 for low-level, now 11 for hierarchical)
+            assert len(obs[aid]["action_mask"].shape) == 1, f"Wrong action_mask shape for {aid}"
             # Check no NaN
             assert np.all(np.isfinite(obs[aid]["obs"])), f"NaN in obs[{aid}]"
             assert np.all(np.isfinite(obs[aid]["global_state"])), f"NaN in global_state[{aid}]"

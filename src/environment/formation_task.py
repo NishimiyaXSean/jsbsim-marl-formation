@@ -130,9 +130,20 @@ class FormationTask(BaseTask):
     """2v1 cooperative formation pursuit — token-based CTDE observation.
 
     Agent IDs: "p0", "p1"
-    Observation: Dict(obs=Box(39), global_state=Box(21), action_mask=Box(8))
-    Action: MultiDiscrete([5 turn, 3 speed])
+    Observation: Dict(obs=Box(39), global_state=Box(21), action_mask=Box(11))
+    Action: MultiDiscrete([3 speed_delta, 5 heading_delta, 3 altitude_delta]) = 45
+      → interpreted as incremental FlightTarget applied to current aircraft state
     """
+
+    # ── Hierarchical action space: tactical deltas (LAG-compatible ranges) ──
+    DELTA_SPEEDS     = [-20.0,   0.0,  20.0]      # m/s: decelerate / hold / accelerate
+    DELTA_HEADINGS   = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
+    DELTA_ALTITUDES  = [-100.0,   0.0, 100.0]     # meters: descend / hold / climb
+
+    N_SPEED_DELTA  = len(DELTA_SPEEDS)     # 3
+    N_HEADING_DELTA = len(DELTA_HEADINGS)  # 5
+    N_ALT_DELTA    = len(DELTA_ALTITUDES)  # 3
+    N_HIGH_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 11-dim mask
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -146,9 +157,11 @@ class FormationTask(BaseTask):
         single_obs = gym.spaces.Dict({
             "obs": gym.spaces.Box(-1.0, 1.0, (OBS_PER_PURSUER,), dtype=np.float32),
             "global_state": gym.spaces.Box(-1.0, 1.0, (self._global_dim,), dtype=np.float32),
-            "action_mask": gym.spaces.Box(0.0, 1.0, (N_ACTIONS,), dtype=np.float32),
+            "action_mask": gym.spaces.Box(0.0, 1.0, (self.N_HIGH_ACTIONS,), dtype=np.float32),
         })
-        single_act = gym.spaces.MultiDiscrete([N_TURN, N_SPEED])
+        # Hierarchical: [speed_delta(3), heading_delta(5), altitude_delta(3)]
+        single_act = gym.spaces.MultiDiscrete(
+            [self.N_SPEED_DELTA, self.N_HEADING_DELTA, self.N_ALT_DELTA])
 
         self._observation_space = gym.spaces.Dict({
             aid: single_obs for aid in self._agent_ids
@@ -206,27 +219,48 @@ class FormationTask(BaseTask):
             ps.episode_start_dist = ps.prev_dist
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
-        """Parse discrete tactical primitives → set PID targets on each pursuer."""
-        dt = PHYSICS_DT
+        """Map high-level tactical actions → FlightTarget for each pursuer.
+
+        Action format: [speed_delta_idx, heading_delta_idx, altitude_delta_idx]
+        The FlightTarget is computed as: current_state + delta, then clamped.
+        The actual control surface deflections are produced by the aircraft's
+        controller (PID or Neural) inside the physics loop.
+
+        Stores _last_actions as FlightTarget-compatible dicts for mate broadcast.
+        """
         actions = {}
-        for i, aid in enumerate(self._agent_ids):
-            a = action_dict.get(aid, np.array([2, 1], dtype=np.int64))
+        for aid in self._agent_ids:
+            a = action_dict.get(aid, np.array([1, 2, 1], dtype=np.int64))
             a = np.asarray(a, dtype=np.int64)
-            turn_idx = int(np.clip(a[0], 0, N_TURN - 1))
-            speed_idx = int(np.clip(a[1], 0, N_SPEED - 1))
-            turn_rates = _get_turn_rates(speed_idx)
+            speed_idx = int(np.clip(a[0], 0, self.N_SPEED_DELTA - 1))
+            heading_idx = int(np.clip(a[1], 0, self.N_HEADING_DELTA - 1))
+            alt_idx = int(np.clip(a[2], 0, self.N_ALT_DELTA - 1))
             actions[aid] = {
-                'turn_idx': turn_idx,
+                'delta_speed': self.DELTA_SPEEDS[speed_idx],
+                'delta_heading': self.DELTA_HEADINGS[heading_idx],
+                'delta_altitude': self.DELTA_ALTITUDES[alt_idx],
                 'speed_idx': speed_idx,
-                'cmd_turn_rate': turn_rates[turn_idx],
-                'cmd_speed': SPEEDS[speed_idx],
+                'heading_idx': heading_idx,
+                'alt_idx': alt_idx,
             }
         self._last_actions = actions
 
-        for i, (ps, aid) in enumerate(zip(env.pursuers, self._agent_ids)):
+        for ps, aid in zip(env.pursuers, self._agent_ids):
             ac = actions[aid]
-            ps.ref_hdg = (ps.ref_hdg + ac['cmd_turn_rate'] * dt) % 360.0
-            ps._cmd_speed = ac['cmd_speed']  # stored for physics loop
+            s = ps.aircraft.state
+            current_hdg = float(s["yaw_deg"])
+            current_alt = float(s["alt_m"])
+            current_spd = float(s["airspeed_mps"])
+
+            # Compute incremental target
+            target_hdg = (current_hdg + ac['delta_heading']) % 360.0
+            target_alt = np.clip(current_alt + ac['delta_altitude'], 100.0, 5000.0)
+            target_spd = np.clip(current_spd + ac['delta_speed'], 100.0, 380.0)
+
+            # Store on pursuer for physics loop + broadcast
+            ps.ref_hdg = target_hdg
+            ps.ref_alt_m = target_alt
+            ps._cmd_speed = target_spd
 
     def step(self, env) -> None:
         """Task-level per-decision-step logic (nothing to do for formation task)."""
@@ -235,14 +269,20 @@ class FormationTask(BaseTask):
     # ── Observation ─────────────────────────────────────────────────────────
 
     def get_obs(self, env) -> Dict[str, dict]:
-        """Build per-agent Dict observation with local obs, global_state, action_mask."""
+        """Build per-agent Dict observation with 39-dim tokens + 21-dim global + mask.
+
+        Returns format strictly aligned with AttentionFormationActor's expected input:
+          - "obs":          Box(39) — Self/Target/Mate token features
+          - "global_state": Box(21) — ego-centric [Self, Mate, Target] for critic
+          - "action_mask":  Box(11) — high-level safety mask (speed_delta + heading_delta + alt_delta)
+        """
         target_pos = env.targets[0].aircraft.position_ned
         target_vel = env.targets[0].aircraft.velocity_ned
 
         obs = {}
         for i, (ps, aid) in enumerate(zip(env.pursuers, self._agent_ids)):
             local = self._build_local_obs(i, ps, env, target_pos, target_vel)
-            mask = self._build_action_mask(ps)
+            mask = self._build_high_level_action_mask(ps)
 
             # Ego-centric global state: [Self, Mate, Target]
             mate_idx = 1 - i
@@ -265,6 +305,31 @@ class FormationTask(BaseTask):
                 "action_mask": mask.astype(np.float32),
             }
         return obs
+
+    def _build_high_level_action_mask(self, ps) -> np.ndarray:
+        """Build high-level action mask [11] for tactical deltas.
+
+        Layout: [speed_0, speed_1, speed_2, heading_0, ..., heading_4,
+                 altitude_0, altitude_1, altitude_2]
+        1=allowed, 0=forbidden.
+        """
+        mask = np.ones(self.N_HIGH_ACTIONS, dtype=np.float32)
+        airspeed = float(ps.aircraft.state["airspeed_mps"])
+        alt_m = float(ps.aircraft.state["alt_m"])
+
+        # Speed delta mask: indices 0..2
+        if airspeed < ANTI_STALL_SPEED_WARN:
+            mask[0] = 0.0  # forbid decelerate (would stall)
+        if airspeed > MAX_VEL * 0.95:
+            mask[2] = 0.0  # forbid accelerate (would overspeed)
+
+        # Altitude delta mask: indices 8..10
+        if alt_m < 200.0:
+            mask[8] = 0.0  # forbid descend
+
+        # Heading deltas (indices 3..7) are always allowed — turning is safe
+
+        return mask
 
     def _build_local_obs(self, idx: int, ps, env, target_pos, target_vel) -> np.ndarray:
         """39-dim per-pursuer local observation (matches FormationRLlibEnv exactly).
@@ -365,15 +430,15 @@ class FormationTask(BaseTask):
                 mate_body_vel[2] / MAX_VEL,
             ], dtype=np.float32)
 
-            # Broadcast: mate's tactical intent (4 dims)
+            # Broadcast: mate's hierarchical tactical intent (4 dims)
             mate_aid = env._agent_ids[mate_idx] if hasattr(env, '_agent_ids') else self._agent_ids[mate_idx]
             mate_act = self._last_actions.get(mate_aid, {})
-            mate_cmd_turn = mate_act.get('cmd_turn_rate', 0.0) / 20.0
-            mate_cmd_spd = (mate_act.get('cmd_speed', 250.0) - 180.0) / 140.0
+            mate_delta_hdg = mate_act.get('delta_heading', 0.0) / 30.0   # [-1, 1]
+            mate_delta_spd = mate_act.get('delta_speed', 0.0) / 20.0      # [-1, 1]
             mate_ref_hdg = np.deg2rad(env.pursuers[mate_idx].ref_hdg)
             mate_broadcast = np.array([
-                mate_cmd_turn,
-                mate_cmd_spd,
+                mate_delta_hdg,
+                mate_delta_spd,
                 np.cos(mate_ref_hdg),
                 np.sin(mate_ref_hdg),
             ], dtype=np.float32)
