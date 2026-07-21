@@ -266,123 +266,158 @@ class FormationTask(BaseTask):
             }
         return obs
 
-    def _build_local_obs(self, i: int, ps, env, target_pos, target_vel) -> np.ndarray:
-        """Build 39-dim local observation for one pursuer.
+    def _build_local_obs(self, idx: int, ps, env, target_pos, target_vel) -> np.ndarray:
+        """39-dim per-pursuer local observation (matches FormationRLlibEnv exactly).
 
-        Segments: Self(15) + Target(14) + Mate(10) = 39
+        Layout: base(27) + agent_onehot(2) + mate(10) = 39
         """
-        p_pos = ps.aircraft.position_ned
-        p_vel = ps.aircraft.velocity_ned
-        p_yaw = float(ps.aircraft.state["yaw_deg"])
-        p_airspeed = float(ps.aircraft.state["airspeed_mps"])
-        p_alt_m = float(ps.aircraft.state["alt_m"])
-        p_roll = float(ps.aircraft.state["roll_deg"])
-        p_pitch = float(ps.aircraft.state["pitch_deg"])
-        p_alpha = float(ps.aircraft.state["alpha_deg"])
+        a_pos = ps.aircraft.position_ned
+        a_rpy = ps.aircraft.rpy_rad
+        a_vel = ps.aircraft.velocity_ned
 
-        mate_idx = 1 - i
-        mate = env.pursuers[mate_idx]
-        m_pos = mate.aircraft.position_ned
-        m_vel = mate.aircraft.velocity_ned
-        m_yaw = float(mate.aircraft.state["yaw_deg"])
-        m_airspeed = float(mate.aircraft.state["airspeed_mps"])
-        m_alt_m = float(mate.aircraft.state["alt_m"])
+        # Body-frame transforms
+        rel_w = target_pos - a_pos
+        ch, sh = np.cos(a_rpy[2]), np.sin(a_rpy[2])
+        rel_body = np.array([
+            rel_w[0] * ch + rel_w[1] * sh,
+            -rel_w[0] * sh + rel_w[1] * ch,
+            -rel_w[2],
+        ])
+        vel_body = np.array([
+            a_vel[0] * ch + a_vel[1] * sh,
+            -a_vel[0] * sh + a_vel[1] * ch,
+            a_vel[2],
+        ])
+        t_vel_body = np.array([
+            target_vel[0] * ch + target_vel[1] * sh,
+            -target_vel[0] * sh + target_vel[1] * ch,
+            target_vel[2],
+        ])
 
-        # Target relative (body-frame)
-        delta_pos = target_pos - p_pos
-        cos_y, sin_y = np.cos(np.radians(p_yaw)), np.sin(np.radians(p_yaw))
-        rel_x = cos_y * delta_pos[0] + sin_y * delta_pos[1]
-        rel_y = -sin_y * delta_pos[0] + cos_y * delta_pos[1]
-        rel_z_body = target_pos[2] - p_pos[2]
+        ang_vel = self._ang_vel(ps.aircraft.rpy_rad, ps.prev_rpy)
+        ps.prev_rpy = ps.aircraft.rpy_rad.copy()
 
-        # Own velocity (body-frame)
-        vn, ve, vd = p_vel[0], p_vel[1], p_vel[2]
-        vx_body = cos_y * vn + sin_y * ve
-        vy_body = -sin_y * vn + cos_y * ve
-
-        # Target velocity (body-frame)
-        tvn, tve, tvd = target_vel[0], target_vel[1], target_vel[2]
-        tvx_body = cos_y * tvn + sin_y * tve
-        tvy_body = -sin_y * tvn + cos_y * tve
-
-        # Tactical geometry
-        a_pos = p_pos
-        a_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+        a_fwd = compute_forward_vector(a_rpy)
         t_fwd = compute_forward_vector(env.targets[0].aircraft.rpy_rad)
         _, los_dir, _ = compute_los(a_pos, target_pos)
         geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
-        cos_ata = geo.get('cos_ATA', 0.0)
-        cos_aa = geo.get('cos_AA', 0.0)
-        cos_hca = geo.get('cos_HCA', 0.0)
-        closing = geo.get('closing_speed_mps', 0.0)
-        los_rate = geo.get('LOS_rate', 0.0)
 
-        # Bearing error
-        target_bearing = float(np.degrees(np.arctan2(delta_pos[1], delta_pos[0]))) % 360.0
-        bearing_err = (target_bearing - p_yaw + 180.0) % 360.0 - 180.0
+        spd = float(ps.aircraft.state["airspeed_mps"])
+        alpha = float(ps.aircraft.state["alpha_deg"])
 
-        # Mate relative (body-frame)
-        m_rel = m_pos - p_pos
-        m_rel_x = cos_y * m_rel[0] + sin_y * m_rel[1]
-        m_rel_y = -sin_y * m_rel[0] + cos_y * m_rel[1]
-        m_rel_z = m_pos[2] - p_pos[2]
-        m_vx = cos_y * (m_vel[0] - vn) + sin_y * (m_vel[1] - ve)
-        m_vy = -sin_y * (m_vel[0] - vn) + cos_y * (m_vel[1] - ve)
-        m_vz = m_vel[2] - vd
+        # LOS rate
+        r_h = target_pos[:2] - a_pos[:2]
+        dh = float(np.linalg.norm(r_h))
+        if dh > 1.0:
+            v_rel_h = target_vel[:2] - a_vel[:2]
+            lambda_dot = float(np.cross(r_h, v_rel_h)) / (dh * dh)
+            lambda_dot_norm = float(np.clip(lambda_dot / 0.5, -1, 1))
+        else:
+            lambda_dot_norm = 0.0
 
-        # Mate broadcast: last action of mate
-        mate_action = self._last_actions.get(env._agent_ids[mate_idx] if hasattr(env, '_agent_ids') else self._agent_ids[mate_idx],
-                                              {'turn_idx': 2, 'speed_idx': 1})
-        mate_turn_onehot = np.zeros(N_TURN)
-        mate_turn_onehot[mate_action['turn_idx']] = 1.0
-        mate_speed_onehot = np.zeros(N_SPEED)
-        mate_speed_onehot[mate_action['speed_idx']] = 1.0
+        bearing = float(np.degrees(np.arctan2(r_h[1], r_h[0]))) % 360.0
+        hdg = float(ps.aircraft.state["yaw_deg"]) % 360.0
+        berr = (bearing - hdg + 180) % 360 - 180
+        berr_norm = float(np.clip(berr / 180.0, -1, 1))
 
-        # Agent identity one-hot
-        agent_onehot = np.zeros(2)
-        agent_onehot[i] = 1.0
-
-        obs = np.array([
-            # Self (15)
-            rel_x / MAX_DIST, rel_y / MAX_DIST, rel_z_body / MAX_HEIGHT,
-            vx_body / MAX_VEL, vy_body / MAX_VEL, vd / MAX_VEL,
-            np.sin(np.radians(p_roll)), np.cos(np.radians(p_roll)),
-            np.sin(np.radians(p_pitch)), np.cos(np.radians(p_pitch)),
-            p_alt_m / MAX_HEIGHT, p_airspeed / MAX_VEL, p_alpha / 30.0,
-            bearing_err / 180.0, los_rate / 0.5,
-            # Target (14)
-            tvx_body / MAX_VEL, tvy_body / MAX_VEL, tvd / MAX_VEL,
-            cos_ata, cos_aa, cos_hca,
-            delta_pos[2] / MAX_HEIGHT, closing / MAX_VEL,
-            np.linalg.norm(delta_pos) / MAX_DIST,
-            target_vel[0] / MAX_VEL, target_vel[1] / MAX_VEL, target_vel[2] / MAX_VEL,
-            self._difficulty, 0.0,  # pad to 14
-            # Mate (10)
-            m_rel_x / MAX_DIST, m_rel_y / MAX_DIST, m_rel_z / MAX_HEIGHT,
-            m_vx / MAX_VEL, m_vy / MAX_VEL, m_vz / MAX_VEL,
-            *mate_turn_onehot[:5], *mate_speed_onehot[:3],
-            # Agent ID one-hot (2)
-            *agent_onehot,
+        # Base observation (indices 0-26, same as FormationEnv)
+        base = np.array([
+            rel_body[0] / MAX_DIST, rel_body[1] / MAX_DIST,
+            rel_body[2] / MAX_DIST,
+            vel_body[0] / MAX_VEL, vel_body[1] / MAX_VEL, vel_body[2] / MAX_VEL,
+            a_rpy[0] / np.pi, a_rpy[1] / (np.pi / 2), a_rpy[2] / np.pi,
+            ang_vel[0] / np.pi, ang_vel[1] / np.pi,
+            ang_vel[2] / np.pi,
+            a_pos[2] / MAX_HEIGHT,
+            t_vel_body[0] / MAX_VEL, t_vel_body[1] / MAX_VEL,
+            t_vel_body[2] / MAX_VEL,
+            0.0, 0.0, 0.0,  # target ang_vel placeholder
+            geo["cos_ata"], geo["cos_aa"], geo["cos_hca"],
+            alpha / 30.0, spd / MAX_VEL, 0.0,  # Ps placeholder
+            lambda_dot_norm, berr_norm,
         ], dtype=np.float32)
 
-        # Clip to [-1, 1]
-        return np.clip(obs, -1, 1)
+        # Agent one-hot ID
+        agent_onehot = np.array([1.0, 0.0] if idx == 0 else [0.0, 1.0], dtype=np.float32)
+        base = np.concatenate([base, agent_onehot])  # 27→29
+
+        # Mate observation (indices 27-38, total 10 dims)
+        if self.N >= 2:
+            mate_idx = 1 - idx
+            mp = env.pursuers[mate_idx].aircraft.position_ned
+            mv = env.pursuers[mate_idx].aircraft.velocity_ned
+            mrw = mp - a_pos
+            mrv = mv - a_vel
+            mate_body_pos = np.array([
+                mrw[0] * ch + mrw[1] * sh,
+                -mrw[0] * sh + mrw[1] * ch,
+                -mrw[2],
+            ])
+            mate_body_vel = np.array([
+                mrv[0] * ch + mrv[1] * sh,
+                -mrv[0] * sh + mrv[1] * ch,
+                mrv[2],
+            ])
+            mate_obs = np.array([
+                mate_body_pos[0] / MAX_DIST, mate_body_pos[1] / MAX_DIST,
+                mate_body_pos[2] / MAX_DIST,
+                mate_body_vel[0] / MAX_VEL, mate_body_vel[1] / MAX_VEL,
+                mate_body_vel[2] / MAX_VEL,
+            ], dtype=np.float32)
+
+            # Broadcast: mate's tactical intent (4 dims)
+            mate_aid = env._agent_ids[mate_idx] if hasattr(env, '_agent_ids') else self._agent_ids[mate_idx]
+            mate_act = self._last_actions.get(mate_aid, {})
+            mate_cmd_turn = mate_act.get('cmd_turn_rate', 0.0) / 20.0
+            mate_cmd_spd = (mate_act.get('cmd_speed', 250.0) - 180.0) / 140.0
+            mate_ref_hdg = np.deg2rad(env.pursuers[mate_idx].ref_hdg)
+            mate_broadcast = np.array([
+                mate_cmd_turn,
+                mate_cmd_spd,
+                np.cos(mate_ref_hdg),
+                np.sin(mate_ref_hdg),
+            ], dtype=np.float32)
+            mate = np.concatenate([mate_obs, mate_broadcast])
+        else:
+            mate = np.zeros(10, dtype=np.float32)
+
+        return np.clip(np.concatenate([base, mate]), -1, 1)
+
+    def _ang_vel(self, cur, prev):
+        d = cur - prev
+        d = (d + np.pi) % (2 * np.pi) - np.pi
+        return d / PHYSICS_DT
 
     def _build_action_mask(self, ps) -> np.ndarray:
-        """Build action mask [8] based on flight safety."""
+        """Build action mask [8] based on flight safety constraints.
+
+        Layout: [turn_0, ..., turn_4, speed_0, speed_1, speed_2]
+        """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
+
         airspeed = float(ps.aircraft.state["airspeed_mps"])
         alt_m = float(ps.aircraft.state["alt_m"])
+        nz_g = float(ps.aircraft.state.get("n_z_g", 1.0))
 
+        # Below stall warning: forbid slow speed and hard turns (high AoA risk)
         if airspeed < ANTI_STALL_SPEED_WARN:
-            mask[5] = 0.0
-            mask[0] = 0.0
-            mask[4] = 0.0
+            mask[5] = 0.0   # forbid speed=Slow (need energy)
+            mask[0] = 0.0   # forbid HardLeft (high drag)
+            mask[4] = 0.0   # forbid HardRight (high drag)
+
+        # Ground proximity: forbid hard turns (risk of spiral into ground)
         if alt_m < 200.0:
-            mask[0] = 0.0
-            mask[4] = 0.0
-        if airspeed > 0.95 * 320.0:
-            mask[7] = 0.0
+            mask[0] = 0.0   # forbid HardLeft
+            mask[4] = 0.0   # forbid HardRight
+            if alt_m < 100.0 and nz_g > 2.0:
+                mask[0] = 0.0
+                mask[1] = 0.0  # forbid SoftLeft
+                mask[3] = 0.0  # forbid SoftRight
+                mask[4] = 0.0  # only allow Straight
+
+        # Overspeed: forbid Fast (structural limits)
+        if airspeed > MAX_VEL * 0.95:
+            mask[7] = 0.0   # forbid speed=Fast
 
         return mask
 
@@ -391,10 +426,12 @@ class FormationTask(BaseTask):
     def get_reward(self, env) -> Dict[str, float]:
         """Compute per-agent rewards for the current decision step.
 
-        Returns a dict of {agent_id: scalar_reward}.
-        The actual reward accumulation happens per micro-step inside BaseEnv,
-        but the cooperative shaping is computed per decision step here.
+        Note: The original FormationRLlibEnv accumulates rewards inside the
+        12-step physics loop. Since BaseEnv delegates physics to itself,
+        the per-step rewards here are multiplied by DECISION_STEPS (12)
+        to produce approximately equivalent total rewards.
         """
+        dt = PHYSICS_DT
         rewards = {aid: 0.0 for aid in self._agent_ids}
 
         for i, (ps, aid) in enumerate(zip(env.pursuers, self._agent_ids)):
@@ -403,10 +440,10 @@ class FormationTask(BaseTask):
             cur_dist = float(np.linalg.norm(a_pos - t_pos))
             delta = ps.prev_dist - cur_dist
 
-            # Progress
-            rewards[aid] += REWARD_PROGRESS * delta * 0.5
+            # Progress (scaled by DECISION_STEPS to match per-micro-step accumulation)
+            rewards[aid] += REWARD_PROGRESS * delta * 0.5 * DECISION_STEPS
             if cur_dist < 500.0:
-                rewards[aid] += REWARD_PROGRESS * delta * 5.0
+                rewards[aid] += REWARD_PROGRESS * delta * 5.0 * DECISION_STEPS
 
             # ATA
             a_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
@@ -415,46 +452,46 @@ class FormationTask(BaseTask):
             geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
             cos_ata = geo.get('cos_ATA', 0.0)
             dist_factor = np.clip(1.0 - cur_dist / MAX_DIST, 0.1, 1.0)
-            rewards[aid] += REWARD_ATA * cos_ata * dist_factor
+            rewards[aid] += REWARD_ATA * cos_ata * dist_factor * DECISION_STEPS
 
-            # Proximity tiers
+            # Proximity tiers (only once per tier per episode)
             for tier_dist, bonus in PROXIMITY_TIERS:
                 if cur_dist < tier_dist and tier_dist not in ps.proximity_awarded:
                     rewards[aid] += bonus
                     ps.proximity_awarded.add(tier_dist)
 
             # Step penalty
-            rewards[aid] -= STEP_PENALTY
+            rewards[aid] -= STEP_PENALTY * DECISION_STEPS
 
             ps.prev_dist = cur_dist
 
-        # ── Pincer shaping (per decision step) ──────────────────────────
+        # ── Pincer shaping ───────────────────────────────────────────────
         p0_pos = env.pursuers[0].aircraft.position_ned
         p1_pos = env.pursuers[1].aircraft.position_ned
         t_pos = env.targets[0].aircraft.position_ned
-        los0 = t_pos - p0_pos
-        los1 = t_pos - p1_pos
-        d0 = float(np.linalg.norm(los0))
-        d1 = float(np.linalg.norm(los1))
-        cos_pincer = np.dot(los0, los1) / max(d0 * d1, 1e-6)
-        pincer_angle = float(np.degrees(np.arccos(np.clip(cos_pincer, -1, 1))))
+        d0 = float(np.linalg.norm(p0_pos - t_pos))
+        d1 = float(np.linalg.norm(p1_pos - t_pos))
 
         if self._coop_phase == COOP_PHASE_AND:
             and_dist = self._and_dist
+            los0 = t_pos - p0_pos
+            los1 = t_pos - p1_pos
+            cos_pincer = np.dot(los0, los1) / max(d0 * d1, 1e-6)
+            pincer_angle = float(np.degrees(np.arccos(np.clip(cos_pincer, -1, 1))))
             if d0 < and_dist and d1 < and_dist:
-                pincer_reward = PINCER_SHAPING_COEFF * min(pincer_angle, self._and_angle) * DECISION_DT
+                pincer_reward = PINCER_SHAPING_COEFF * min(pincer_angle, self._and_angle) * dt * DECISION_STEPS
                 rewards["p0"] += pincer_reward
                 rewards["p1"] += pincer_reward
 
         # ── Distance asymmetry penalty ───────────────────────────────────
         dist_diff = abs(d0 - d1)
         if dist_diff > DIST_ASYMMETRY_THRESH:
-            penalty = DIST_ASYMMETRY_WEIGHT * (dist_diff - DIST_ASYMMETRY_THRESH) / DIST_ASYMMETRY_NORM * DECISION_DT
+            penalty = DIST_ASYMMETRY_WEIGHT * (dist_diff - DIST_ASYMMETRY_THRESH) / DIST_ASYMMETRY_NORM * dt * DECISION_STEPS
             rewards["p0"] -= penalty
             rewards["p1"] -= penalty
 
         # Stored for termination check
-        self._last_pincer = pincer_angle
+        self._last_pincer = 0.0
         self._last_d0 = d0
         self._last_d1 = d1
 
@@ -469,7 +506,9 @@ class FormationTask(BaseTask):
             (terminateds, truncateds, infos) — each with "__all__" key.
         """
         terminateds = {aid: False for aid in self._agent_ids}
+        terminateds["__all__"] = False
         truncateds = {aid: False for aid in self._agent_ids}
+        truncateds["__all__"] = False
         infos: Dict[str, Any] = {"p0": {}, "p1": {}}
         reason = "timeout"
         done_all = False

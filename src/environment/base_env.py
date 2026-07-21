@@ -337,9 +337,15 @@ class BaseEnv(MultiAgentEnv):
     def close(self):
         """Clean up JSBSim instances."""
         for ps in self.pursuers:
-            ps.aircraft.close()
+            try:
+                ps.aircraft.close()
+            except AttributeError:
+                pass
         for ts in self.targets:
-            ts.aircraft.close()
+            try:
+                ts.aircraft.close()
+            except AttributeError:
+                pass
 
     def render(self, mode: str = "txt", filepath: str = "./recording.txt.acmi",
                tacview=None) -> None:
