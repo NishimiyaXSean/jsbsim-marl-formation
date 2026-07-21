@@ -371,6 +371,59 @@ class BaseEnv(MultiAgentEnv):
                 ts.aircraft.close()
             except AttributeError:
                 pass
+        self.close_acmi()
+
+    # ── ACMI / Tacview Export ───────────────────────────────────────────
+
+    def enable_acmi_logging(self, filepath: str = "render.acmi"):
+        """Initialize ACMI file with Tacview header."""
+        self._acmi_file = open(filepath, "w", encoding="utf-8")
+        self._acmi_file.write("FileType=text/acmi/tacview\n")
+        self._acmi_file.write("FileVersion=2.1\n")
+        self._acmi_file.write("0,ReferenceTime=2020-04-01T00:00:00Z\n")
+        # Register objects
+        for i, ps in enumerate(self.pursuers):
+            s = ps.aircraft.state
+            self._acmi_file.write(
+                f"{101+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
+                f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
+                f"Name=P{i},Type=Air+FixedWing,Color=Red\n")
+        for i, ts in enumerate(self.targets):
+            s = ts.aircraft.state
+            self._acmi_file.write(
+                f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
+                f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
+                f"Name=T{i},Type=Air+FixedWing,Color=Blue\n")
+        self._acmi_time = 0.0
+
+    def log_acmi_step(self):
+        """Write one frame at current decision step."""
+        if not hasattr(self, "_acmi_file") or self._acmi_file is None:
+            return
+        self._acmi_file.write(f"#{self._acmi_time:.2f}\n")
+        for i, ps in enumerate(self.pursuers):
+            s = ps.aircraft.state
+            self._acmi_file.write(
+                f"{101+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
+                f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
+                f"Name=P{i},Color=Red\n")
+        for i, ts in enumerate(self.targets):
+            s = ts.aircraft.state
+            self._acmi_file.write(
+                f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
+                f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
+                f"Name=T{i},Color=Blue\n")
+        self._acmi_time += 0.2
+        self._acmi_file.flush()
+
+    def close_acmi(self):
+        if hasattr(self, "_acmi_file") and self._acmi_file is not None:
+            try:
+                if not self._acmi_file.closed:
+                    self._acmi_file.close()
+            except Exception:
+                pass
+            self._acmi_file = None
 
     def render(self, mode: str = "txt", filepath: str = "./recording.txt.acmi",
                tacview=None) -> None:

@@ -17,6 +17,7 @@ import sys
 import warnings
 import logging
 
+import numpy as np
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
@@ -86,17 +87,24 @@ def main():
     algo = config.build()
     print(f"\nTraining: {run_name}  target_heading={args.target_heading}°")
 
+    best_reward = -float("inf")
+    best_ckpt = None
+
     for i in range(args.iterations):
         result = algo.train()
         reward = result.get("env_runners", {}).get("episode_reward_mean", float("nan"))
         length = result.get("env_runners", {}).get("episode_len_mean", 0)
         print(f"[iter {i:3d}] reward={reward:+.4f}  len={length:.0f}")
 
-        if (i + 1) % 10 == 0:
-            ckpt = algo.save(f"{project_root}/checkpoints/checkpoint_{i:04d}")
+        if not np.isnan(reward) and reward > best_reward:
+            best_reward = reward
+            best_ckpt = algo.save(f"{project_root}/checkpoints/best")
+
+        if (i + 1) % 20 == 0:
+            algo.save(f"{project_root}/checkpoints/checkpoint_{i:04d}")
 
     algo.save(f"{project_root}/checkpoints/checkpoint_final")
-    print(f"\nDone: {project_root}")
+    print(f"\nBest reward: {best_reward:.4f}  → {best_ckpt}")
     ray.shutdown()
 
 
