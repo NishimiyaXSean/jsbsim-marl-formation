@@ -211,30 +211,31 @@ class BaseEnv(MultiAgentEnv):
             ps.reset_state()
 
         # ── Target spawn ────────────────────────────────────────────────
-        for j, ts in enumerate(self.targets):
-            dist_min, dist_max = (900.0, 1300.0)  # task can override
-            target_dist = rng.uniform(dist_min + d * 200, dist_max + d * 500)
-            bearing_offset = rng.uniform(-d * 45.0, d * 45.0)
-            heading_diff = rng.uniform(-d * 30.0, d * 30.0)
+        if self.M > 0:
+            for j, ts in enumerate(self.targets):
+                dist_min, dist_max = (900.0, 1300.0)
+                target_dist = rng.uniform(dist_min + d * 200, dist_max + d * 500)
+                bearing_offset = rng.uniform(-d * 45.0, d * 45.0)
+                heading_diff = rng.uniform(-d * 30.0, d * 30.0)
 
-            pursuer_hdg = float(self.pursuers[0].aircraft.state["yaw_deg"])
-            target_bearing = (pursuer_hdg + bearing_offset) % 360.0
-            target_hdg = (pursuer_hdg + heading_diff) % 360.0
+                pursuer_hdg = float(self.pursuers[0].aircraft.state["yaw_deg"])
+                target_bearing = (pursuer_hdg + bearing_offset) % 360.0
+                target_hdg = (pursuer_hdg + heading_diff) % 360.0
 
-            target_ned = cluster + np.array([
-                target_dist * np.cos(np.radians(target_bearing)),
-                target_dist * np.sin(np.radians(target_bearing)), 0.0])
-            target_ned[2] = 3000.0
+                target_ned = cluster + np.array([
+                    target_dist * np.cos(np.radians(target_bearing)),
+                    target_dist * np.sin(np.radians(target_bearing)), 0.0])
+                target_ned[2] = 3000.0
 
-            ts.aircraft.reset(
-                lat_deg=30.0, lon_deg=120.0, alt_ft=int(3000 * 3.28084),
-                heading_deg=target_hdg, speed_kts=310, trim=False)
-            ts.aircraft.position_ned = target_ned
-            ts.fc.reset()
-            ts.envelope.reset()
-            ts.autopilot.reset(initial_speed_mps=160.0)
-            ts.ref_hdg = target_hdg
-            ts.ref_alt_m = 3000.0
+                ts.aircraft.reset(
+                    lat_deg=30.0, lon_deg=120.0, alt_ft=int(3000 * 3.28084),
+                    heading_deg=target_hdg, speed_kts=310, trim=False)
+                ts.aircraft.position_ned = target_ned
+                ts.fc.reset()
+                ts.envelope.reset()
+                ts.autopilot.reset(initial_speed_mps=160.0)
+                ts.ref_hdg = target_hdg
+                ts.ref_alt_m = 3000.0
 
         # ── Warmup: 3s level flight ─────────────────────────────────────
         warmup = int(3.0 * CTRL_FREQ)
@@ -253,6 +254,8 @@ class BaseEnv(MultiAgentEnv):
                 ps.aircraft.position_ned[2] = s["alt_m"]
 
             for ts in self.targets:
+                if self.M == 0:
+                    continue
                 s = ts.aircraft.state
                 tgt = FlightControlTargets(
                     heading_deg=ts.ref_hdg, altitude_m=3000.0,
@@ -304,6 +307,8 @@ class BaseEnv(MultiAgentEnv):
 
             # Control targets — straight-and-level
             for ts in self.targets:
+                if self.M == 0:
+                    continue
                 s = ts.aircraft.state
                 tgt = FlightControlTargets(
                     heading_deg=ts.ref_hdg, altitude_m=3000.0,
@@ -319,6 +324,8 @@ class BaseEnv(MultiAgentEnv):
                     ps.aircraft.velocity_ned[0:2] * dt
                 ps.aircraft.position_ned[2] = ps.aircraft.state["alt_m"]
             for ts in self.targets:
+                if self.M == 0:
+                    continue
                 ts.aircraft.run()
                 ts.aircraft.position_ned[0:2] += \
                     ts.aircraft.velocity_ned[0:2] * dt

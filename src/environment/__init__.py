@@ -1,6 +1,7 @@
 # Task-Based Architecture (new — feature/refactor-task-based)
 from src.environment.task_base import BaseTask
 from src.environment.formation_task import FormationTask
+from src.environment.heading_task import HeadingTrackingTask
 from src.environment.base_env import BaseEnv
 
 # Legacy (deprecated, kept for backward compat)
