@@ -31,16 +31,16 @@ class HeadingTrackingTask(BaseTask):
         self.N = 1  # single pursuer
         self.M = 0  # no target
 
-        # Target values
+        # Target values (altitude/speed set at reset to avoid aggressive PID transients)
         self.target_heading_deg = config.get("target_heading", 90.0) if config else 90.0
-        self.target_altitude_m = config.get("target_altitude", 5000.0) if config else 5000.0
-        self.target_speed_mps = config.get("target_speed", 250.0) if config else 250.0
+        self.target_altitude_m = 3000.0   # placeholder — set to actual initial alt at reset
+        self.target_speed_mps = 250.0
 
         # Action: 3 discrete heading deltas
-        self._delta_headings = [-10.0, 0.0, 10.0]  # deg/s — applied at 5Hz → ±2° per decision step
+        self._delta_headings = [-10.0, 0.0, 10.0]  # deg/s → ±2° per decision step at 5Hz
 
-        # Spaces
-        single_obs = gym.spaces.Box(-1.0, 1.0, (6,), dtype=np.float32)
+        # Observation: 8 dims (heading_err, roll_sin/cos, pitch, alt_err, spd_err, vs)
+        single_obs = gym.spaces.Box(-1.0, 1.0, (8,), dtype=np.float32)
         single_act = gym.spaces.Discrete(3)
 
         self._observation_space = gym.spaces.Dict({"p0": single_obs})
@@ -59,8 +59,9 @@ class HeadingTrackingTask(BaseTask):
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def reset(self, env) -> None:
-        """Nothing to reset for a fixed-target task."""
-        pass
+        """Capture initial altitude as target to avoid aggressive PID climb transients."""
+        ps = env.pursuers[0]
+        self.target_altitude_m = float(ps.aircraft.state["alt_m"])
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
         """Map discrete heading action → FlightTarget on pursuer."""
@@ -81,7 +82,7 @@ class HeadingTrackingTask(BaseTask):
     # ── Observation ─────────────────────────────────────────────────────────
 
     def get_obs(self, env) -> Dict[str, dict]:
-        """Build heading-tracking observation for the single agent."""
+        """Build heading-tracking observation (8 dims)."""
         ps = env.pursuers[0]
         s = ps.aircraft.state
 
@@ -92,14 +93,17 @@ class HeadingTrackingTask(BaseTask):
         spd_mps = float(s["airspeed_mps"])
 
         heading_err = (self.target_heading_deg - hdg + 180.0) % 360.0 - 180.0
+        alt_err = alt_m - self.target_altitude_m
 
         obs = np.array([
-            heading_err / 180.0,          # [-1, 1]
+            heading_err / 180.0,            # [-1, 1]
             math.sin(roll_rad),
             math.cos(roll_rad),
-            pitch_rad / (math.pi / 2),   # [-1, 1]
-            (alt_m - self.target_altitude_m) / 1000.0,
+            pitch_rad / (math.pi / 2),      # [-1, 1]
+            alt_err / 500.0,                # clamp large deviations
             (spd_mps - self.target_speed_mps) / 50.0,
+            float(s.get("h_dot_fps", 0)) * 0.3048 / 50.0,  # vertical speed m/s → normalized
+            0.0,  # reserved
         ], dtype=np.float32)
 
         return {"p0": np.clip(obs, -1, 1)}
@@ -107,12 +111,22 @@ class HeadingTrackingTask(BaseTask):
     # ── Reward ──────────────────────────────────────────────────────────────
 
     def get_reward(self, env) -> Dict[str, float]:
-        """Dense reward: negative absolute heading error."""
+        """Dense reward: heading error + altitude deviation penalty."""
         ps = env.pursuers[0]
-        hdg = float(ps.aircraft.state["yaw_deg"])
+        s = ps.aircraft.state
+        hdg = float(s["yaw_deg"])
+        alt_m = float(s["alt_m"])
+        pitch_deg = float(s["pitch_deg"])
+
         heading_err = abs((self.target_heading_deg - hdg + 180.0) % 360.0 - 180.0)
-        reward = -heading_err / 180.0  # [-1, 0]
-        return {"p0": reward}
+        alt_err = abs(alt_m - self.target_altitude_m)
+
+        reward = (
+            -heading_err / 180.0           # [-1, 0] heading
+            - alt_err / 1000.0             # altitude penalty
+            - abs(pitch_deg) / 90.0 * 0.5  # pitch penalty (prevent vertical flight)
+        )
+        return {"p0": float(np.clip(reward, -5, 5))}
 
     # ── Termination ─────────────────────────────────────────────────────────
 
