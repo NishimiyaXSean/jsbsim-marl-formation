@@ -24,6 +24,13 @@ from src.utils.units import kts_to_mps
 from src.utils.geometry import compute_forward_vector, compute_los, compute_tactical_angles
 
 from .task_base import BaseTask
+from .reward_functions import (
+    ProgressReward, ATAAlignmentReward, ProximityTierReward,
+    StepPenaltyReward, PincerShapingReward, DistanceAsymmetryPenalty,
+)
+from .termination_conditions import (
+    FlightEnvelopeTermination, TimeoutTermination, CooperativeSuccessTermination,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -188,6 +195,23 @@ class FormationTask(BaseTask):
         self._ooc_counters: list = [0, 0]
         self._or_triggered: list = [False, False]
         self._last_actions: dict = {}
+
+        # ── Modular reward functions (composable, LAG-style) ────────────
+        self.reward_functions = [
+            ProgressReward(self.config),
+            ATAAlignmentReward(self.config),
+            ProximityTierReward(self.config),
+            StepPenaltyReward(self.config),
+            PincerShapingReward(self.config),
+            DistanceAsymmetryPenalty(self.config),
+        ]
+
+        # ── Modular termination conditions ──────────────────────────────
+        self.termination_conditions = [
+            FlightEnvelopeTermination(self.config),
+            TimeoutTermination(self.config),
+            CooperativeSuccessTermination(self.config),
+        ]
 
     # ── Properties ─────────────────────────────────────────────────────────
 
@@ -466,83 +490,33 @@ class FormationTask(BaseTask):
     # ── Reward ──────────────────────────────────────────────────────────────
 
     def get_reward(self, env) -> Dict[str, float]:
-        """Compute per-agent rewards for the current decision step.
+        """Compute per-agent reward by aggregating all modular reward functions.
 
-        Note: The original FormationRLlibEnv accumulates rewards inside the
-        12-step physics loop. Since BaseEnv delegates physics to itself,
-        the per-step rewards here are multiplied by DECISION_STEPS (12)
-        to produce approximately equivalent total rewards.
+        Each reward function returns Dict[str, float], we sum across them.
         """
-        dt = PHYSICS_DT
         rewards = {aid: 0.0 for aid in self._agent_ids}
+        for fn in self.reward_functions:
+            sub = fn(self, env)
+            for aid in self._agent_ids:
+                rewards[aid] += sub.get(aid, 0.0)
 
-        for i, (ps, aid) in enumerate(zip(env.pursuers, self._agent_ids)):
-            t_pos = env.targets[0].aircraft.position_ned
-            a_pos = ps.aircraft.position_ned
-            cur_dist = float(np.linalg.norm(a_pos - t_pos))
-            delta = ps.prev_dist - cur_dist
-
-            # Progress (scaled by DECISION_STEPS to match per-micro-step accumulation)
-            rewards[aid] += REWARD_PROGRESS * delta * 0.5 * DECISION_STEPS
-            if cur_dist < 500.0:
-                rewards[aid] += REWARD_PROGRESS * delta * 5.0 * DECISION_STEPS
-
-            # ATA
-            a_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
-            t_fwd = compute_forward_vector(env.targets[0].aircraft.rpy_rad)
-            _, los_dir, _ = compute_los(a_pos, t_pos)
-            geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
-            cos_ata = geo.get('cos_ata', 0.0)
-            dist_factor = np.clip(1.0 - cur_dist / MAX_DIST, 0.1, 1.0)
-            rewards[aid] += REWARD_ATA * cos_ata * dist_factor * DECISION_STEPS
-
-            # Proximity tiers (only once per tier per episode)
-            for tier_dist, bonus in PROXIMITY_TIERS:
-                if cur_dist < tier_dist and tier_dist not in ps.proximity_awarded:
-                    rewards[aid] += bonus
-                    ps.proximity_awarded.add(tier_dist)
-
-            # Step penalty
-            rewards[aid] -= STEP_PENALTY * DECISION_STEPS
-
-            ps.prev_dist = cur_dist
-
-        # ── Pincer shaping ───────────────────────────────────────────────
-        p0_pos = env.pursuers[0].aircraft.position_ned
-        p1_pos = env.pursuers[1].aircraft.position_ned
+        # Store pincer + distance for termination check (PincerShaping computes these)
         t_pos = env.targets[0].aircraft.position_ned
-        d0 = float(np.linalg.norm(p0_pos - t_pos))
-        d1 = float(np.linalg.norm(p1_pos - t_pos))
-
-        if self._coop_phase == COOP_PHASE_AND:
-            and_dist = self._and_dist
-            los0 = t_pos - p0_pos
-            los1 = t_pos - p1_pos
-            cos_pincer = np.dot(los0, los1) / max(d0 * d1, 1e-6)
-            pincer_angle = float(np.degrees(np.arccos(np.clip(cos_pincer, -1, 1))))
-            if d0 < and_dist and d1 < and_dist:
-                pincer_reward = PINCER_SHAPING_COEFF * min(pincer_angle, self._and_angle) * dt * DECISION_STEPS
-                rewards["p0"] += pincer_reward
-                rewards["p1"] += pincer_reward
-
-        # ── Distance asymmetry penalty ───────────────────────────────────
-        dist_diff = abs(d0 - d1)
-        if dist_diff > DIST_ASYMMETRY_THRESH:
-            penalty = DIST_ASYMMETRY_WEIGHT * (dist_diff - DIST_ASYMMETRY_THRESH) / DIST_ASYMMETRY_NORM * dt * DECISION_STEPS
-            rewards["p0"] -= penalty
-            rewards["p1"] -= penalty
-
-        # Stored for termination check
-        self._last_pincer = pincer_angle if self._coop_phase == COOP_PHASE_AND else 0.0
+        d0 = float(np.linalg.norm(env.pursuers[0].aircraft.position_ned - t_pos))
+        d1 = float(np.linalg.norm(env.pursuers[1].aircraft.position_ned - t_pos))
         self._last_d0 = d0
         self._last_d1 = d1
+
+        # Pincer is computed by PincerShapingReward — store if in AND phase
+        if self._coop_phase != COOP_PHASE_AND:
+            self._last_pincer = 0.0
 
         return rewards
 
     # ── Termination ─────────────────────────────────────────────────────────
 
     def get_termination(self, env) -> Tuple[Dict[str, bool], Dict[str, bool], Dict[str, Any]]:
-        """Check termination conditions.
+        """Check all modular termination conditions.
 
         Returns:
             (terminateds, truncateds, infos) — each with "__all__" key.
@@ -552,64 +526,21 @@ class FormationTask(BaseTask):
         truncateds = {aid: False for aid in self._agent_ids}
         truncateds["__all__"] = False
         infos: Dict[str, Any] = {"p0": {}, "p1": {}}
-        reason = "timeout"
-        done_all = False
 
-        # ── Flight envelope violations ───────────────────────────────────
-        for ps, aid in zip(env.pursuers, self._agent_ids):
-            alt_m = float(ps.aircraft.state["alt_m"])
-            airspeed = float(ps.aircraft.state["airspeed_mps"])
-            nz_g = float(ps.aircraft.state.get("n_z_g", 1.0))
-
-            if alt_m < 100.0:
-                reason = f"{aid}_low_altitude"
-                done_all = True
-            elif alt_m > 5000.0:
-                reason = f"{aid}_high_altitude"
-                done_all = True
-            elif airspeed < 100.0:
-                reason = f"{aid}_stall"
-                done_all = True
-            elif abs(nz_g) > 9.0:
-                reason = f"{aid}_overload"
-                done_all = True
-
-        if done_all:
-            for aid in self._agent_ids:
-                terminateds[aid] = True
-                terminateds["__all__"] = True
-                infos[aid]["termination_reason"] = reason
-            return terminateds, truncateds, infos
-        # ── Timeout ──────────────────────────────────────────────────────
-        if self._step_counter >= 1000:
-            for aid in self._agent_ids:
-                truncateds[aid] = True
-                infos[aid]["termination_reason"] = "timeout"
-            truncateds["__all__"] = True
-            return terminateds, truncateds, infos
-
-        # ── Cooperative success checks ───────────────────────────────────
-        d0 = self._last_d0 if hasattr(self, '_last_d0') else 9999.0
-        d1 = self._last_d1 if hasattr(self, '_last_d1') else 9999.0
-        pincer = self._last_pincer if hasattr(self, '_last_pincer') else 0.0
-
-        if self._coop_phase == COOP_PHASE_OR:
-            if d0 < COOP_PHASE1_OR_DIST or d1 < COOP_PHASE1_OR_DIST:
-                reason = "cooperative_success_or"
-                done_all = True
-        elif self._coop_phase == COOP_PHASE_AND:
-            if d0 < self._and_dist and d1 < self._and_dist and pincer > self._and_angle:
-                self._coop_sustain_counter += 1
-                if self._coop_sustain_counter >= self._sustain_required:
-                    reason = "cooperative_success_and"
-                    done_all = True
+        for cond in self.termination_conditions:
+            reason = cond(self, env)
+            if reason is None:
+                continue
+            if reason == "timeout":
+                for aid in self._agent_ids:
+                    truncateds[aid] = True
+                    infos[aid]["termination_reason"] = "timeout"
+                truncateds["__all__"] = True
             else:
-                self._coop_sustain_counter = 0
-
-        if done_all:
-            for aid in self._agent_ids:
-                terminateds[aid] = True
-                infos[aid]["termination_reason"] = reason
-            terminateds["__all__"] = True
+                for aid in self._agent_ids:
+                    terminateds[aid] = True
+                    infos[aid]["termination_reason"] = reason
+                terminateds["__all__"] = True
+            break  # first termination wins
 
         return terminateds, truncateds, infos
