@@ -4,8 +4,8 @@ The agent controls a single F-16 and must maintain a target heading,
 altitude, and speed. This is the simplest task for validating the
 Task-Based architecture end-to-end.
 
-Action: Discrete(3) — [left(-5°/s), hold(0°/s), right(+5°/s)]
-Observation: Box(6) — [heading_err, roll_sin, roll_cos, pitch, alt_err, speed_err]
+Action: Discrete(3) — [left(-10°/s), hold(0°/s), right(+10°/s)]
+Observation: Box(8) — [heading_err, roll_sin, roll_cos, pitch, alt_err, spd_err, vs, reserved]
 """
 
 from __future__ import annotations
@@ -59,19 +59,28 @@ class HeadingTrackingTask(BaseTask):
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def reset(self, env) -> None:
-        """Capture initial altitude as target to avoid aggressive PID climb transients."""
-        ps = env.pursuers[0]
-        self.target_altitude_m = float(ps.aircraft.state["alt_m"])
+        """Sync PID references to current aircraft state (prevents wild transients)."""
+        for i, aid in enumerate(self._agent_ids):
+            ps = env.pursuers[i]
+            s = ps.aircraft.state
+            self.target_altitude_m = float(s["alt_m"])
+            ps.ref_hdg = float(s["yaw_deg"])          # ← critical: sync PID heading reference
+            ps.ref_alt_m = self.target_altitude_m
+            ps._cmd_speed = self.target_speed_mps
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
-        """Map discrete heading action → FlightTarget on pursuer."""
-        for aid in self._agent_ids:
+        """Map discrete heading action → FlightTarget on each pursuer.
+
+        Uses index-aligned iteration: agent_ids[i] ↔ pursuers[i].
+        Each agent controls exactly its own aircraft.
+        """
+        for i, aid in enumerate(self._agent_ids):
             a = int(action_dict.get(aid, 1))
             a = np.clip(a, 0, 2)
             delta_hdg = self._delta_headings[a]
 
-        for ps in env.pursuers:
-            ps.ref_hdg = (ps.ref_hdg + delta_hdg * 0.2) % 360.0  # 0.2s decision interval
+            ps = env.pursuers[i]
+            ps.ref_hdg = (ps.ref_hdg + delta_hdg * 0.2) % 360.0
             ps.ref_alt_m = self.target_altitude_m
             ps._cmd_speed = self.target_speed_mps
 
