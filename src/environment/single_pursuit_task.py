@@ -39,7 +39,6 @@ from src.utils.geometry import compute_forward_vector, compute_los, compute_tact
 MAX_DIST = 10000.0
 MAX_HEIGHT = 5000.0
 MAX_VEL = 400.0
-MAX_LOS_RATE = 0.5
 
 
 class SinglePursuitTask(BaseTask):
@@ -214,16 +213,6 @@ class SinglePursuitTask(BaseTask):
         _, los_dir, _ = compute_los(a_pos, t_pos)
         geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
 
-        # LOS rate
-        r_h = t_pos[:2] - a_pos[:2]
-        dh = float(np.linalg.norm(r_h))
-        if dh > 1.0:
-            v_rel_h = t_vel[:2] - a_vel[:2]
-            lambda_dot = float(np.cross(r_h, v_rel_h)) / (dh * dh)
-            lambda_dot_norm = float(np.clip(lambda_dot / MAX_LOS_RATE, -1, 1))
-        else:
-            lambda_dot_norm = 0.0
-
         alpha = float(s["alpha_deg"])
         spd = float(s["airspeed_mps"])
 
@@ -237,7 +226,6 @@ class SinglePursuitTask(BaseTask):
             0.0, 0.0, 0.0,  # target ang_vel placeholder
             geo["cos_ata"], geo["cos_aa"], geo["cos_hca"],
             alpha / 30.0, spd / MAX_VEL, 0.0,  # Ps placeholder
-            lambda_dot_norm,
         ], dtype=np.float32)
 
         return {"p0": np.clip(obs, -1, 1)}
@@ -249,21 +237,18 @@ class SinglePursuitTask(BaseTask):
 
     # ── Action mask ─────────────────────────────────────────────────────────
 
-    def _build_action_mask(self, ps) -> np.ndarray:
-        """11-dim high-level safety mask."""
+    def get_action_mask(self, env, agent_id: str) -> np.ndarray:
+        """11-dim high-level safety mask (matches BaseTask interface)."""
+        idx = self._agent_ids.index(agent_id)
+        ps = env.pursuers[idx]
         mask = np.ones(self.N_MASK, dtype=np.float32)
         airspeed = float(ps.aircraft.state["airspeed_mps"])
         alt_m = float(ps.aircraft.state["alt_m"])
 
-        # Speed mask [0..2]
         if airspeed < 130.0:
             mask[0] = 0.0  # forbid decelerate
         if airspeed > MAX_VEL * 0.95:
             mask[2] = 0.0  # forbid accelerate
-
-        # Heading mask [3..7] — always allowed
-
-        # Altitude mask [8..10]
         if alt_m < 300.0:
             mask[8] = 0.0  # forbid descend
 
