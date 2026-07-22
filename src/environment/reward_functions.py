@@ -165,3 +165,74 @@ class DistanceAsymmetryPenalty(BaseRewardFunction):
         if dist_diff > self._threshold:
             penalty = self._weight * (dist_diff - self._threshold) / self._norm * _DT * _DECISION_STEPS
         return {"p0": -penalty, "p1": -penalty}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Single-pursuit reward modules (Stage 2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class GroundWarningReward(BaseRewardFunction):
+    """Linear penalty when flying below safe altitude (prevents CFIT)."""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        self._safe_alt = self.config.get("ground_safe_alt", 300.0)
+        self._weight = self.config.get("ground_warning_weight", 0.1)
+
+    def __call__(self, task, env) -> Dict[str, float]:
+        rewards = {}
+        for aid, ps in zip(task._agent_ids, env.pursuers):
+            alt_m = float(ps.aircraft.state["alt_m"])
+            if alt_m < self._safe_alt:
+                rewards[aid] = -self._weight * (self._safe_alt - alt_m) / self._safe_alt
+            else:
+                rewards[aid] = 0.0
+        return rewards
+
+
+class LowSpeedTurnPenalty(BaseRewardFunction):
+    """Penalize aggressive turns at low airspeed (stall-risk suppression)."""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        self._speed_warn = self.config.get("low_speed_warn", 150.0)
+        self._weight = self.config.get("low_speed_turn_weight", 0.5)
+
+    def __call__(self, task, env) -> Dict[str, float]:
+        rewards = {}
+        for aid, ps in zip(task._agent_ids, env.pursuers):
+            airspeed = float(ps.aircraft.state["airspeed_mps"])
+            last_actions = getattr(task, '_last_actions', {})
+            act = last_actions.get(aid, {})
+            delta_hdg = abs(act.get('delta_heading', 0.0))
+            # Penalize only harsh turns (±30°) at low speed
+            if airspeed < self._speed_warn and delta_hdg >= 30.0:
+                rewards[aid] = -self._weight * (self._speed_warn - airspeed) / self._speed_warn
+            else:
+                rewards[aid] = 0.0
+        return rewards
+
+
+class CaptureSuccessReward(BaseRewardFunction):
+    """One-shot bonus when pursuer reaches close range behind target."""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        self._bonus = self.config.get("capture_bonus", 2000.0)
+        self._dist_thresh = self.config.get("capture_dist", 300.0)
+
+    def __call__(self, task, env) -> Dict[str, float]:
+        rewards = {}
+        if env.M < 1:
+            return {aid: 0.0 for aid in task._agent_ids}
+        t_pos = env.targets[0].aircraft.position_ned
+        for aid, ps in zip(task._agent_ids, env.pursuers):
+            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
+            # Check if already awarded this episode
+            awarded = getattr(ps, '_capture_awarded', False)
+            if not awarded and cur_dist < self._dist_thresh:
+                rewards[aid] = self._bonus
+                ps._capture_awarded = True
+            else:
+                rewards[aid] = 0.0
+        return rewards

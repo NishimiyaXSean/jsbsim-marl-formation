@@ -95,3 +95,25 @@ class CooperativeSuccessTermination(BaseTerminationCondition):
             else:
                 task._coop_sustain_counter = 0
         return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Single-pursuit termination (Stage 2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CaptureSuccessTermination(BaseTerminationCondition):
+    """Episode ends when pursuer closes within capture distance of target."""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        self._dist_thresh = self.config.get("capture_dist", 300.0)
+
+    def __call__(self, task, env) -> Optional[str]:
+        if env.M < 1:
+            return None
+        t_pos = env.targets[0].aircraft.position_ned
+        for aid, ps in zip(task._agent_ids, env.pursuers):
+            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
+            if cur_dist < self._dist_thresh:
+                return "capture_success"
+        return None
