@@ -60,6 +60,7 @@ class HeadingTrackingTask(BaseTask):
 
     def reset(self, env) -> None:
         """Sync PID references to current aircraft state (prevents wild transients)."""
+        self._last_actions: Dict[str, int] = {}
         for i, aid in enumerate(self._agent_ids):
             ps = env.pursuers[i]
             s = ps.aircraft.state
@@ -83,6 +84,7 @@ class HeadingTrackingTask(BaseTask):
             ps.ref_hdg = (ps.ref_hdg + delta_hdg * 0.2) % 360.0
             ps.ref_alt_m = self.target_altitude_m
             ps._cmd_speed = self.target_speed_mps
+            self._last_actions[aid] = a  # store for action penalty in reward
 
     def step(self, env) -> None:
         """No additional task-level logic needed."""
@@ -135,6 +137,13 @@ class HeadingTrackingTask(BaseTask):
             - alt_err / 1000.0             # altitude penalty
             - abs(pitch_deg) / 90.0 * 0.5  # pitch penalty (prevent vertical flight)
         )
+
+        # Action penalty: discourage unnecessary turns → eliminates oscillation
+        # 0.05 is ~1/4 of a unit heading error, enough to matter vs -abs(err)/180
+        last_action = self._last_actions.get("p0", 1)
+        if last_action != 1:
+            reward -= 0.05
+
         return {"p0": float(np.clip(reward, -5, 5))}
 
     # ── Termination ─────────────────────────────────────────────────────────
