@@ -102,18 +102,26 @@ class CooperativeSuccessTermination(BaseTerminationCondition):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class CaptureSuccessTermination(BaseTerminationCondition):
-    """Episode ends when pursuer closes within capture distance of target."""
+    """Episode ends when pursuer closes within capture distance BEHIND target."""
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self._dist_thresh = self.config.get("capture_dist", 300.0)
+        self._ata_thresh = self.config.get("capture_ata", 30.0)
 
     def __call__(self, task, env) -> Optional[str]:
         if env.M < 1:
             return None
+        from src.utils.geometry import compute_forward_vector
         t_pos = env.targets[0].aircraft.position_ned
         for aid, ps in zip(task._agent_ids, env.pursuers):
-            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
-            if cur_dist < self._dist_thresh:
+            a_pos = ps.aircraft.position_ned
+            cur_dist = float(np.linalg.norm(a_pos - t_pos))
+            # Must also be facing the target (ATA < threshold)
+            a_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+            los_vec = t_pos - a_pos
+            cos_ata = float(np.dot(a_fwd, los_vec / (np.linalg.norm(los_vec) + 1e-6)))
+            ata_deg = float(np.degrees(np.arccos(np.clip(cos_ata, -1.0, 1.0))))
+            if cur_dist < self._dist_thresh and ata_deg < self._ata_thresh:
                 return "capture_success"
         return None

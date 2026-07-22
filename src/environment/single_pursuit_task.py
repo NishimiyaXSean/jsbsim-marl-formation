@@ -51,7 +51,7 @@ class SinglePursuitTask(BaseTask):
     # ── Hierarchical action deltas ──────────────────────────────────────
     DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
     DELTA_HEADINGS  = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
-    DELTA_ALTITUDES = [-100.0,   0.0, 100.0]      # meters
+    DELTA_ALTITUDES = [-30.0,    0.0,  30.0]       # meters (finer for altitude stability)
 
     N_SPD = len(DELTA_SPEEDS)    # 3
     N_HDG = len(DELTA_HEADINGS)  # 5
@@ -112,21 +112,49 @@ class SinglePursuitTask(BaseTask):
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def reset(self, env) -> None:
-        """Sync PID refs + set target initial trajectory."""
+        """Sync PID refs + reposition pursuer BEHIND target for valid pursuit."""
         self._last_actions = {"p0": {}}
         self._step_counter = 0
 
+        if env.M < 1:
+            return
+        ts = env.targets[0]
+        t_pos = ts.aircraft.position_ned
+        t_hdg = float(ts.aircraft.state["yaw_deg"])
+
+        # Place pursuer 2000m behind target, facing toward it
+        behind_dir = np.radians(t_hdg + 180.0)
+        offset_n = 2000.0 * np.cos(behind_dir)
+        offset_e = 2000.0 * np.sin(behind_dir)
+        rng = np.random.default_rng()
+        offset_n += rng.uniform(-300, 300)
+        offset_e += rng.uniform(-300, 300)
+
+        # Reinitialize pursuer aircraft at correct position (must use reset()
+        # to update JSBSim geodetic coords, not just Python-side position_ned)
+        t_alt_ft = int(float(ts.aircraft.state["alt_m"]) * 3.28084)
+        # Approx conversion: 1° lat ≈ 111320m, 1° lon ≈ 111320*cos(lat) m
+        t_lat = float(ts.aircraft.state["lat_deg"])
+        t_lon = float(ts.aircraft.state["lon_deg"])
+        new_lat = t_lat + offset_n / 111320.0
+        new_lon = t_lon + offset_e / (111320.0 * np.cos(np.radians(t_lat)) + 1e-6)
+
         for ps in env.pursuers:
-            s = ps.aircraft.state
-            ps.ref_hdg = float(s["yaw_deg"])
-            ps.ref_alt_m = float(s["alt_m"])
-            ps._cmd_speed = float(s["airspeed_mps"])
+            ps.aircraft.reset(
+                lat_deg=new_lat, lon_deg=new_lon,
+                alt_ft=t_alt_ft,
+                heading_deg=float(t_hdg),
+                speed_kts=400, trim=False)
+            ps.aircraft.position_ned = t_pos + np.array([offset_n, offset_e, 0.0])
+            ps.fc.reset()
+            ps.ref_hdg = float(t_hdg)
+            ps.ref_alt_m = float(ts.aircraft.state["alt_m"])
+            ps._cmd_speed = 250.0
             ps._capture_awarded = False
             ps.prev_dist = float(np.linalg.norm(
-                ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
+                ps.aircraft.position_ned - t_pos))
 
-        # Target base heading (random, used for sinusoidal evasion)
-        self._target_base_hdg = float(env.targets[0].aircraft.state["yaw_deg"])
+        self._target_base_hdg = t_hdg
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
         """Map tactical delta indices → FlightTarget for pursuer."""

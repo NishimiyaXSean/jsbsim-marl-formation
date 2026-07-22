@@ -214,12 +214,13 @@ class LowSpeedTurnPenalty(BaseRewardFunction):
 
 
 class CaptureSuccessReward(BaseRewardFunction):
-    """One-shot bonus when pursuer reaches close range behind target."""
+    """One-shot bonus when pursuer reaches close range BEHIND target (dist + ATA)."""
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
-        self._bonus = self.config.get("capture_bonus", 2000.0)
+        self._bonus = self.config.get("capture_bonus", 5000.0)
         self._dist_thresh = self.config.get("capture_dist", 300.0)
+        self._ata_thresh = self.config.get("capture_ata", 30.0)  # degrees
 
     def __call__(self, task, env) -> Dict[str, float]:
         rewards = {}
@@ -227,10 +228,18 @@ class CaptureSuccessReward(BaseRewardFunction):
             return {aid: 0.0 for aid in task._agent_ids}
         t_pos = env.targets[0].aircraft.position_ned
         for aid, ps in zip(task._agent_ids, env.pursuers):
-            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
-            # Check if already awarded this episode
+            a_pos = ps.aircraft.position_ned
+            cur_dist = float(np.linalg.norm(a_pos - t_pos))
+
+            # Compute ATA: angle between pursuer nose and LOS to target
+            a_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+            los_vec = t_pos - a_pos
+            los_norm = np.linalg.norm(los_vec) + 1e-6
+            cos_ata = float(np.dot(a_fwd, los_vec / los_norm))
+            ata_deg = float(np.degrees(np.arccos(np.clip(cos_ata, -1.0, 1.0))))
+
             awarded = getattr(ps, '_capture_awarded', False)
-            if not awarded and cur_dist < self._dist_thresh:
+            if not awarded and cur_dist < self._dist_thresh and ata_deg < self._ata_thresh:
                 rewards[aid] = self._bonus
                 ps._capture_awarded = True
             else:
