@@ -212,11 +212,16 @@ class FormationTask(BaseTask):
         self._last_asymmetric = getattr(env, '_last_asymmetric', False)
         self._last_disadvantaged = getattr(env, '_last_disadvantaged', 0)
 
-        # Post-warmup: init prev_dist for each pursuer
+        # Post-warmup: init prev_dist + sync PID references for each pursuer
         for ps in env.pursuers:
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
             ps.episode_start_dist = ps.prev_dist
+            # Sync PID refs to actual state → prevents step-0 control transients
+            s = ps.aircraft.state
+            ps.ref_hdg = float(s["yaw_deg"])
+            ps.ref_alt_m = float(s["alt_m"])
+            ps._cmd_speed = float(s["airspeed_mps"])
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
         """Map high-level tactical actions → FlightTarget for each pursuer.
@@ -458,39 +463,6 @@ class FormationTask(BaseTask):
         d = (d + np.pi) % (2 * np.pi) - np.pi
         return d / PHYSICS_DT
 
-    def _build_action_mask(self, ps) -> np.ndarray:
-        """Build action mask [8] based on flight safety constraints.
-
-        Layout: [turn_0, ..., turn_4, speed_0, speed_1, speed_2]
-        """
-        mask = np.ones(N_ACTIONS, dtype=np.float32)
-
-        airspeed = float(ps.aircraft.state["airspeed_mps"])
-        alt_m = float(ps.aircraft.state["alt_m"])
-        nz_g = float(ps.aircraft.state.get("n_z_g", 1.0))
-
-        # Below stall warning: forbid slow speed and hard turns (high AoA risk)
-        if airspeed < ANTI_STALL_SPEED_WARN:
-            mask[5] = 0.0   # forbid speed=Slow (need energy)
-            mask[0] = 0.0   # forbid HardLeft (high drag)
-            mask[4] = 0.0   # forbid HardRight (high drag)
-
-        # Ground proximity: forbid hard turns (risk of spiral into ground)
-        if alt_m < 200.0:
-            mask[0] = 0.0   # forbid HardLeft
-            mask[4] = 0.0   # forbid HardRight
-            if alt_m < 100.0 and nz_g > 2.0:
-                mask[0] = 0.0
-                mask[1] = 0.0  # forbid SoftLeft
-                mask[3] = 0.0  # forbid SoftRight
-                mask[4] = 0.0  # only allow Straight
-
-        # Overspeed: forbid Fast (structural limits)
-        if airspeed > MAX_VEL * 0.95:
-            mask[7] = 0.0   # forbid speed=Fast
-
-        return mask
-
     # ── Reward ──────────────────────────────────────────────────────────────
 
     def get_reward(self, env) -> Dict[str, float]:
@@ -520,7 +492,7 @@ class FormationTask(BaseTask):
             t_fwd = compute_forward_vector(env.targets[0].aircraft.rpy_rad)
             _, los_dir, _ = compute_los(a_pos, t_pos)
             geo = compute_tactical_angles(a_fwd, t_fwd, los_dir)
-            cos_ata = geo.get('cos_ATA', 0.0)
+            cos_ata = geo.get('cos_ata', 0.0)
             dist_factor = np.clip(1.0 - cur_dist / MAX_DIST, 0.1, 1.0)
             rewards[aid] += REWARD_ATA * cos_ata * dist_factor * DECISION_STEPS
 
@@ -561,7 +533,7 @@ class FormationTask(BaseTask):
             rewards["p1"] -= penalty
 
         # Stored for termination check
-        self._last_pincer = 0.0
+        self._last_pincer = pincer_angle if self._coop_phase == COOP_PHASE_AND else 0.0
         self._last_d0 = d0
         self._last_d1 = d1
 
