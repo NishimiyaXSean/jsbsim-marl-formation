@@ -48,25 +48,21 @@ class SinglePursuitTask(BaseTask):
     Target:    "t0" (scripted, straight-line or sinusoidal evasion)
     """
 
-    # ── Hierarchical action deltas ──────────────────────────────────────
-    DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
-    DELTA_HEADINGS  = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
-    DELTA_ALTITUDES = [-30.0,    0.0,  30.0]       # meters (finer for altitude stability)
+    # ── Simplified action: heading-only (Discrete 5), speed/alt locked ──
+    DELTA_HEADINGS  = [-15.0, -5.0, 0.0, 5.0, 15.0]  # degrees (finer for close-in tracking)
 
-    N_SPD = len(DELTA_SPEEDS)    # 3
     N_HDG = len(DELTA_HEADINGS)  # 5
-    N_ALT = len(DELTA_ALTITUDES) # 3
-    N_MASK = N_SPD + N_HDG + N_ALT  # 11
+    N_MASK = N_HDG   # 5-dim mask
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
         self._agent_ids = ["p0"]
-        self.N = 1  # pursuers
-        self.M = 1  # targets
+        self.N = 1
+        self.M = 1
 
         # ── Spaces ──────────────────────────────────────────────────────
         single_obs = gym.spaces.Box(-1.0, 1.0, (25,), dtype=np.float32)
-        single_act = gym.spaces.MultiDiscrete([self.N_SPD, self.N_HDG, self.N_ALT])
+        single_act = gym.spaces.Discrete(self.N_HDG)  # just 5 heading deltas
 
         self._observation_space = gym.spaces.Dict({"p0": single_obs})
         self._action_space = gym.spaces.Dict({"p0": single_act})
@@ -74,7 +70,7 @@ class SinglePursuitTask(BaseTask):
         # ── Target config ───────────────────────────────────────────────
         self._difficulty = float(np.clip(
             self.config.get("difficulty_level", 0.0) if self.config else 0.0, 0.0, 1.0))
-        self._target_speed_kts = 310  # target cruise speed
+
 
         # ── Reward modules ──────────────────────────────────────────────
         self.reward_functions = [
@@ -149,38 +145,34 @@ class SinglePursuitTask(BaseTask):
             ps.fc.reset()
             ps.ref_hdg = float(t_hdg)
             ps.ref_alt_m = float(ts.aircraft.state["alt_m"])
-            ps._cmd_speed = 250.0
+            ps._cmd_speed = 300.0  # faster pursuit start
             ps._capture_awarded = False
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - t_pos))
 
+        # Slow down target for easier pursuit
+        ts.aircraft.reset(
+            lat_deg=float(ts.aircraft.state["lat_deg"]),
+            lon_deg=float(ts.aircraft.state["lon_deg"]),
+            alt_ft=int(float(ts.aircraft.state["alt_m"]) * 3.28084),
+            heading_deg=float(t_hdg),
+            speed_kts=200, trim=False)
+        ts.aircraft.position_ned = t_pos
+
         self._target_base_hdg = t_hdg
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
-        """Map tactical delta indices → FlightTarget for pursuer."""
+        """Map discrete heading action → FlightTarget. Speed+alt locked."""
         for i, aid in enumerate(self._agent_ids):
-            a = action_dict.get(aid, np.array([1, 2, 1], dtype=np.int64))
-            a = np.asarray(a, dtype=np.int64)
-            spd_idx = int(np.clip(a[0], 0, self.N_SPD - 1))
-            hdg_idx = int(np.clip(a[1], 0, self.N_HDG - 1))
-            alt_idx = int(np.clip(a[2], 0, self.N_ALT - 1))
-            self._last_actions[aid] = {
-                'delta_speed': self.DELTA_SPEEDS[spd_idx],
-                'delta_heading': self.DELTA_HEADINGS[hdg_idx],
-                'delta_altitude': self.DELTA_ALTITUDES[alt_idx],
-            }
+            a = int(action_dict.get(aid, 2))
+            a = np.clip(a, 0, self.N_HDG - 1)
+            delta_hdg = self.DELTA_HEADINGS[a]
+            self._last_actions[aid] = {'delta_heading': delta_hdg}
 
             ps = env.pursuers[i]
-            s = ps.aircraft.state
-            current_hdg = float(s["yaw_deg"])
-            current_alt = float(s["alt_m"])
-            current_spd = float(s["airspeed_mps"])
-
-            ps.ref_hdg = (current_hdg + self._last_actions[aid]['delta_heading']) % 360.0
-            ps.ref_alt_m = np.clip(current_alt + self._last_actions[aid]['delta_altitude'],
-                                   100.0, 5000.0)
-            ps._cmd_speed = np.clip(current_spd + self._last_actions[aid]['delta_speed'],
-                                    100.0, 380.0)
+            ps.ref_hdg = (float(ps.aircraft.state["yaw_deg"]) + delta_hdg) % 360.0
+            ps.ref_alt_m = float(env.targets[0].aircraft.state["alt_m"])  # match target alt
+            ps._cmd_speed = 300.0  # fixed fast pursuit speed
 
     def step(self, env) -> None:
         """Update target trajectory (sinusoidal evasion based on difficulty)."""
@@ -266,21 +258,8 @@ class SinglePursuitTask(BaseTask):
     # ── Action mask ─────────────────────────────────────────────────────────
 
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
-        """11-dim high-level safety mask (matches BaseTask interface)."""
-        idx = self._agent_ids.index(agent_id)
-        ps = env.pursuers[idx]
-        mask = np.ones(self.N_MASK, dtype=np.float32)
-        airspeed = float(ps.aircraft.state["airspeed_mps"])
-        alt_m = float(ps.aircraft.state["alt_m"])
-
-        if airspeed < 130.0:
-            mask[0] = 0.0  # forbid decelerate
-        if airspeed > MAX_VEL * 0.95:
-            mask[2] = 0.0  # forbid accelerate
-        if alt_m < 300.0:
-            mask[8] = 0.0  # forbid descend
-
-        return mask
+        """5-dim heading mask — always fully open in pursuit task."""
+        return np.ones(self.N_MASK, dtype=np.float32)
 
     # ── Reward + Termination (delegated to modules) ─────────────────────────
 
