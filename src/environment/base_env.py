@@ -388,13 +388,13 @@ class BaseEnv(MultiAgentEnv):
             self._acmi_file.write(
                 f"{101+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
-                f"Name=P{i},Type=Air+FixedWing,Color=Red\n")
+                f"Name=F-16,Type=Air+FixedWing,Color=Red\n")
         for i, ts in enumerate(self.targets):
             s = ts.aircraft.state
             self._acmi_file.write(
                 f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
-                f"Name=T{i},Type=Air+FixedWing,Color=Blue\n")
+                f"Name=F-16,Type=Air+FixedWing,Color=Blue\n")
         self._acmi_time = 0.0
 
     def log_acmi_step(self):
@@ -407,13 +407,13 @@ class BaseEnv(MultiAgentEnv):
             self._acmi_file.write(
                 f"{101+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
-                f"Name=P{i},Color=Red\n")
+                f"Name=F-16,Color=Red\n")
         for i, ts in enumerate(self.targets):
             s = ts.aircraft.state
             self._acmi_file.write(
                 f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
-                f"Name=T{i},Color=Blue\n")
+                f"Name=F-16,Color=Blue\n")
         self._acmi_time += 0.2
         self._acmi_file.flush()
 
