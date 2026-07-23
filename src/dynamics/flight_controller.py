@@ -232,9 +232,30 @@ class FlightController:
             bank_factor = 10.0  # near 90° bank — max compensation
 
         elevator_base = self.alt.compute(state["alt_m"], target.altitude_m, dt)
-        # Re-center around trim and apply bank boost
-        d_elev = (elevator_base - ELEVATOR_TRIM) * bank_factor
-        elevator = np.clip(ELEVATOR_TRIM + d_elev, -1.0, 1.0)
+        d_elev = elevator_base - ELEVATOR_TRIM
+
+        # ── Bank turn compensation (feedforward) ───────────────────────
+        # During a banked turn, the vertical component of lift drops as
+        # cos(bank). We need more elevator to pull higher total G and
+        # maintain altitude. A feedforward term independent of alt error
+        # ensures compensation even when error=0 (e.g., entry into turn).
+        # Scale: at 60° bank (cos=0.5), we add ~0.15 extra elevator.
+        K_bank_ff = 0.30
+        bank_ff = K_bank_ff * (bank_factor - 1.0)  # 0 at 0° bank
+        # PID correction amplified for the reduced lift component
+        d_elev = d_elev * bank_factor + bank_ff
+
+        elevator = ELEVATOR_TRIM + d_elev
+
+        # ── Pitch rate damping (artificial C_mq) ───────────────────────
+        # JSBSim F-16: elevator > 0 → nose DOWN.
+        # When nose pitches UP (q > 0), add positive elevator to push
+        # nose back down, extracting energy from the phugoid mode.
+        q_rps = float(state.get("q_rps", 0.0))  # body-frame pitch rate (rad/s)
+        Kd_q = 0.8
+        elevator += Kd_q * q_rps  # +q → +elev → nose DOWN → damping ✅
+
+        elevator = np.clip(elevator, -1.0, 1.0)
 
         throttle = self.spd.compute(state["airspeed_mps"], target.speed_mps, dt)
         aileron, rudder = self.hdg.compute(
