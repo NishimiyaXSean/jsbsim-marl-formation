@@ -43,6 +43,7 @@ def main():
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--controller", type=str, default="pid")
+    parser.add_argument("--resume-from", type=str, default=None, help="Warm-start from checkpoint")
     args = parser.parse_args()
 
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
@@ -80,6 +81,11 @@ def main():
     )
 
     algo = config.build()
+
+    if args.resume_from:
+        print(f"Warm-starting from: {args.resume_from}")
+        algo.restore(os.path.abspath(args.resume_from))
+
     print(f"\nTraining: {run_name}  difficulty={args.difficulty}  controller={args.controller}")
 
     best_reward = -float("inf")
