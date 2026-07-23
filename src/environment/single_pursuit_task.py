@@ -118,13 +118,13 @@ class SinglePursuitTask(BaseTask):
         t_pos = ts.aircraft.position_ned
         t_hdg = float(ts.aircraft.state["yaw_deg"])
 
-        # Place pursuer 2000m behind target, facing toward it
-        behind_dir = np.radians(t_hdg + 180.0)
-        offset_n = 2000.0 * np.cos(behind_dir)
-        offset_e = 2000.0 * np.sin(behind_dir)
+        # Place pursuer behind target with varied distance and slight angle offset
         rng = np.random.default_rng()
-        offset_n += rng.uniform(-300, 300)
-        offset_e += rng.uniform(-300, 300)
+        bearing_offset = rng.uniform(160, 200)  # ±20° from directly behind (180°)
+        spawn_dir = np.radians(t_hdg + bearing_offset)
+        spawn_dist = rng.uniform(1500, 3000)   # varied distance
+        offset_n = spawn_dist * np.cos(spawn_dir)
+        offset_e = spawn_dist * np.sin(spawn_dir)
 
         # Reinitialize pursuer aircraft at correct position (must use reset()
         # to update JSBSim geodetic coords, not just Python-side position_ned)
@@ -145,7 +145,7 @@ class SinglePursuitTask(BaseTask):
             ps.fc.reset()
             ps.ref_hdg = float(t_hdg)
             ps.ref_alt_m = float(ts.aircraft.state["alt_m"])
-            ps._cmd_speed = 300.0  # faster pursuit start
+            ps._cmd_speed = 280.0  # high speed for varied spawn angles
             ps._capture_awarded = False
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - t_pos))
@@ -172,7 +172,7 @@ class SinglePursuitTask(BaseTask):
             ps = env.pursuers[i]
             ps.ref_hdg = (float(ps.aircraft.state["yaw_deg"]) + delta_hdg) % 360.0
             ps.ref_alt_m = float(env.targets[0].aircraft.state["alt_m"])  # match target alt
-            ps._cmd_speed = 300.0  # fixed fast pursuit speed
+            ps._cmd_speed = 280.0  # high speed for varied spawn angles
 
     def step(self, env) -> None:
         """Update target trajectory (sinusoidal evasion based on difficulty)."""

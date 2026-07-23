@@ -11,9 +11,13 @@ from src.environment.base_env import BaseEnv
 from src.environment.single_pursuit_task import SinglePursuitTask
 register_env('single_pursuit_v1', lambda c: BaseEnv(task=SinglePursuitTask(c), env_config=c))
 ray.init(ignore_reinit_error=True, num_cpus=1, logging_level='ERROR')
-ckpt = sys.argv[1] if len(sys.argv) > 1 else \
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                 'marl_runs/rllib_pursuit_0722_2220_s42/checkpoints/best')
+# Auto-find latest pursuit checkpoint
+import glob as _glob
+ckpt = sys.argv[1] if len(sys.argv) > 1 else None
+if ckpt is None:
+    runs = sorted(_glob.glob(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                           'marl_runs/rllib_pursuit_*/checkpoints/best')))
+    ckpt = runs[-1] if runs else 'marl_runs/rllib_pursuit_0722_2220_s42/checkpoints/best'
 algo = PPO.from_checkpoint(os.path.abspath(ckpt))
 for seed in [100, 200, 300, 500, 999]:
     env = BaseEnv(task=SinglePursuitTask({'difficulty_level': 0}), env_config={})
