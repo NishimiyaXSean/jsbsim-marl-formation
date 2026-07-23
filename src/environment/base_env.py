@@ -301,6 +301,7 @@ class BaseEnv(MultiAgentEnv):
                     heading_deg=ps.ref_hdg, altitude_m=ps.ref_alt_m,
                     speed_mps=cmd_speed)
                 surfaces = ps.controller.predict(s, target, dt)
+                ps._last_surfaces = surfaces  # cache for diagnostics
                 ps.aircraft.set_controls(
                     throttle=surfaces.throttle, elevator=surfaces.elevator,
                     aileron=surfaces.aileron, rudder=surfaces.rudder)
