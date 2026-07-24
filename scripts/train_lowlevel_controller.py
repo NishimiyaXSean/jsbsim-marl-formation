@@ -45,6 +45,7 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--target-heading", type=float, default=90.0)
     p.add_argument("--use-lstm", action="store_true", default=True)
+    p.add_argument("--resume-from", type=str, default=None, help="Resume from checkpoint")
     args = p.parse_args()
 
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
@@ -87,6 +88,11 @@ def main():
     )
 
     algo = config.build()
+
+    if args.resume_from:
+        print(f"Resuming from: {args.resume_from}")
+        algo.restore(os.path.abspath(args.resume_from))
+
     print(f"\nTraining: {run_name}  target_heading={args.target_heading}°  "
           f"lstm={args.use_lstm}  model=512x512x256\n")
 
