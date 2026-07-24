@@ -109,10 +109,16 @@ def main():
             algo.save(f"{project_root}/checkpoints/checkpoint_{i:04d}")
 
     algo.save(f"{project_root}/checkpoints/checkpoint_final")
+
+    # ── Export policy weights as standard PyTorch .pt file ──────────────
+    # RLlib algo.save() produces a directory (rllib_checkpoint.json + algorithm_state.pkl),
+    # NOT a torch.load()-compatible state dict. Must explicitly extract.
+    import torch as _torch
+    policy = algo.get_policy("default_policy")
+    export_path = f"{project_root}/checkpoints/best_model.pt"
+    _torch.save(policy.model.state_dict(), export_path)
     print(f"\nBest: {best_reward:.4f} → {project_root}/checkpoints/best")
-    print(f"To use as NeuralFlightController: "
-          f"cp {project_root}/checkpoints/best/policies/default_policy "
-          f"data/models/lowlevel_controller.pt")
+    print(f"Model export: {export_path}  (loadable with torch.load(weights_only=True))")
     ray.shutdown()
 
 
