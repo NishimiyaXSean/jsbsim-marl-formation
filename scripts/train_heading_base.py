@@ -76,6 +76,7 @@ def main():
             lr=3e-4, gamma=0.99, lambda_=0.95, clip_param=0.2,
             entropy_coeff=0.01, vf_clip_param=1000.0, grad_clip=0.5,
             train_batch_size=1024, minibatch_size=128, num_epochs=10,
+            model={"use_lstm": True, "lstm_cell_size": 128, "max_seq_len": 50},
         )
         .env_runners(num_env_runners=1, num_envs_per_env_runner=1)
         .resources(num_gpus=1)

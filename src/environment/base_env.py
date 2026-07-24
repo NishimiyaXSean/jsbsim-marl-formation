@@ -293,18 +293,27 @@ class BaseEnv(MultiAgentEnv):
 
         # ── ② 12-step physics loop ──────────────────────────────────────
         for _ in range(DECISION_STEPS):
-            # Control pursuers — delegate to controller (PID or Neural + Safety)
+            # Control pursuers — delegate to controller OR use direct surfaces
             for i, (ps, aid) in enumerate(zip(self.pursuers, self._agent_ids)):
-                s = ps.aircraft.state
-                cmd_speed = getattr(ps, '_cmd_speed', 250.0)
-                target = FlightTarget(
-                    heading_deg=ps.ref_hdg, altitude_m=ps.ref_alt_m,
-                    speed_mps=cmd_speed)
-                surfaces = ps.controller.predict(s, target, dt)
-                ps._last_surfaces = surfaces  # cache for diagnostics
+                # Direct control surface mode (RL → surfaces)
+                direct = getattr(ps, '_direct_surfaces', None)
+                if direct is not None:
+                    surfaces = direct
+                else:
+                    s = ps.aircraft.state
+                    cmd_speed = getattr(ps, '_cmd_speed', 250.0)
+                    target = FlightTarget(
+                        heading_deg=ps.ref_hdg, altitude_m=ps.ref_alt_m,
+                        speed_mps=cmd_speed)
+                    surfaces = ps.controller.predict(s, target, dt)
+
+                # Safety interceptor (always applied in both modes)
+                ps._last_surfaces = surfaces
                 ps.aircraft.set_controls(
-                    throttle=surfaces.throttle, elevator=surfaces.elevator,
-                    aileron=surfaces.aileron, rudder=surfaces.rudder)
+                    throttle=float(np.clip(surfaces.throttle, 0.0, 1.0)),
+                    elevator=float(np.clip(surfaces.elevator, -1.0, 1.0)),
+                    aileron=float(np.clip(surfaces.aileron, -1.0, 1.0)),
+                    rudder=float(np.clip(surfaces.rudder, -1.0, 1.0)))
 
             # Control targets — straight-and-level
             for ts in self.targets:
