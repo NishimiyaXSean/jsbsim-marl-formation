@@ -72,18 +72,18 @@ class HeadingTrackingTask(BaseTask):
     # ── Lifecycle ───────────────────────────────────────────────────────
 
     def reset(self, env) -> None:
-        # Randomize target heading each episode → agent learns to track ANY heading
-        rng = np.random.default_rng()
-        self.target_heading_deg = rng.uniform(0, 360)
-        self.target_altitude_m = 3000.0
-        self.target_speed_mps = 250.0
+        # Randomize targets per episode — use global seed for reproducibility
+        self.target_heading_deg = float(np.random.uniform(0, 360))
+        # Vary target altitude in 2500-3500m range → agent learns climb/descend
+        self.target_altitude_m = float(np.random.uniform(2500, 3500))
+        self.target_speed_mps = float(np.random.uniform(200, 300))
 
         for ps in env.pursuers:
             s = ps.aircraft.state
-            self.target_altitude_m = float(s["alt_m"])
+            # Sync PID refs to current state (not to target — that's the RL's job)
             ps.ref_hdg = float(s["yaw_deg"])
-            ps.ref_alt_m = self.target_altitude_m
-            ps._cmd_speed = self.target_speed_mps
+            ps.ref_alt_m = float(s["alt_m"])
+            ps._cmd_speed = float(s["airspeed_mps"])
             ps._direct_surfaces = None
 
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
