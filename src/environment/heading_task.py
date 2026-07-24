@@ -160,22 +160,31 @@ class HeadingTrackingTask(BaseTask):
 
         heading_err = abs((self.target_heading_deg - float(s["yaw_deg"]) + 180.0) % 360.0 - 180.0)
         pitch_deg   = float(s["pitch_deg"])
-        roll_deg    = float(s["roll_deg"])
+        beta_deg    = float(s.get("beta_deg", 0.0))
         airspeed    = float(s["airspeed_mps"])
         alt_m       = float(s["alt_m"])
 
-        # Gaussian-shaped rewards (LAG HeadingReward style)
-        head_r = math.exp(-(heading_err / 5.0) ** 2)    # 5° scale
-        alt_r  = math.exp(-((alt_m - self.target_altitude_m) / 15.24) ** 2)  # 50ft scale
-        roll_r = math.exp(-(abs(roll_deg) / 20.0) ** 2)   # 20° roll scale
-        spd_r  = math.exp(-((airspeed - self.target_speed_mps) / 24.0) ** 2)  # 24m/s scale
+        # ── Gaussian-shaped rewards ─────────────────────────────────────
+        # IMPORTANT: we reward sideslip (β≈0 for coordinated turn), NOT roll.
+        # Fixed-wing aircraft MUST bank to turn — penalizing |roll| would
+        # teach the agent to never turn, which is physically wrong.
+        head_r = math.exp(-(heading_err / 5.0) ** 2)
+        alt_r  = math.exp(-((alt_m - self.target_altitude_m) / 15.24) ** 2)
+        beta_r = math.exp(-(abs(beta_deg) / 5.0) ** 2)     # sideslip ≈ 0 in coordinated turn
+        spd_r  = math.exp(-((airspeed - self.target_speed_mps) / 24.0) ** 2)
 
-        # Geometric mean + bonus for perfect alignment
-        reward = (head_r * alt_r * roll_r * spd_r) ** 0.25
+        # Geometric mean
+        reward = (head_r * alt_r * beta_r * spd_r) ** 0.25
+
+        # ── Bonuses / penalties ─────────────────────────────────────────
         if heading_err < 3.0:
-            reward += 0.5  # bonus for tight tracking
+            reward += 0.5
         if abs(pitch_deg) > 45.0:
-            reward -= 1.0  # heavy penalty for extreme pitch
+            reward -= 1.0
+        # Penalize aggressive pitch oscillations (q_rps jitter)
+        q_mag = abs(float(s.get("q_rps", 0.0)))
+        if q_mag > 0.5:
+            reward -= 0.1 * (q_mag - 0.5)
 
         return {"p0": float(np.clip(reward, -5, 5))}
 
