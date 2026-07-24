@@ -168,12 +168,11 @@ class HeadingTrackingTask(BaseTask):
         # IMPORTANT: we reward sideslip (β≈0 for coordinated turn), NOT roll.
         # Fixed-wing aircraft MUST bank to turn — penalizing |roll| would
         # teach the agent to never turn, which is physically wrong.
-        head_r = math.exp(-(heading_err / 5.0) ** 2)
-        alt_r  = math.exp(-((alt_m - self.target_altitude_m) / 15.24) ** 2)
-        beta_r = math.exp(-(abs(beta_deg) / 5.0) ** 2)     # sideslip ≈ 0 in coordinated turn
-        spd_r  = math.exp(-((airspeed - self.target_speed_mps) / 24.0) ** 2)
-
-        # Geometric mean
+        # ── Wider σ for gradient coverage (±45° instead of ±10°) ──────
+        head_r = math.exp(-(heading_err / 25.0) ** 2)
+        alt_r  = math.exp(-((alt_m - self.target_altitude_m) / 200.0) ** 2)
+        beta_r = math.exp(-(abs(beta_deg) / 10.0) ** 2)
+        spd_r  = math.exp(-((airspeed - self.target_speed_mps) / 50.0) ** 2)
         reward = (head_r * alt_r * beta_r * spd_r) ** 0.25
 
         # ── Bonuses / penalties ─────────────────────────────────────────
