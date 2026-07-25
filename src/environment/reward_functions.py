@@ -56,10 +56,9 @@ class ProgressReward(BaseRewardFunction):
         for aid, ps in zip(task._agent_ids, env.pursuers):
             cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
             delta = ps.prev_dist - cur_dist
-            r = self._weight * delta * 0.5 * _DECISION_STEPS
-            if cur_dist < 500.0:
-                r += self._weight * delta * 5.0 * _DECISION_STEPS
-            rewards[aid] = r
+            # Smooth distance factor: 1× at 500m → 3× at 0m (no hard step)
+            dist_factor = 1.0 + max(0.0, (500.0 - cur_dist) / 250.0)
+            rewards[aid] = self._weight * delta * 0.5 * _DECISION_STEPS * dist_factor
             ps.prev_dist = cur_dist
         return rewards
 

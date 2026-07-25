@@ -49,7 +49,7 @@ class SinglePursuitTask(BaseTask):
     """
 
     # ── Simplified action: heading-only (Discrete 5), speed/alt locked ──
-    DELTA_HEADINGS  = [-15.0, -5.0, 0.0, 5.0, 15.0]  # degrees (finer for close-in tracking)
+    DELTA_HEADINGS  = [-20.0, -8.0, 0.0, 8.0, 20.0]  # deg: aggressive cut-in + fine trim
 
     N_HDG = len(DELTA_HEADINGS)  # 5
     N_MASK = N_HDG   # 5-dim mask
@@ -145,7 +145,7 @@ class SinglePursuitTask(BaseTask):
             ps.fc.reset()
             ps.ref_hdg = float(t_hdg)
             ps.ref_alt_m = float(ts.aircraft.state["alt_m"])
-            ps._cmd_speed = 280.0  # high speed for varied spawn angles
+            ps._cmd_speed = 220.0  # 2:1 ratio, avoids overshoot (target=200kts≈103m/s)
             ps._capture_awarded = False
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - t_pos))
@@ -172,7 +172,7 @@ class SinglePursuitTask(BaseTask):
             ps = env.pursuers[i]
             ps.ref_hdg = (float(ps.aircraft.state["yaw_deg"]) + delta_hdg) % 360.0
             ps.ref_alt_m = float(env.targets[0].aircraft.state["alt_m"])  # match target alt
-            ps._cmd_speed = 280.0  # high speed for varied spawn angles
+            ps._cmd_speed = 220.0  # 2:1 ratio, avoids overshoot (target=200kts≈103m/s)
 
     def step(self, env) -> None:
         """Update target trajectory (sinusoidal evasion based on difficulty)."""
