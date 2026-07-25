@@ -298,7 +298,7 @@ class AttentionFormationActor(nn.Module):
         feat = F.tanh(self.mlp_head[0](pooled))  # [B, 256]
 
         # ── FiLM: deep identity modulation ─────────────────────────────
-        agent_id = obs[:, -2:]                    # onehot [B, 2]
+        agent_id = obs[:, 27:29]                  # onehot [B,2] at indices 27-28
         gamma = self.film_gamma(agent_id)         # [B, 256]
         beta = self.film_beta(agent_id)           # [B, 256]
         feat = gamma * feat + beta                # modulated features

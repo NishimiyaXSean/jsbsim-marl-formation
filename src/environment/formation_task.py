@@ -196,6 +196,12 @@ class FormationTask(BaseTask):
         self._or_triggered: list = [False, False]
         self._last_actions: dict = {}
 
+        # ── Curriculum: activate AND-gate (Stage 1 incubator by default) ──
+        curric_stage = self.config.get("curriculum_stage", 1)
+        if curric_stage >= 1:
+            self._coop_phase = COOP_PHASE_AND
+            self._and_dist = self.config.get("and_gate_dist", 1600.0)
+
         # ── Modular reward functions (composable, LAG-style) ────────────
         self.reward_functions = [
             ProgressReward(self.config),
