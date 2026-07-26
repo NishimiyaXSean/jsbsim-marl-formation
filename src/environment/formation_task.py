@@ -17,6 +17,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 import gymnasium as gym
+import math
 import numpy as np
 
 from src.dynamics.flight_controller import FlightControlTargets
