@@ -193,6 +193,7 @@ class FormationTask(BaseTask):
         self._last_termination_reason: str = "none"
         self._reward_breakdown: dict = {}
         self._lost_pursuer_steps: int = 0
+        self._target_base_hdg: float = 0.0
         self._ooc_counters: list = [0, 0]
         self._or_triggered: list = [False, False]
         self._last_actions: dict = {}
@@ -277,6 +278,8 @@ class FormationTask(BaseTask):
             ps.ref_alt_m = float(s["alt_m"])
             ps._cmd_speed = float(s["airspeed_mps"])
 
+        self._target_base_hdg = float(env.targets[0].aircraft.state["yaw_deg"])
+
     def apply_actions(self, env, action_dict: Dict[str, np.ndarray]) -> None:
         """Map high-level tactical actions → FlightTarget for each pursuer.
 
@@ -322,8 +325,20 @@ class FormationTask(BaseTask):
             ps._cmd_speed = target_spd
 
     def step(self, env) -> None:
-        """Task-level per-decision-step logic (nothing to do for formation task)."""
+        """Update target trajectory: S-turn evasion + fixed altitude."""
         self._step_counter += 1
+
+        if env.M > 0:
+            ts = env.targets[0]
+            d = self._difficulty
+            t = self._step_counter * 0.2  # 5 Hz decision rate
+
+            # S-turn heading evasion (difficulty-scaled)
+            hdg_var = d * 30.0 * math.sin(t * 0.3)
+            ts.ref_hdg = (self._target_base_hdg + hdg_var) % 360.0
+
+            # Fixed altitude — prevent PID drift
+            ts.ref_alt_m = 3000.0
 
     # ── Observation ─────────────────────────────────────────────────────────
 
