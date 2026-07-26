@@ -232,22 +232,44 @@ class FormationTask(BaseTask):
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def reset(self, env) -> None:
-        """Reset cooperative state, OOC counters, and other per-episode state."""
+        """Reset cooperative state + reposition pursuers for curriculum stage."""
         self._step_counter = 0
         self._coop_sustain_counter = 0
         self._ooc_counters = [0, 0]
         self._or_triggered = [False, False]
         self._last_termination_reason = "none"
         self._lost_pursuer_steps = 0
-        self._last_asymmetric = getattr(env, '_last_asymmetric', False)
-        self._last_disadvantaged = getattr(env, '_last_disadvantaged', 0)
+
+        t_pos = env.targets[0].aircraft.position_ned
+        t_hdg = float(env.targets[0].aircraft.state["yaw_deg"])
+        t_alt_ft = int(float(env.targets[0].aircraft.state["alt_m"]) * 3.28084)
+        t_lat = float(env.targets[0].aircraft.state["lat_deg"])
+        t_lon = float(env.targets[0].aircraft.state["lon_deg"])
+        rng = np.random.default_rng()
+
+        # ── Incubator spawn (Stage 1): both pursuers inside AND envelope ──
+        if self._curriculum_stage >= 1:
+            and_dist = self._and_dist  # ~1600m
+            spawn_dist = rng.uniform(1000, 1400)  # inside AND range
+            # P0 at +60° from target heading (right flank)
+            # P1 at -60° from target heading (left flank)
+            for i, offset_deg in enumerate([60.0, -60.0]):
+                bearing = np.radians(t_hdg + offset_deg)
+                offset_n = spawn_dist * np.cos(bearing)
+                offset_e = spawn_dist * np.sin(bearing)
+                ps = env.pursuers[i]
+                ps.aircraft.reset(
+                    lat_deg=t_lat + offset_n / 111320.0,
+                    lon_deg=t_lon + offset_e / (111320.0 * np.cos(np.radians(t_lat)) + 1e-6),
+                    alt_ft=t_alt_ft, heading_deg=float(t_hdg), speed_kts=400, trim=False)
+                ps.aircraft.position_ned = t_pos + np.array([offset_n, offset_e, 0.0])
+                ps.fc.reset()
 
         # Post-warmup: init prev_dist + sync PID references for each pursuer
         for ps in env.pursuers:
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
             ps.episode_start_dist = ps.prev_dist
-            # Sync PID refs to actual state → prevents step-0 control transients
             s = ps.aircraft.state
             ps.ref_hdg = float(s["yaw_deg"])
             ps.ref_alt_m = float(s["alt_m"])
