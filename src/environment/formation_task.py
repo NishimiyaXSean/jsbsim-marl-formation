@@ -247,21 +247,21 @@ class FormationTask(BaseTask):
         t_lon = float(env.targets[0].aircraft.state["lon_deg"])
         rng = np.random.default_rng()
 
-        # ── Incubator spawn (Stage 1): both pursuers inside AND envelope ──
+        # ── Incubator spawn: pursuers BEHIND target, 2-3km, pincer stagger ──
         if self._curriculum_stage >= 1:
-            and_dist = self._and_dist  # ~1600m
-            spawn_dist = rng.uniform(1000, 1400)  # inside AND range
-            # P0 at +60° from target heading (right flank)
-            # P1 at -60° from target heading (left flank)
-            for i, offset_deg in enumerate([60.0, -60.0]):
-                bearing = np.radians(t_hdg + offset_deg)
-                offset_n = spawn_dist * np.cos(bearing)
-                offset_e = spawn_dist * np.sin(bearing)
+            spawn_dist = rng.uniform(2000, 3000)  # behind target
+            # P0 at +30° from behind (150° bearing = directly behind + 30° right)
+            # P1 at -30° from behind (210° bearing = directly behind - 30° left)
+            for i, bearing_deg in enumerate([t_hdg + 150.0, t_hdg + 210.0]):
+                bearing = np.radians(bearing_deg)
+                offset_n = spawn_dist * np.cos(bearing) + rng.uniform(-200, 200)
+                offset_e = spawn_dist * np.sin(bearing) + rng.uniform(-200, 200)
                 ps = env.pursuers[i]
+                pursuer_hdg = float(np.degrees(np.arctan2(-offset_e, -offset_n))) % 360.0
                 ps.aircraft.reset(
                     lat_deg=t_lat + offset_n / 111320.0,
                     lon_deg=t_lon + offset_e / (111320.0 * np.cos(np.radians(t_lat)) + 1e-6),
-                    alt_ft=t_alt_ft, heading_deg=float(t_hdg), speed_kts=400, trim=False)
+                    alt_ft=t_alt_ft, heading_deg=pursuer_hdg, speed_kts=400, trim=False)
                 ps.aircraft.position_ned = t_pos + np.array([offset_n, offset_e, 0.0])
                 ps.fc.reset()
 
