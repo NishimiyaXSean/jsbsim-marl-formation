@@ -27,6 +27,7 @@ from .task_base import BaseTask
 from .reward_functions import (
     ProgressReward, ATAAlignmentReward, ProximityTierReward,
     StepPenaltyReward, PincerShapingReward, DistanceAsymmetryPenalty,
+    AltitudeDeviationPenalty,
 )
 from .termination_conditions import (
     FlightEnvelopeTermination, TimeoutTermination, CooperativeSuccessTermination,
@@ -210,6 +211,7 @@ class FormationTask(BaseTask):
             StepPenaltyReward(self.config),
             PincerShapingReward(self.config),
             DistanceAsymmetryPenalty(self.config),
+            AltitudeDeviationPenalty(self.config),
         ]
 
         # ── Modular termination conditions ──────────────────────────────

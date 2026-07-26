@@ -54,12 +54,14 @@ class ProgressReward(BaseRewardFunction):
         rewards = {}
         t_pos = env.targets[0].aircraft.position_ned
         for aid, ps in zip(task._agent_ids, env.pursuers):
-            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned - t_pos))
-            delta = ps.prev_dist - cur_dist
-            # Smooth distance factor: 1× at 500m → 3× at 0m (no hard step)
-            dist_factor = 1.0 + max(0.0, (500.0 - cur_dist) / 250.0)
-            rewards[aid] = self._weight * delta * 0.5 * _DECISION_STEPS * dist_factor
-            ps.prev_dist = cur_dist
+            # 2D horizontal distance only — diving does NOT count as progress
+            cur_dist_2d = float(np.linalg.norm(
+                ps.aircraft.position_ned[:2] - t_pos[:2]))
+            prev_dist_2d = getattr(ps, 'prev_dist_2d', cur_dist_2d)
+            delta_2d = prev_dist_2d - cur_dist_2d
+            dist_factor = 1.0 + max(0.0, (500.0 - cur_dist_2d) / 250.0)
+            rewards[aid] = self._weight * delta_2d * 0.5 * _DECISION_STEPS * dist_factor
+            ps.prev_dist_2d = cur_dist_2d
         return rewards
 
 
@@ -243,4 +245,23 @@ class CaptureSuccessReward(BaseRewardFunction):
                 ps._capture_awarded = True
             else:
                 rewards[aid] = 0.0
+        return rewards
+
+
+class AltitudeDeviationPenalty(BaseRewardFunction):
+    """Penalize pursuers for extreme altitude deviation from target.
+
+    ±300m is tactical maneuvering tolerance.
+    Beyond that, linear penalty discourages diving/climbing for reward exploitation.
+    """
+
+    def __call__(self, task, env) -> Dict[str, float]:
+        rewards = {}
+        t_alt = float(env.targets[0].aircraft.state["alt_m"])
+        for aid, ps in zip(task._agent_ids, env.pursuers):
+            alt_diff = abs(float(ps.aircraft.state["alt_m"]) - t_alt)
+            penalty = 0.0
+            if alt_diff > 300.0:
+                penalty = 0.1 * (alt_diff - 300.0) / 1000.0 * _DECISION_STEPS
+            rewards[aid] = -penalty
         return rewards
