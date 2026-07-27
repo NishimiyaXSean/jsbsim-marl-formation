@@ -188,25 +188,27 @@ class MissileSimulator:
     def get_absolute_geodetic(self) -> tuple:
         """Approximate WGS84 for ACMI rendering.
 
-        Converts absolute NED (metres) to approximate (lat, lon, alt)
-        using a flat-Earth approximation from the stored launch coordinates.
-        Accurate to ~1m for ranges < 100 km.
+        Uses parent's JSBSim lat/lon as the anchor point and adds ONLY
+        the missile's relative displacement from launch.  This avoids
+        double-counting the parent's pre-launch displacement.
 
-        NOTE: In this project, position_ned[2] stores altitude (positive up),
-              NOT NED down.  So abs_ned[2] = altitude in metres.
+        NOTE: _launch_origin[2] = parent altitude at launch (from state["alt_m"])
+              _position[2] = missile's altitude CHANGE since launch
         """
-        abs_ned = self._launch_origin + self._position  # [north, east, altitude]
-        north_m, east_m, alt_m = abs_ned
+        # Missile displacement relative to launch point (metres)
+        rel_north = self._position[0]
+        rel_east = self._position[1]
 
         # WGS84 metres per degree at launch latitude
         lat_rad = np.radians(self._launch_lat)
         m_per_deg_lat = 111132.92 - 559.82 * np.cos(2 * lat_rad) + 1.175 * np.cos(4 * lat_rad)
         m_per_deg_lon = 111412.84 * np.cos(lat_rad) - 93.5 * np.cos(3 * lat_rad)
 
-        lat = self._launch_lat + north_m / m_per_deg_lat
-        lon = self._launch_lon + east_m / m_per_deg_lon
+        lat = self._launch_lat + rel_north / m_per_deg_lat
+        lon = self._launch_lon + rel_east / m_per_deg_lon
+        alt = self._launch_origin[2] + self._position[2]
 
-        return lat, lon, alt_m
+        return lat, lon, alt
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     @classmethod
@@ -416,7 +418,7 @@ class MissileSimulator:
                 return (
                     f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                     f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
-                    f"Name={self.model},Type=Misc+Missile,Color=Red"
+                    f"Name={self.model},Type=Weapon+Missile,Color=Red"
                 )
             return (
                 f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"

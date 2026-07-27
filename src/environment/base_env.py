@@ -447,12 +447,18 @@ class BaseEnv(MultiAgentEnv):
     # ── ACMI / Tacview Export ───────────────────────────────────────────
 
     def enable_acmi_logging(self, filepath: str = "render.acmi"):
-        """Initialize ACMI file with Tacview header."""
+        """Initialize ACMI file with Tacview header.
+
+        Pre-registers ALL possible missile IDs so Tacview knows about them
+        before they first appear in a frame.  Missiles are registered as
+        destroyed (position 0,0,0 with removal marker) so they only become
+        visible when first logged alive.
+        """
         self._acmi_file = open(filepath, "w", encoding="utf-8")
         self._acmi_file.write("FileType=text/acmi/tacview\n")
         self._acmi_file.write("FileVersion=2.1\n")
         self._acmi_file.write("0,ReferenceTime=2020-04-01T00:00:00Z\n")
-        # Register objects
+        # Register aircraft
         for i, ps in enumerate(self.pursuers):
             s = ps.aircraft.state
             self._acmi_file.write(
@@ -465,6 +471,16 @@ class BaseEnv(MultiAgentEnv):
                 f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
                 f"Name=F-16,Type=Air+FixedWing,Color=Blue\n")
+        # Pre-register all possible missile IDs as destroyed
+        # Agent missiles: p0_M1..p0_M4, t0_M1..t0_M4
+        for prefix in self._agent_ids + [f"t{j}" for j in range(self.M)]:
+            for num in range(1, 5):  # up to 4 missiles per aircraft
+                uid = f"{prefix}_M{num}"
+                s = self.pursuers[0].aircraft.state if self.pursuers else self.targets[0].aircraft.state
+                self._acmi_file.write(
+                    f"{uid},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|0|0|0,"
+                    f"Name=AIM-9L,Type=Weapon+Missile,Color=Red\n"
+                    f"-{uid}\n")
         self._acmi_time = 0.0
 
     def log_acmi_step(self):
