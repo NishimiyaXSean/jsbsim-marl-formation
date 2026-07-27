@@ -490,7 +490,9 @@ class SingleCombatShootTask(BaseTask):
             return
 
         target = env.targets[0]
-        uid = f"{aid}_M{self.remaining_missiles[aid]}"
+        # Match LAG's missile ID pattern: parent ID + sequential number (no underscore)
+        uid = f"M{env._missile_uid_counter:03d}"
+        env._missile_uid_counter += 1
 
         # Create and launch
         m = MissileSimulator.create(

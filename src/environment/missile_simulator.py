@@ -403,23 +403,18 @@ class MissileSimulator:
         return lon, lat, alt  # Tacview order: lon, lat, alt
 
     def log(self) -> str | None:
-        """Tacview-compatible log line for this frame.
+        """Tacview-compatible log line — follows LAG's BaseSimulator.log() format.
 
-        Color scheme:
-          - Active (alive)        → Red, first frame includes Type=Misc+Missile
-          - Terminal frame (MISS) → Grey (shows where the missile ran out)
-          - Terminal frame (HIT)  → Yellow explosion at impact point
+        LAG missile format:
+          ALIVE:  ID,T=lon|lat|alt|roll|pitch|yaw,Name=AIM-9L,Color=Red
+          HIT:    -ID + IDF,T=...Type=Misc+Explosion,Color=Yellow,Radius=Rc
+          MISS:   -ID + ID,T=...,Name=AIM-9L,Color=Grey + explosion
+
+        NOTE: No Type= field during flight — LAG works without it.
         """
         if self.is_alive:
             lon, lat, alt = self._get_tacview_position()
             roll, pitch, yaw = self._posture * 180.0 / np.pi
-            if self._first_log:
-                self._first_log = False
-                return (
-                    f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
-                    f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
-                    f"Name={self.model},Type=Weapon+Missile,Color=Red"
-                )
             return (
                 f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                 f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
@@ -433,13 +428,13 @@ class MissileSimulator:
             msg = f"-{self.uid}\n"
 
             if self._status == MissileStatus.HIT:
-                # Yellow explosion at impact point
+                # Yellow explosion at impact point (matching LAG)
                 msg += (
                     f"{self.uid}F,T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Type=Misc+Explosion,Color=Yellow,Radius={self._params.Rc}"
                 )
             else:
-                # MISS: render final position in Grey, then explosion
+                # MISS: final position in Grey + explosion
                 msg += (
                     f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Name={self.model},Color=Grey\n"
