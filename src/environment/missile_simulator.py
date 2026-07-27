@@ -1,0 +1,414 @@
+"""MissileSimulator — 3-DOF point-mass missile with proportional navigation guidance.
+
+All dynamics are integrated in a local NED frame anchored at the launch point.
+No JSBSim dependency — pure Python physics.
+
+Reference: LAG envs/JSBSim/core/simulatior.py → MissileSimulator
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  AIM-9L physical parameters
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class MissileParams:
+    """Physical constants for AIM-9L Sidewinder."""
+    g: float = 9.81           # gravitational acceleration (m/s²)
+    t_max: float = 60.0       # max flight time (s)
+    t_thrust: float = 3.0     # engine burn time (s)
+    Isp: float = 120.0        # specific impulse (s) — reduced from 240 in original
+    length: float = 2.87      # missile length (m)
+    diameter: float = 0.127   # missile diameter (m)
+    cD: float = 0.4           # drag coefficient
+    m0: float = 84.0          # initial mass (kg)
+    dm: float = 6.0           # mass flow rate (kg/s)
+    K: float = 3.0            # PN guidance constant
+    nyz_max: float = 30.0     # max lateral overload (g)
+    Rc: float = 300.0         # lethal radius (m)
+    v_min: float = 150.0      # minimum speed before self-destruct (m/s)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Status enum
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class MissileStatus:
+    INACTIVE = -1
+    LAUNCHED = 0
+    HIT = 1
+    MISS = 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MissileSimulator
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class MissileSimulator:
+    """3-DOF point-mass missile with proportional navigation guidance.
+
+    Physics are integrated in a local NED frame anchored at the launch point:
+      - _position: [north, east, down] relative to launch point (m)
+      - _velocity: [vn, ve, vd] (m/s)
+      - _posture: [roll(always 0), pitch(θ), yaw(φ)] (rad)
+
+    The launch point is the parent aircraft's NED position at the moment of
+    launch.  Target position is queried from the linked target aircraft's
+    position_ned at each step — no WGS84⇔NED conversion needed because
+    our Aircraft already track NED externally.
+    """
+
+    _params: MissileParams = MissileParams()  # class-level default, can override per instance
+
+    def __init__(
+        self,
+        uid: str,
+        color: str = "Red",
+        model: str = "AIM-9L",
+        dt: float = 1.0 / 60.0,
+        params: MissileParams | None = None,
+    ):
+        self.uid = uid
+        self.color = color
+        self.model = model
+        self.dt = dt
+        if params is not None:
+            self._params = params
+
+        self._status = MissileStatus.INACTIVE
+        self._t: float = 0.0
+        self._m: float = self._params.m0
+
+        # NED state (relative to launch origin)
+        self._position: np.ndarray = np.zeros(3)
+        self._velocity: np.ndarray = np.zeros(3)
+        self._posture: np.ndarray = np.zeros(3)  # [roll, pitch, yaw]
+
+        # Guidance state
+        self._dtheta: float = 0.0
+        self._dphi: float = 0.0
+        self._distance_pre: float = np.inf
+
+        # Launch origin (NED of parent at launch time)
+        self._launch_origin: np.ndarray = np.zeros(3)
+
+        # Links
+        self.parent_aircraft: Optional[object] = None   # _Pursuer or _Target
+        self.target_aircraft: Optional[object] = None   # _Pursuer or _Target
+
+        # Explosion render flag
+        self.render_explosion: bool = False
+
+        # Distance increment queue — self-destruct if distance increases for 5s
+        self._dist_increment: deque = deque(maxlen=int(5.0 / self.dt))
+
+        # Countdown after destruction (1s before removal)
+        self._left_t: int = int(1.0 / self.dt)
+
+    # ── Properties ───────────────────────────────────────────────────────────
+
+    @property
+    def is_alive(self) -> bool:
+        return self._status == MissileStatus.LAUNCHED
+
+    @property
+    def is_success(self) -> bool:
+        return self._status == MissileStatus.HIT
+
+    @property
+    def is_done(self) -> bool:
+        return self._status in (MissileStatus.HIT, MissileStatus.MISS)
+
+    @property
+    def is_inactive(self) -> bool:
+        return self._status == MissileStatus.INACTIVE
+
+    @property
+    def Isp(self) -> float:
+        """Specific impulse — zero after engine burnout."""
+        return self._params.Isp if self._t < self._params.t_thrust else 0.0
+
+    @property
+    def K(self) -> float:
+        """PN guidance constant — linearly decays to prevent terminal oscillation."""
+        return max(self._params.K * (self._params.t_max - self._t) / self._params.t_max, 0.0)
+
+    @property
+    def S(self) -> float:
+        """Cross-sectional area including angle-of-attack contribution (m²)."""
+        S0 = np.pi * (self._params.diameter / 2) ** 2
+        S0 += np.linalg.norm([np.sin(self._dtheta), np.sin(self._dphi)]) * \
+              self._params.diameter * self._params.length
+        return S0
+
+    @property
+    def rho(self) -> float:
+        """Air density at current altitude (kg/m³)."""
+        h = -self._position[2]  # down → altitude
+        return 1.225 * np.exp(-h / 9300.0)
+
+    @property
+    def target_distance(self) -> float:
+        if self.target_aircraft is None:
+            return np.inf
+        target_ned = self.target_aircraft.aircraft.position_ned
+        return float(np.linalg.norm(self.get_absolute_position() - target_ned))
+
+    # ── Position helpers ─────────────────────────────────────────────────────
+
+    def get_position(self) -> np.ndarray:
+        """Position relative to launch origin (NED)."""
+        return self._position.copy()
+
+    def get_absolute_position(self) -> np.ndarray:
+        """Absolute NED position (launch origin + relative)."""
+        return self._launch_origin + self._position
+
+    def get_velocity(self) -> np.ndarray:
+        return self._velocity.copy()
+
+    def get_rpy(self) -> np.ndarray:
+        return self._posture.copy()
+
+    def get_absolute_geodetic(self) -> np.ndarray:
+        """Approximate WGS84 for ACMI rendering — uses the parent's origin.
+
+        This is NOT exact geodesy.  It uses a flat-Earth approximation
+        from the launch point.  Sufficient for Tacview visualisation.
+        """
+        return self._launch_origin + self._position  # NED for ACMI
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+    @classmethod
+    def create(
+        cls,
+        parent,      # _Pursuer or _Target
+        target,      # _Pursuer or _Target
+        uid: str,
+        dt: float = 1.0 / 60.0,
+        missile_model: str = "AIM-9L",
+    ) -> "MissileSimulator":
+        """Factory: create a missile, inherit parent state, and link to target."""
+        parent_ned = parent.aircraft.position_ned
+        parent_rpy = parent.aircraft.rpy_rad
+        parent_vel = parent.aircraft.velocity_ned
+
+        missile = cls(uid=uid, color="Red", model=missile_model, dt=dt)
+        missile.launch(parent, parent_ned, parent_rpy, parent_vel)
+        missile.target(target)
+        return missile
+
+    def launch(
+        self,
+        parent,               # _Pursuer or _Target
+        parent_ned: np.ndarray,
+        parent_rpy: np.ndarray,
+        parent_vel: np.ndarray,
+    ) -> None:
+        """Activate the missile at the parent's current NED position."""
+        self.parent_aircraft = parent
+
+        # Set launch origin to parent's current absolute NED
+        self._launch_origin = parent_ned.copy()
+
+        # Missile starts at launch origin (relative position = 0)
+        self._position = np.zeros(3)
+
+        # Inherit velocity from parent
+        self._velocity = parent_vel.copy()
+
+        # Inherit posture (but zero roll — missile is symmetric)
+        self._posture = parent_rpy.copy()
+        self._posture[0] = 0.0
+
+        # Reset state
+        self._t = 0.0
+        self._m = self._params.m0
+        self._dtheta = 0.0
+        self._dphi = 0.0
+        self._distance_pre = np.inf
+        self._dist_increment.clear()
+        self._left_t = int(1.0 / self.dt)
+        self.render_explosion = False
+
+        self._status = MissileStatus.LAUNCHED
+
+    def target(self, target) -> None:
+        """Link to target aircraft."""
+        self.target_aircraft = target
+
+    def run(self) -> None:
+        """Advance the missile by one dt step (must be called at 60 Hz)."""
+        if not self.is_alive:
+            if self.is_done:
+                self._left_t -= 1
+            return
+
+        self._t += self.dt
+
+        # ── Guidance ──────────────────────────────────────────────────────
+        action, distance = self._guidance()
+
+        # ── Distance tracking ────────────────────────────────────────────
+        self._dist_increment.append(distance > self._distance_pre)
+        self._distance_pre = distance
+
+        # ── Hit / Miss detection ──────────────────────────────────────────
+        target_alive = getattr(self.target_aircraft, 'is_alive', True) if self.target_aircraft is not None else False
+        if distance < self._params.Rc and target_alive:
+            self._status = MissileStatus.HIT
+        elif (
+            self._t > self._params.t_max
+            or np.linalg.norm(self._velocity) < self._params.v_min
+            or sum(self._dist_increment) >= self._dist_increment.maxlen
+            or not target_alive
+        ):
+            self._status = MissileStatus.MISS
+        else:
+            # ── State transition ──────────────────────────────────────────
+            self._state_trans(action)
+
+    # ── Guidance law (proportional navigation) ───────────────────────────────
+
+    def _guidance(self) -> tuple:
+        """Compute PN lateral overload commands.
+
+        Returns:
+            (ny, nz): lateral overload in yaw/pitch channels, and current distance.
+        """
+        if self.target_aircraft is None:
+            return (0.0, 0.0), np.inf
+
+        x_m, y_m, z_m = self.get_absolute_position()
+        dx_m, dy_m, dz_m = self._velocity
+        v_m = np.linalg.norm([dx_m, dy_m, dz_m])
+        theta_m = np.arcsin(np.clip(dz_m / max(v_m, 1e-6), -1.0, 1.0))
+
+        target_ned = self.target_aircraft.aircraft.position_ned
+        x_t, y_t, z_t = target_ned
+
+        # Target velocity from the linked aircraft
+        target_vel = self.target_aircraft.aircraft.velocity_ned
+        dx_t, dy_t, dz_t = target_vel
+
+        Rxy = np.linalg.norm([x_m - x_t, y_m - y_t])
+        Rxyz = np.linalg.norm([x_m - x_t, y_m - y_t, z_t - z_m])
+
+        if Rxy < 1e-6 or Rxyz < 1e-6:
+            return (0.0, 0.0), Rxyz
+
+        dbeta = ((dy_t - dy_m) * (x_t - x_m) - (dx_t - dx_m) * (y_t - y_m)) / (Rxy ** 2)
+        deps = ((dz_t - dz_m) * Rxy ** 2 - (z_t - z_m) * (
+            (x_t - x_m) * (dx_t - dx_m) + (y_t - y_m) * (dy_t - dy_m))) / (Rxyz ** 2 * Rxy)
+
+        ny = self.K * v_m / self._params.g * np.cos(theta_m) * dbeta
+        nz = self.K * v_m / self._params.g * deps + np.cos(theta_m)
+
+        return np.clip([ny, nz], -self._params.nyz_max, self._params.nyz_max), Rxyz
+
+    # ── State transition ─────────────────────────────────────────────────────
+
+    def _state_trans(self, action: np.ndarray) -> None:
+        """Integrate one time step: update position, velocity, posture, mass."""
+        ny, nz = action
+        p = self._params
+        v = np.linalg.norm(self._velocity)
+        theta, phi = self._posture[1], self._posture[2]
+
+        # Forces
+        T = p.g * self.Isp * p.dm   # thrust (N)
+        D = 0.5 * p.cD * self.S * self.rho * v ** 2  # drag (N)
+
+        # Axial load factor
+        nx = (T - D) / (self._m * p.g)
+
+        # Kinematic derivatives
+        dv = p.g * (nx - np.sin(theta))
+        self._dphi = p.g / max(v, 1e-6) * (ny / max(np.cos(theta), 1e-6))
+        self._dtheta = p.g / max(v, 1e-6) * (nz - np.cos(theta))
+
+        # Integrate velocity
+        v_new = v + self.dt * dv
+        phi_new = phi + self.dt * self._dphi
+        theta_new = theta + self.dt * self._dtheta
+
+        # Update velocity vector
+        self._velocity = np.array([
+            v_new * np.cos(theta_new) * np.cos(phi_new),
+            v_new * np.cos(theta_new) * np.sin(phi_new),
+            v_new * np.sin(theta_new),
+        ])
+
+        # Update posture
+        self._posture = np.array([0.0, theta_new, phi_new])
+
+        # Update position (relative to launch origin)
+        self._position += self.dt * self._velocity
+
+        # Mass depletion (engine burn phase only)
+        if self._t < p.t_thrust:
+            self._m -= self.dt * p.dm
+
+        # Floor mass
+        self._m = max(self._m, 0.1)
+
+    # ── ACMI log ─────────────────────────────────────────────────────────────
+
+    def log(self) -> str | None:
+        """Tacview-compatible log line for this frame.
+
+        Color scheme:
+          - Active (alive)        → Red
+          - Terminal frame (MISS) → Grey (shows where the missile ran out)
+          - Terminal frame (HIT)  → Yellow explosion at impact point
+        """
+        if self.is_alive:
+            pos = self.get_absolute_position()
+            roll, pitch, yaw = self._posture * 180.0 / np.pi
+            return (
+                f"{self.uid},T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|"
+                f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
+                f"Name={self.model},Color=Red"
+            )
+
+        if self.is_done and not self.render_explosion:
+            self.render_explosion = True
+            pos = self.get_absolute_position()
+
+            msg = f"-{self.uid}\n"
+
+            if self._status == MissileStatus.HIT:
+                # Yellow explosion at impact point
+                msg += (
+                    f"{self.uid}F,T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"Type=Misc+Explosion,Color=Yellow,Radius={self._params.Rc}"
+                )
+            else:
+                # MISS: render final position in Grey, then explosion
+                msg += (
+                    f"{self.uid},T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"Name={self.model},Color=Grey\n"
+                )
+                msg += (
+                    f"{self.uid}F,T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"Type=Misc+Explosion,Color=Grey,Radius={self._params.Rc}"
+                )
+            return msg
+
+        return None
+
+    def should_remove(self) -> bool:
+        """Signal to the environment that this missile can be garbage-collected."""
+        return self.is_done and self._left_t <= 0
+
+    def close(self) -> None:
+        self.target_aircraft = None
+        self.parent_aircraft = None

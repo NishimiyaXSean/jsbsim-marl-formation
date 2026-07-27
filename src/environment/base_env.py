@@ -37,6 +37,7 @@ from src.dynamics.pid_controller import PIDFlightController
 from src.dynamics.safety_interceptor import SafetyInterceptor
 from src.utils.units import kts_to_mps
 
+from .missile_simulator import MissileSimulator
 from .task_base import BaseTask
 from .formation_task import FormationTask, DECISION_STEPS, PHYSICS_DT, CTRL_FREQ, N_SPEED
 
@@ -65,6 +66,10 @@ class _Pursuer:
     zone_death_counter: int = 0
     loiter_time: float = 0.0
     episode_start_dist: float = 0.0
+    # ── Combat state ─────────────────────────────────────────────────────
+    is_alive: bool = True
+    launch_missiles: list = field(default_factory=list)   # missiles I fired
+    under_missiles: list = field(default_factory=list)    # missiles targeting me
 
     def reset_state(self):
         self.prev_ata_deg = None
@@ -72,8 +77,17 @@ class _Pursuer:
         self.closure_rates.clear()
         self.zone_death_counter = 0
         self.loiter_time = 0.0
+        self.is_alive = True
+        self.launch_missiles.clear()
+        self.under_missiles.clear()
         if self.controller is not None:
             self.controller.reset()
+
+    def shotdown(self):
+        self.is_alive = False
+
+    def crash(self):
+        self.is_alive = False
 
 
 @dataclass
@@ -84,6 +98,16 @@ class _Target:
     autopilot: BFMAutopilot
     ref_hdg: float = 0.0
     ref_alt_m: float = 3000.0
+    # ── Combat state ─────────────────────────────────────────────────────
+    is_alive: bool = True
+    launch_missiles: list = field(default_factory=list)
+    under_missiles: list = field(default_factory=list)
+
+    def shotdown(self):
+        self.is_alive = False
+
+    def crash(self):
+        self.is_alive = False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -160,6 +184,21 @@ class BaseEnv(MultiAgentEnv):
         self.observation_space = self.task.observation_space
         self.action_space = self.task.action_space
         self._step_counter = 0
+
+        # ── Missile / temporary simulators ──────────────────────────────
+        self._tempsims: Dict[str, MissileSimulator] = {}
+        self._missile_uid_counter: int = 0
+
+    def add_temp_simulator(self, sim: MissileSimulator) -> None:
+        """Register a missile (or other temp sim) to be stepped at 60 Hz."""
+        self._tempsims[sim.uid] = sim
+
+    def _cleanup_dead_missiles(self) -> None:
+        """Remove missiles that have finished their post-destruction countdown."""
+        to_remove = [uid for uid, sim in self._tempsims.items() if sim.should_remove()]
+        for uid in to_remove:
+            self._tempsims[uid].close()
+            del self._tempsims[uid]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  RLlib MultiAgentEnv interface
@@ -270,6 +309,12 @@ class BaseEnv(MultiAgentEnv):
 
         self._step_counter = 0
 
+        # Clear missiles
+        for sim in self._tempsims.values():
+            sim.close()
+        self._tempsims.clear()
+        self._missile_uid_counter = 0
+
         # Delegate task-specific reset
         self.task.reset(self)
 
@@ -341,6 +386,13 @@ class BaseEnv(MultiAgentEnv):
                     ts.aircraft.velocity_ned[0:2] * dt
                 ts.aircraft.position_ned[2] = ts.aircraft.state["alt_m"]
 
+            # ── Run missiles (60Hz — inside the sub-step loop) ──────────
+            for sim in list(self._tempsims.values()):
+                sim.run()
+                # Apply hit effect
+                if sim.is_success and sim.target_aircraft is not None:
+                    sim.target_aircraft.shotdown()
+
             # NaN guard
             for ps in self.pursuers:
                 if any(not np.isfinite(float(ps.aircraft.state[k]))
@@ -358,6 +410,9 @@ class BaseEnv(MultiAgentEnv):
         # ── ③ Task-level logic ──────────────────────────────────────────
         self.task.step(self)
 
+        # Clean up dead missiles (post-destruction countdown expired)
+        self._cleanup_dead_missiles()
+
         # ── ④ ⑤ ⑥ Delegate to Task ──────────────────────────────────────
         obs = self.task.get_obs(self)
         task_rewards = self.task.get_reward(self)
@@ -370,7 +425,7 @@ class BaseEnv(MultiAgentEnv):
         return obs, rewards, terminateds, truncateds, infos
 
     def close(self):
-        """Clean up JSBSim instances."""
+        """Clean up JSBSim instances and missiles."""
         for ps in self.pursuers:
             try:
                 ps.aircraft.close()
@@ -381,6 +436,12 @@ class BaseEnv(MultiAgentEnv):
                 ts.aircraft.close()
             except AttributeError:
                 pass
+        for sim in self._tempsims.values():
+            try:
+                sim.close()
+            except Exception:
+                pass
+        self._tempsims.clear()
         self.close_acmi()
 
     # ── ACMI / Tacview Export ───────────────────────────────────────────
@@ -411,6 +472,7 @@ class BaseEnv(MultiAgentEnv):
         if not hasattr(self, "_acmi_file") or self._acmi_file is None:
             return
         self._acmi_file.write(f"#{self._acmi_time:.2f}\n")
+        # Aircraft
         for i, ps in enumerate(self.pursuers):
             s = ps.aircraft.state
             self._acmi_file.write(
@@ -423,6 +485,11 @@ class BaseEnv(MultiAgentEnv):
                 f"{201+i},T={s['lon_deg']:.6f}|{s['lat_deg']:.6f}|{s['alt_m']:.1f}|"
                 f"{s['roll_deg']:.1f}|{s['pitch_deg']:.1f}|{s['yaw_deg']:.1f},"
                 f"Name=F-16,Color=Blue\n")
+        # Missiles
+        for sim in self._tempsims.values():
+            log_msg = sim.log()
+            if log_msg is not None:
+                self._acmi_file.write(log_msg + "\n")
         self._acmi_time += 0.2
         self._acmi_file.flush()
 
