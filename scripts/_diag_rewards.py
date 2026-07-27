@@ -22,15 +22,16 @@ algo=PPO.from_checkpoint(os.path.abspath(ckpt))
 env=BaseEnv(task=FormationTask({'curriculum_stage':1,'difficulty_level':0.0}),env_config={})
 obs,_=env.reset(seed=seed)
 
-# Accumulate per-module rewards
+# Accumulate per-module rewards from task._reward_breakdown
 totals={f.__class__.__name__:{'p0':0,'p1':0} for f in env.task.reward_functions}
 for st in range(500):
     acts={aid:algo.compute_single_action(obs[aid],policy_id='shared_policy',explore=False) for aid in env._agent_ids}
     obs,rews,terms,truncs,info=env.step(acts)
-    for fn in env.task.reward_functions:
-        sub=fn(env.task,env)
-        totals[fn.__class__.__name__]['p0']+=sub.get('p0',0)
-        totals[fn.__class__.__name__]['p1']+=sub.get('p1',0)
+    # Read stored breakdown from task (set during get_reward)
+    bd=getattr(env.task,'_reward_breakdown',{})
+    for name,vals in bd.items():
+        totals[name]['p0']+=vals.get('p0',0)
+        totals[name]['p1']+=vals.get('p1',0)
     if terms.get('__all__') or truncs.get('__all__'): break
 
 print(f'Seed {seed}: {st+1} steps, reason={info.get("p0",{}).get("termination_reason","timeout")}')

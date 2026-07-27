@@ -538,13 +538,14 @@ class FormationTask(BaseTask):
     # ── Reward ──────────────────────────────────────────────────────────────
 
     def get_reward(self, env) -> Dict[str, float]:
-        """Compute per-agent reward by aggregating all modular reward functions.
-
-        Each reward function returns Dict[str, float], we sum across them.
-        """
+        """Compute per-agent reward by aggregating all modular reward functions."""
         rewards = {aid: 0.0 for aid in self._agent_ids}
+        # Store per-module breakdown for diagnostics
+        self._reward_breakdown = {}
         for fn in self.reward_functions:
             sub = fn(self, env)
+            name = fn.__class__.__name__
+            self._reward_breakdown[name] = {aid: sub.get(aid, 0.0) for aid in self._agent_ids}
             for aid in self._agent_ids:
                 rewards[aid] += sub.get(aid, 0.0)
 
