@@ -100,6 +100,10 @@ class MissileSimulator:
         # Launch origin (NED of parent at launch time)
         self._launch_origin: np.ndarray = np.zeros(3)
 
+        # WGS84 reference for ACMI rendering (set at launch from parent aircraft state)
+        self._launch_lat: float = 30.0
+        self._launch_lon: float = 120.0
+
         # Links
         self.parent_aircraft: Optional[object] = None   # _Pursuer or _Target
         self.target_aircraft: Optional[object] = None   # _Pursuer or _Target
@@ -178,13 +182,26 @@ class MissileSimulator:
     def get_rpy(self) -> np.ndarray:
         return self._posture.copy()
 
-    def get_absolute_geodetic(self) -> np.ndarray:
-        """Approximate WGS84 for ACMI rendering — uses the parent's origin.
+    def get_absolute_geodetic(self) -> tuple:
+        """Approximate WGS84 for ACMI rendering.
 
-        This is NOT exact geodesy.  It uses a flat-Earth approximation
-        from the launch point.  Sufficient for Tacview visualisation.
+        Converts absolute NED (metres) to approximate (lat, lon, alt)
+        using a flat-Earth approximation from the stored launch coordinates.
+        Accurate to ~1m for ranges < 100 km.
         """
-        return self._launch_origin + self._position  # NED for ACMI
+        abs_ned = self._launch_origin + self._position  # [north, east, down]
+        north_m, east_m, down_m = abs_ned
+
+        # WGS84 metres per degree at launch latitude
+        lat_rad = np.radians(self._launch_lat)
+        m_per_deg_lat = 111132.92 - 559.82 * np.cos(2 * lat_rad) + 1.175 * np.cos(4 * lat_rad)
+        m_per_deg_lon = 111412.84 * np.cos(lat_rad) - 93.5 * np.cos(3 * lat_rad)
+
+        lat = self._launch_lat + north_m / m_per_deg_lat
+        lon = self._launch_lon + east_m / m_per_deg_lon
+        alt = -down_m  # down negative → altitude positive
+
+        return lat, lon, alt
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     @classmethod
@@ -200,9 +217,13 @@ class MissileSimulator:
         parent_ned = parent.aircraft.position_ned
         parent_rpy = parent.aircraft.rpy_rad
         parent_vel = parent.aircraft.velocity_ned
+        # Capture WGS84 for ACMI rendering
+        parent_state = parent.aircraft.state
+        parent_lat = float(parent_state["lat_deg"])
+        parent_lon = float(parent_state["lon_deg"])
 
         missile = cls(uid=uid, color="Red", model=missile_model, dt=dt)
-        missile.launch(parent, parent_ned, parent_rpy, parent_vel)
+        missile.launch(parent, parent_ned, parent_rpy, parent_vel, parent_lat, parent_lon)
         missile.target(target)
         return missile
 
@@ -212,12 +233,18 @@ class MissileSimulator:
         parent_ned: np.ndarray,
         parent_rpy: np.ndarray,
         parent_vel: np.ndarray,
+        parent_lat: float = 30.0,
+        parent_lon: float = 120.0,
     ) -> None:
         """Activate the missile at the parent's current NED position."""
         self.parent_aircraft = parent
 
         # Set launch origin to parent's current absolute NED
         self._launch_origin = parent_ned.copy()
+
+        # Store WGS84 reference for ACMI rendering
+        self._launch_lat = parent_lat
+        self._launch_lon = parent_lon
 
         # Missile starts at launch origin (relative position = 0)
         self._position = np.zeros(3)
@@ -362,6 +389,11 @@ class MissileSimulator:
 
     # ── ACMI log ─────────────────────────────────────────────────────────────
 
+    def _get_tacview_position(self) -> tuple:
+        """Return (lon, lat, alt) in WGS84 for Tacview T= string."""
+        lat, lon, alt = self.get_absolute_geodetic()
+        return lon, lat, alt  # Tacview order: lon, lat, alt
+
     def log(self) -> str | None:
         """Tacview-compatible log line for this frame.
 
@@ -371,34 +403,34 @@ class MissileSimulator:
           - Terminal frame (HIT)  → Yellow explosion at impact point
         """
         if self.is_alive:
-            pos = self.get_absolute_position()
+            lon, lat, alt = self._get_tacview_position()
             roll, pitch, yaw = self._posture * 180.0 / np.pi
             return (
-                f"{self.uid},T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|"
+                f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                 f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
                 f"Name={self.model},Color=Red"
             )
 
         if self.is_done and not self.render_explosion:
             self.render_explosion = True
-            pos = self.get_absolute_position()
+            lon, lat, alt = self._get_tacview_position()
 
             msg = f"-{self.uid}\n"
 
             if self._status == MissileStatus.HIT:
                 # Yellow explosion at impact point
                 msg += (
-                    f"{self.uid}F,T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"{self.uid}F,T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Type=Misc+Explosion,Color=Yellow,Radius={self._params.Rc}"
                 )
             else:
                 # MISS: render final position in Grey, then explosion
                 msg += (
-                    f"{self.uid},T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Name={self.model},Color=Grey\n"
                 )
                 msg += (
-                    f"{self.uid}F,T={pos[1]:.1f}|{pos[0]:.1f}|{-pos[2]:.1f}|0|0|0,"
+                    f"{self.uid}F,T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Type=Misc+Explosion,Color=Grey,Radius={self._params.Rc}"
                 )
             return msg

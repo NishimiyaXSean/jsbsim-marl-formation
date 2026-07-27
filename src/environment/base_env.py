@@ -39,7 +39,7 @@ from src.utils.units import kts_to_mps
 
 from .missile_simulator import MissileSimulator
 from .task_base import BaseTask
-from .formation_task import FormationTask, DECISION_STEPS, DECISION_DT, PHYSICS_DT, CTRL_FREQ, N_SPEED
+from .formation_task import FormationTask, DECISION_STEPS, PHYSICS_DT, CTRL_FREQ, N_SPEED
 
 logger = logging.getLogger(__name__)
 
@@ -337,10 +337,7 @@ class BaseEnv(MultiAgentEnv):
         rewards = {aid: 0.0 for aid in self._agent_ids}
 
         # ── ② 12-step physics loop ──────────────────────────────────────
-        for _sub in range(DECISION_STEPS):
-            # Micro-timestamp for 60Hz missile logging
-            _sub_time = (self._step_counter + 1) * DECISION_DT + _sub * dt
-
+        for _ in range(DECISION_STEPS):
             # Control pursuers — delegate to controller OR use direct surfaces
             for i, (ps, aid) in enumerate(zip(self.pursuers, self._agent_ids)):
                 # Direct control surface mode (RL → surfaces)
@@ -395,12 +392,6 @@ class BaseEnv(MultiAgentEnv):
                 # Apply hit effect
                 if sim.is_success and sim.target_aircraft is not None:
                     sim.target_aircraft.shotdown()
-                # Log missile position at 60Hz with micro-timestamps
-                if hasattr(self, "_acmi_file") and self._acmi_file is not None:
-                    log_msg = sim.log()
-                    if log_msg is not None:
-                        self._acmi_file.write(f"#{_sub_time:.4f}\n")
-                        self._acmi_file.write(log_msg + "\n")
 
             # NaN guard
             for ps in self.pursuers:
