@@ -425,7 +425,7 @@ class MissileSimulator:
                 return (
                     f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                     f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
-                    f"Name={self.model},Type=Air+FixedWing,Color=Red,"
+                    f"Name={self.model},Color=Red,"
                     f"Parent={parent_id}"
                 )
             return (

@@ -127,40 +127,36 @@ def main():
     env = BaseEnv(task=SingleCombatShootTask({'difficulty_level': difficulty}))
     obs, _ = env.reset(seed=seed)
 
-    # Enable ACMI logging
-    os.makedirs(os.path.dirname(acmi_out) or '.', exist_ok=True)
-    env.enable_acmi_logging(acmi_out)
-    env.log_acmi_step()
-
     pursuer = RuleBasedPursuer()
 
     p0 = env.pursuers[0]
     t0 = env.targets[0]
     max_steps = 500
 
-    # ── Force tail-chase: pursuer behind target, both heading same direction ──
+    # ── Force tail-chase: pursuer 3km behind target, both heading north ──
+    # Key: set JSBSim lat/lon consistent with desired position_ned so ACMI renders correctly
     _force_tail_chase = True
     if _force_tail_chase:
         from src.dynamics.flight_controller import FlightControlTargets
-        from src.utils.units import kts_to_mps
         from src.environment.formation_task import PHYSICS_DT
-        t_hdg, t_spd, t_alt = 45.0, 200.0, 3000.0
-        p_spd, chase_dist = 280.0, 3000.0  # pursuer faster, starts 3km behind
-        # Target at origin
-        t0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
+        t_hdg, t_spd, t_alt = 0.0, 180.0, 3000.0  # target flies NORTH (hdg=0)
+        p_spd, chase_dist = 260.0, 3000.0  # pursuer faster, starts 3km behind
+        # Target: at (120.0, 30.02) — ~2.2km north of reference
+        t_lat, t_lon = 30.02, 120.0
+        t0.aircraft.reset(lat_deg=t_lat, lon_deg=t_lon, alt_ft=int(t_alt*3.28084),
                           heading_deg=t_hdg, speed_kts=int(t_spd/0.5144), trim=False)
-        t0.aircraft.position_ned = np.array([0.0, 0.0, t_alt])
+        t0.aircraft.position_ned = np.array([2224.0, 0.0, t_alt])  # ~2.2km north
         t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
-        # Pursuer behind target
-        p_north = -chase_dist * np.cos(np.radians(t_hdg))
-        p_east  = -chase_dist * np.sin(np.radians(t_hdg))
-        p0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
+        # Pursuer: 3km SOUTH of target (behind, heading north → target is in front)
+        p_lat, p_lon = 29.993, 120.0  # ~770m south of 30.0
+        p_ned_north = t0.aircraft.position_ned[0] - chase_dist
+        p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt*3.28084),
                           heading_deg=t_hdg, speed_kts=int(p_spd/0.5144), trim=False)
-        p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
+        p0.aircraft.position_ned = np.array([p_ned_north, 0.0, t_alt])
         p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
         p0._cmd_speed = p_spd
-        # Warmup: let JSBSim settle
-        for _ in range(int(3.0 * 60)):
+        # Short warmup — let JSBSim stablise at these positions
+        for _ in range(int(1.0 * 60)):
             for ac, hdg, alt, spd in [(p0, t_hdg, t_alt, p_spd), (t0, t_hdg, t_alt, t_spd)]:
                 s = ac.aircraft.state
                 tgt = FlightControlTargets(heading_deg=hdg, altitude_m=alt, speed_mps=spd)
@@ -178,10 +174,12 @@ def main():
     print(f"  T0: pos=({t0.aircraft.position_ned[0]:.0f}, {t0.aircraft.position_ned[1]:.0f}) "
           f"hdg={t0.ref_hdg:.0f}° alt={t0.aircraft.state['alt_m']:.0f}m")
     dist_init = float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
-    print(f"  Distance: {dist_init:.0f}m  (P0 behind T0, tail chase)")
+    print(f"  Distance: {dist_init:.0f}m  (P0 behind T0, tail chase north)")
     print(f"  Missiles: {env.task.remaining_missiles}")
 
-    # Re-log initial frame after warmup repositioning
+    # Enable ACMI logging AFTER repositioning (so header shows correct positions)
+    os.makedirs(os.path.dirname(acmi_out) or '.', exist_ok=True)
+    env.enable_acmi_logging(acmi_out)
     env.log_acmi_step()
 
     total_rew = 0.0
