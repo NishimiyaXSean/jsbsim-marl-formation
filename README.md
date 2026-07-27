@@ -609,202 +609,136 @@ Phase 12 (Jul 17):   V11 gate lowering + entropy lesson → V12 pending (30% gat
 
 ##   Task-Based Architecture (feature/refactor-task-based)
 
-> **Status:** Phase 1-3 complete, HeadingTask verified, FormationTask ready for training.
+> **Status:** All 4 stages complete — Stage 4 eval +39k mean, +121k max.
 >
-> Inspired by the LAG (Light Aircraft Game) project's clean separation of concerns.
+> Full architectural refactoring inspired by LAG (Light Aircraft Game).
 > All core refactoring lives on the `feature/refactor-task-based` branch.
+
+---
+
+### 🏗️ LAG-Inspired Design Philosophy
+
+| Pattern | From LAG | Our Implementation |
+|---------|----------|-------------------|
+| **Task-Based separation** | BaseEnv + BaseTask delegation | `task_base.py` ABC, physics-only `base_env.py` |
+| **Composable rewards** | `reward_functions/` directory | `reward_functions.py` (9 modules) |
+| **Composable termination** | `termination_conditions/` | `termination_conditions.py` (4 modules) |
+| **Hierarchical control** | RL → FlightTarget → controller | MultiDiscrete([3,5,3]) → PID |
+| **Pluggable controller** | PID/Neural switching | `controller_type: "pid"/"neural"` |
+
+**Co-innovations retained from jsbsim-marl-formation:**
+- Self-Attention (4 heads) + FiLM identity modulation
+- CTDE with shared-policy MAPPO
+- Token-based 39-dim observation
+- RLlib distributed training
+
+---
+
+### 🎯 4-Stage Validation Summary
+
+| Stage | Task | Architecture | Key Metric | Status |
+|-------|------|-------------|-----------|--------|
+| 1 | HeadingTask | PID+Discrete(3) | MAE 17° | ✅ |
+| 2 | SinglePursuit | Pitch-damped PID | min 276m | ✅ |
+| 3 | Evasive Pursuit | warm-start diff=0.3 | +21.5k best | ✅ |
+| 4 | FormationTask | S-Attn+FiLM+Incubator | eval +39k mean | ✅ |
+
+#### Stage 1 — HeadingTask
+- Discrete(3) → PID heading deltas, 8-dim obs, action penalty -0.05
+- 120 iter, best -456, altitude ±6.6m
+
+#### Stage 2 — SinglePursuitTask
+- Discrete(5) heading deltas, PID speed/alt lock, 25-dim obs
+- Pitch rate damping `elevator += Kd_q * q_rps` fixes phugoid oscillation
+- Min distance 276m, 500-step survival
+
+#### Stage 3 — Evasive Pursuit
+- Warm-started from Stage 2 best, difficulty=0.3 sinusoidal evasion
+- Maintains 683m min distance (only 8% worse than diff=0)
+
+#### Stage 4 — FormationTask (2v1 Cooperative)
+- MultiDiscrete([3,5,3]), 39-dim tokens, Self-Attention+FiLM, shared MAPPO
+- Incubator spawn: 2-3km behind target, pincer stagger ±30°
+- 7 reward modules, target fixed at 3000m with S-turn evasion
+
+**Stage 4 Bug Fix Log:**
+| Bug | Symptom | Fix |
+|-----|---------|-----|
+| FiLM `obs[:,-2:]` | Wrong identity indices | `obs[:,27:29]` |
+| `_coop_phase`=OR | AND-gate never active | `curriculum_stage` config |
+| Incubator too close | 6-step fake success | 2-3km behind target |
+| ProgressReward 3D | Diving = reward exploit | 2D horizontal only |
+| `prev_dist_2d`=None | P1 zero reward → runaway | Reset init |
+| Pincer 26× too large | 2520 vs 96 pts/step | `pincer_ratio` norm |
+| Target altitude drift | PID ±500m over 100s | `ts.ref_alt_m=3000` |
+
+**Stage 4 Results (200 iter):**
+- Iter 0: +5,944 (immediately positive!)
+- Eval mean: +39,311 (vs -84k before fixes)
+- Eval max: +121,516
+- 500-step survival achieved
+
+---
 
 ### Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    RLlib MAPPO Training                       │
-│  train_formation_base.py / train_heading_base.py              │
-│  Ray distributed rollout workers                             │
-├──────────────────────────────────────────────────────────────┤
-│              BaseEnv (MultiAgentEnv)                           │
-│  ─────────────────────────────────────────────────────────── │
-│  Pure physics container — JSBSim lifecycle, 12-step loop      │
-│  Delegates ALL task logic to BaseTask                         │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              BaseTask (ABC)                              │ │
-│  │  ─────────────────────────────────────────────────────── │ │
-│  │  FormationTask      HeadingTrackingTask    (extensible)   │ │
-│  │  ├─ reward_functions (6 composable modules)              │ │
-│  │  ├─ termination_conditions (3 composable modules)        │ │
-│  │  ├─ get_obs() → 39-dim Self/Target/Mate tokens           │ │
-│  │  ├─ apply_actions() → FlightTarget                       │ │
-│  │  └─ _build_high_level_action_mask() → 11-dim mask        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-├──────────────────────────────────────────────────────────────┤
-│            Pluggable Flight Controller Interface              │
-│  ┌─────────────────┐  ┌──────────────────┐                   │
-│  │ PIDFlightController│  │ NeuralFlightCtrl  │ + SafetyInter  │
-│  │ (hand-tuned PID) │  │ (LAG MLP+GRU)    │   ceptor         │
-│  └─────────────────┘  └──────────────────┘                   │
-├──────────────────────────────────────────────────────────────┤
-│  JSBSim 6-DOF F-16 FDM  |  Self-Attention + FiLM Model       │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│              RLlib PPO / MAPPO Training                    │
+│  train_*_base.py, Ray distributed workers                 │
+├──────────────────────────────────────────────────────────┤
+│  BaseEnv (MultiAgentEnv) — Physics-only container          │
+│  ┌────────────────────────────────────────────────────┐   │
+│  │ BaseTask (ABC) — Task logic delegation              │   │
+│  │ FormationTask | HeadingTask | SinglePursuitTask     │   │
+│  │ ├ reward_functions (7-9 modules)                   │   │
+│  │ ├ termination_conditions (3-4 modules)             │   │
+│  │ ├ get_obs() → task-specific observation            │   │
+│  │ └ apply_actions() → FlightTarget / ControlSurfaces │   │
+│  └────────────────────────────────────────────────────┘   │
+├──────────────────────────────────────────────────────────┤
+│  Controller: PIDFlightController | NeuralFlightController  │
+│  + SafetyInterceptor (envelope protection)                 │
+├──────────────────────────────────────────────────────────┤
+│  JSBSim 6-DOF F-16 FDM | S-Attention + FiLM (Stage 4)     │
+└──────────────────────────────────────────────────────────┘
 ```
-
-### Training Pipeline Flow
-
-```
-┌─ train_heading_base.py ──────────────────────────────────────────┐
-│                                                                   │
-│  1. Register env:  tune.register_env("heading_tracking_v1", ...) │
-│  2. Build Task:    HeadingTrackingTask(config)                    │
-│  3. Build Env:     BaseEnv(task=task)                             │
-│  4. Build Algo:    PPOConfig → PPO.build()                       │
-│                                                                   │
-│  ┌─ Training Loop ───────────────────────────────────────────┐   │
-│  │                                                            │   │
-│  │  algo.train()                                              │   │
-│  │    └→ RolloutWorker                                       │   │
-│  │         └→ env.reset()                                     │   │
-│  │              ├→ BaseEnv.reset()  # JSBSim init + warmup    │   │
-│  │              ├→ task.reset(env)  # Sync PID refs           │   │
-│  │              └→ task.get_obs(env) → return obs             │   │
-│  │         └→ env.step(action_dict)                           │   │
-│  │              ├→ task.apply_actions(env, actions)            │   │
-│  │              │    └→ PID/Neural Ctrl → ControlSurfaces     │   │
-│  │              ├→ 12× physics loop (aircraft.run())          │   │
-│  │              ├→ task.step(env)                              │   │
-│  │              ├→ task.get_obs(env)  → 39d/8d/21d dict      │   │
-│  │              ├→ task.get_reward(env) → Σ reward_modules    │   │
-│  │              └→ task.get_termination(env) → done flags     │   │
-│  │                                                            │   │
-│  │  algo.save(ckpt_dir)  # Auto-save best checkpoint          │   │
-│  └────────────────────────────────────────────────────────────┘   │
-│                                                                   │
-│  ┌─ Render ───────────────────────────────────────────────────┐   │
-│  │                                                            │   │
-│  │  render_heading.py                                         │   │
-│  │    ├→ PPO.from_checkpoint(best_ckpt)                       │   │
-│  │    ├→ env.enable_acmi_logging("output.acmi")               │   │
-│  │    └→ for step in range(max_steps):                        │   │
-│  │         ├→ algo.compute_single_action(obs)                 │   │
-│  │         ├→ env.step(actions)                                │   │
-│  │         └→ env.log_acmi_step()  # Tacview ACMI export      │   │
-│  └────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-### Project Structure
-
-```
-src/
-├── dynamics/                     # Flight physics & control layer
-│   ├── aircraft.py              #   JSBSim F-16 FDM wrapper
-│   ├── flight_controller.py     #   PID heading/alt/speed stabilizer
-│   ├── flight_envelope.py       #   V-n diagram, stall/overspeed limits
-│   ├── autopilot.py             #   BFMAutopilot trim + gain scheduling
-│   ├── controller_base.py       # ★ BaseController ABC + FlightTarget
-│   ├── pid_controller.py        # ★ PIDFlightController (wraps PID)
-│   ├── neural_controller.py     # ★ NeuralFlightController (LAG MLP+GRU)
-│   ├── safety_interceptor.py    # ★ SafetyInterceptor (hard mask)
-│   └── bfm_actions.py           #   Basic Fighter Maneuvers primitives
-│
-├── environment/                  # Task-Based RL environment layer
-│   ├── task_base.py             # ★ BaseTask ABC (obs/reward/term/action)
-│   ├── base_env.py              # ★ BaseEnv (MultiAgentEnv, physics only)
-│   ├── formation_task.py        # ★ FormationTask (2v1 cooperative pursuit)
-│   ├── heading_task.py          # ★ HeadingTrackingTask (single-agent, 8-dim)
-│   ├── reward_functions.py      # ★ 6 composable reward modules
-│   ├── termination_conditions.py# ★ 3 composable termination modules
-│   └── formation_rllib_env.py   #   [DEPRECATED] legacy monolithic env
-│
-├── models/                       # Neural network architectures
-│   ├── attention_actor.py       #   Self-Attention + FiLM + Token projection
-│   └── formation_rllib_model.py #   RLlib TorchModelV2 wrapper (dynamic heads)
-│
-├── logging/
-│   └── tacview_exporter.py      #   Tacview ACMI file format exporter
-│
-└── utils/
-    ├── geometry.py              #   Tactical angles (ATA/AA/HCA/LOS)
-    ├── kinematics.py            #   NED→WGS-84 coordinate transforms
-    ├── pn_guidance.py           #   Proportional navigation guidance
-    └── units.py                 #   Imperial ↔ SI conversions
-
-scripts/
-├── train_formation_rllib.py     #   [LEGACY] original training entry point
-├── train_formation_base.py      # ★ New Task-Based training (FormationTask)
-├── train_heading_base.py        # ★ New Task-Based training (HeadingTask)
-├── render_heading.py            # ★ Load ckpt → single-episode ACMI export
-├── collect_viz_data.py          #   Trajectory + attention weight collection
-├── viz_paper_figures.py         #   Fig 1-2 (3D trajectory + attention)
-├── viz_fig3_role_attention.py   #   Fig 3 (role-grouped attention matrix)
-├── benchmark_sb3_baseline.py    #   SB3 centralized baseline eval
-├── export_v10_tacview.py        #   V10 incubator Tacview export
-└── ...                          #   (diagnostic + analysis scripts)
-
-data/models/
-└── baseline_model.pt            #   LAG pretrained MLP+GRU (558KB)
-
-tests/
-├── test_task_based_refactor.py  #   Smoke test + alignment test (new env)
-└── test_neural_control_tracking.py # Neural controller step-response test
-```
-
-### Key Files Reference
-
-| File | Lines | Purpose |
-|------|:-----:|---------|
-| `base_env.py` | ~400 | MultiAgentEnv — JSBSim instances, 12-step physics, ACMI export |
-| `task_base.py` | ~140 | ABC — obs/action space, apply_actions, get_obs, get_reward, get_termination |
-| `formation_task.py` | ~450 | 2v1 cooperative pursuit: 39-dim tokens, 11-dim mask, MultiDiscrete([3,5,3]) |
-| `heading_task.py` | ~170 | Single-agent heading hold: 8-dim obs, Discrete(3), action penalty |
-| `reward_functions.py` | ~170 | 6 composable modules (Progress, ATA, Proximity, Step, Pincer, Asymmetry) |
-| `termination_conditions.py` | ~100 | 3 composable modules (Envelope, Timeout, CooperativeSuccess) |
-| `controller_base.py` | ~70 | Controller ABC + ControlSurfaces + FlightTarget dataclasses |
-| `pid_controller.py` | ~55 | Wraps FlightController + BFMAutopilot |
-| `neural_controller.py` | ~230 | Loads LAG BaselineActor, 12-dim HeadingTask input adaptation |
-| `safety_interceptor.py` | ~100 | Hard mask (stall/GPWS/overspeed), soft-blend interface reserved |
-| `formation_rllib_model.py` | ~180 | RLlib TorchModelV2 — dynamic MultiDiscrete heads, Self-Attention + FiLM |
-| `attention_actor.py` | ~320 | Token-based Self-Attention (4 heads), FiLM modulation, learned pooling |
-| `train_formation_base.py` | ~180 | RLlib PPO training entry — FormationTask, custom model registration |
-| `train_heading_base.py` | ~110 | RLlib PPO training entry — HeadingTask, default MLP, best-ckpt saving |
-| `render_heading.py` | ~100 | Load checkpoint → single-episode ACMI Tacview export |
 
 ### Key Design Decisions
 
-1. **Task-Based separation (Priority 1)** : BaseEnv manages only physics; all
-   scenario logic lives in BaseTask subclasses. Enables adding new air combat
-   scenarios without touching the physics engine.
+1. **Task-Based separation**: BaseEnv=physics only, BaseTask=all scenario logic
+2. **Pluggable controllers**: PID (default, hand-tuned) / Neural (LAG, needs retrain)
+3. **Hierarchical action space**: Small RL actions (3-45) → PID execution
+4. **Modular rewards/termination**: 9 reward + 4 termination pluggable classes
+5. **Self-Attention + FiLM preserved**: Token 39-dim obs, 4-head attention
+6. **2D horizontal progress**: Diving ≠ closing distance (anti-reward-hack)
 
-2. **Pluggable controllers (Priority 2)** : `controller_type: "pid"` or `"neural"`
-   via YAML config. PID is the safety net; Neural (LAG MLP+GRU) is the high-g
-   maneuvering option. Both wrapped in SafetyInterceptor.
+### Project Structure (★ = new in refactor)
 
-3. **Hierarchical action space (Priority 3)** : RL outputs tactical deltas
-   [speed±20, heading±30/±15/0, altitude±100] → FlightTarget → controller →
-   control surfaces. Replaces the old low-level MultiDiscrete([5,3]) primitives.
+```
+src/dynamics/          — Flight physics & control
+  ★ controller_base.py, pid_controller.py, neural_controller.py, safety_interceptor.py
+  flight_controller.py (pitch-damped), aircraft.py, autopilot.py
 
-4. **Modular rewards & termination** (LAG-inspired): Each reward component and
-   termination condition is a self-contained class. Configurable via YAML,
-   individually testable, trivially extensible.
+src/environment/       — Task-Based RL environment
+  ★ task_base.py, base_env.py, formation_task.py, heading_task.py
+  ★ single_pursuit_task.py, reward_functions.py, termination_conditions.py
 
-5. **Self-Attention + FiLM retained**: The original project's core ML innovation —
-   Token-based observation segmentation, 4-head Self-Attention, and FiLM deep
-   identity modulation — is fully preserved in the new architecture.
+src/models/            — Neural architectures
+  attention_actor.py (S-Attn+FiLM), formation_rllib_model.py (RLlib wrapper)
 
-### HeadingTask Verification Results
+scripts/               — Training & evaluation
+  ★ train_formation_base.py, train_heading_base.py
+  ★ train_lowlevel_controller.py, train_single_pursuit_base.py
+  ★ render_heading.py, render_single_pursuit.py, render_formation.py
+  ★ _diag_rewards.py, _eval_lowlevel.py
 
-| Metric | Value |
-|--------|-------|
-| Training iterations | 120 |
-| Best episode reward | -456 |
-| Episode length (converged) | ~380 steps |
-| Heading MAE (last 50 steps) | 17.4° |
-| Altitude MAE | 6.6m |
-| Final heading (target 90°) | 100.6° |
-
-The HeadingTask served as the architecture validation vehicle — all layers
-(BaseEnv → BaseTask → Controller → RLlib → ACMI export) verified end-to-end.
+data/models/           — Pretrained weights
+  baseline_model.pt (LAG), ★ lowlevel_controller.pt (ours)
+```
 
 ---
 
-##   License
+##   License##   License
 
 MIT — see [LICENSE](LICENSE) for details.
