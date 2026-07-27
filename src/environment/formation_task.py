@@ -269,10 +269,12 @@ class FormationTask(BaseTask):
                 ps.aircraft.position_ned = t_pos + np.array([offset_n, offset_e, 0.0])
                 ps.fc.reset()
 
-        # Post-warmup: init prev_dist + sync PID references for each pursuer
+        # Post-warmup: init prev_dist (2D) + sync PID references for each pursuer
+        t_pos = env.targets[0].aircraft.position_ned
         for ps in env.pursuers:
-            ps.prev_dist = float(np.linalg.norm(
-                ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
+            a_pos = ps.aircraft.position_ned
+            ps.prev_dist = float(np.linalg.norm(a_pos - t_pos))
+            ps.prev_dist_2d = float(np.linalg.norm(a_pos[:2] - t_pos[:2]))
             ps.episode_start_dist = ps.prev_dist
             s = ps.aircraft.state
             ps.ref_hdg = float(s["yaw_deg"])
