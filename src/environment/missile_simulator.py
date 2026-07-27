@@ -108,8 +108,9 @@ class MissileSimulator:
         self.parent_aircraft: Optional[object] = None   # _Pursuer or _Target
         self.target_aircraft: Optional[object] = None   # _Pursuer or _Target
 
-        # Explosion render flag
+        # ACMI render tracking
         self.render_explosion: bool = False
+        self._first_log: bool = True   # first log needs Type= declaration
 
         # Distance increment queue — self-destruct if distance increases for 5s
         self._dist_increment: deque = deque(maxlen=int(5.0 / self.dt))
@@ -156,7 +157,9 @@ class MissileSimulator:
     @property
     def rho(self) -> float:
         """Air density at current altitude (kg/m³)."""
-        h = -self._position[2]  # down → altitude
+        # _launch_origin[2] is altitude (our project stores altitude in position_ned[2])
+        # _position[2] is missile's altitude deviation from launch
+        h = self._launch_origin[2] + self._position[2]
         return 1.225 * np.exp(-h / 9300.0)
 
     @property
@@ -188,9 +191,12 @@ class MissileSimulator:
         Converts absolute NED (metres) to approximate (lat, lon, alt)
         using a flat-Earth approximation from the stored launch coordinates.
         Accurate to ~1m for ranges < 100 km.
+
+        NOTE: In this project, position_ned[2] stores altitude (positive up),
+              NOT NED down.  So abs_ned[2] = altitude in metres.
         """
-        abs_ned = self._launch_origin + self._position  # [north, east, down]
-        north_m, east_m, down_m = abs_ned
+        abs_ned = self._launch_origin + self._position  # [north, east, altitude]
+        north_m, east_m, alt_m = abs_ned
 
         # WGS84 metres per degree at launch latitude
         lat_rad = np.radians(self._launch_lat)
@@ -199,9 +205,8 @@ class MissileSimulator:
 
         lat = self._launch_lat + north_m / m_per_deg_lat
         lon = self._launch_lon + east_m / m_per_deg_lon
-        alt = -down_m  # down negative → altitude positive
 
-        return lat, lon, alt
+        return lat, lon, alt_m
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
     @classmethod
@@ -265,6 +270,7 @@ class MissileSimulator:
         self._dist_increment.clear()
         self._left_t = int(1.0 / self.dt)
         self.render_explosion = False
+        self._first_log = True
 
         self._status = MissileStatus.LAUNCHED
 
@@ -398,13 +404,20 @@ class MissileSimulator:
         """Tacview-compatible log line for this frame.
 
         Color scheme:
-          - Active (alive)        → Red
+          - Active (alive)        → Red, first frame includes Type=Misc+Missile
           - Terminal frame (MISS) → Grey (shows where the missile ran out)
           - Terminal frame (HIT)  → Yellow explosion at impact point
         """
         if self.is_alive:
             lon, lat, alt = self._get_tacview_position()
             roll, pitch, yaw = self._posture * 180.0 / np.pi
+            if self._first_log:
+                self._first_log = False
+                return (
+                    f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
+                    f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
+                    f"Name={self.model},Type=Misc+Missile,Color=Red"
+                )
             return (
                 f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                 f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
