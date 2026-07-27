@@ -137,7 +137,9 @@ class PincerShapingReward(BaseRewardFunction):
         if d0 < and_dist and d1 < and_dist:
             cos_pincer = np.dot(los0, los1) / max(d0 * d1, 1e-6)
             pincer_angle = float(np.degrees(np.arccos(np.clip(cos_pincer, -1, 1))))
-            pincer_reward = self._coeff * min(pincer_angle, and_angle) * _DT * _DECISION_STEPS
+            # Normalize: 2520 pts/step → ~84 pts/step (in line with ATA ~96)
+            pincer_ratio = min(pincer_angle, and_angle) / max(and_angle, 1.0)
+            pincer_reward = self._coeff * pincer_ratio * _DT * _DECISION_STEPS
             rewards["p0"] = pincer_reward
             rewards["p1"] = pincer_reward
             # Store for cooperative success termination check
