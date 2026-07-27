@@ -138,13 +138,51 @@ def main():
     t0 = env.targets[0]
     max_steps = 500
 
+    # ── Force tail-chase: pursuer behind target, both heading same direction ──
+    _force_tail_chase = True
+    if _force_tail_chase:
+        from src.dynamics.flight_controller import FlightControlTargets
+        from src.utils.units import kts_to_mps
+        from src.environment.formation_task import PHYSICS_DT
+        t_hdg, t_spd, t_alt = 45.0, 200.0, 3000.0
+        p_spd, chase_dist = 280.0, 3000.0  # pursuer faster, starts 3km behind
+        # Target at origin
+        t0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
+                          heading_deg=t_hdg, speed_kts=int(t_spd/0.5144), trim=False)
+        t0.aircraft.position_ned = np.array([0.0, 0.0, t_alt])
+        t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
+        # Pursuer behind target
+        p_north = -chase_dist * np.cos(np.radians(t_hdg))
+        p_east  = -chase_dist * np.sin(np.radians(t_hdg))
+        p0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
+                          heading_deg=t_hdg, speed_kts=int(p_spd/0.5144), trim=False)
+        p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
+        p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
+        p0._cmd_speed = p_spd
+        # Warmup: let JSBSim settle
+        for _ in range(int(3.0 * 60)):
+            for ac, hdg, alt, spd in [(p0, t_hdg, t_alt, p_spd), (t0, t_hdg, t_alt, t_spd)]:
+                s = ac.aircraft.state
+                tgt = FlightControlTargets(heading_deg=hdg, altitude_m=alt, speed_mps=spd)
+                thr, elev, ail, rud = ac.fc.compute(s, tgt, PHYSICS_DT)
+                ac.aircraft.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
+                ac.aircraft.run()
+                ac.aircraft.position_ned[0:2] += ac.aircraft.velocity_ned[0:2] * PHYSICS_DT
+                ac.aircraft.position_ned[2] = s["alt_m"]
+        p0.prev_dist = float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
+
     print(f"\nInitial:")
     print(f"  P0: pos=({p0.aircraft.position_ned[0]:.0f}, {p0.aircraft.position_ned[1]:.0f}) "
           f"hdg={p0.ref_hdg:.0f}° spd={p0.aircraft.state['airspeed_mps']:.0f}m/s "
           f"alt={p0.aircraft.state['alt_m']:.0f}m")
     print(f"  T0: pos=({t0.aircraft.position_ned[0]:.0f}, {t0.aircraft.position_ned[1]:.0f}) "
           f"hdg={t0.ref_hdg:.0f}° alt={t0.aircraft.state['alt_m']:.0f}m")
+    dist_init = float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
+    print(f"  Distance: {dist_init:.0f}m  (P0 behind T0, tail chase)")
     print(f"  Missiles: {env.task.remaining_missiles}")
+
+    # Re-log initial frame after warmup repositioning
+    env.log_acmi_step()
 
     total_rew = 0.0
     fired_steps = []
@@ -155,11 +193,15 @@ def main():
         # ── Compute rule-based action ──────────────────────────────────
         action_vec = pursuer.compute_action(p0, t0)
 
-        # Fire if in valid envelope
-        if pursuer.should_fire(p0, t0) and env.task.remaining_missiles.get('p0', 0) > 0:
-            action_vec[3] = 1  # fire!
-            missiles_launched += 1
-            fired_steps.append(step)
+        # Fire if in valid envelope AND task permits it
+        prev_remaining = env.task.remaining_missiles.get('p0', 0)
+        if pursuer.should_fire(p0, t0) and prev_remaining > 0:
+            # Check cooldown
+            from src.environment.singlecombat_shoot_task import MIN_ATTACK_INTERVAL
+            if step - env.task._last_shoot_step.get('p0', -MIN_ATTACK_INTERVAL) >= MIN_ATTACK_INTERVAL:
+                action_vec[3] = 1  # fire!
+                missiles_launched += 1
+                fired_steps.append(step)
 
         action = {'p0': action_vec}
         obs, rews, terms, truncs, info = env.step(action)
