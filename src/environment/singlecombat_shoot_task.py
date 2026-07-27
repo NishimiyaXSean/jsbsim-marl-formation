@@ -490,13 +490,15 @@ class SingleCombatShootTask(BaseTask):
             return
 
         target = env.targets[0]
-        # Match LAG's missile ID pattern: parent ID + sequential number (no underscore)
-        uid = f"M{env._missile_uid_counter:03d}"
+        # Hex ID: 301, 302, 303, ... (Tacview object IDs as hex)
+        uid = f"{0x301 + env._missile_uid_counter:X}"
         env._missile_uid_counter += 1
 
-        # Create and launch
+        # Create and launch — pass parent's ACMI ID (101 + pursuer_index)
+        parent_uid = str(101 + env.pursuers.index(ps))
         m = MissileSimulator.create(
-            parent=ps, target=target, uid=uid, dt=1.0 / 60.0)
+            parent=ps, target=target, uid=uid, dt=1.0 / 60.0,
+            parent_uid=parent_uid)
         env.add_temp_simulator(m)
 
         # Update state

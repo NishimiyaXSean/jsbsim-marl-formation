@@ -219,6 +219,7 @@ class MissileSimulator:
         uid: str,
         dt: float = 1.0 / 60.0,
         missile_model: str = "AIM-9L",
+        **kwargs,
     ) -> "MissileSimulator":
         """Factory: create a missile, inherit parent state, and link to target."""
         parent_ned = parent.aircraft.position_ned
@@ -232,6 +233,8 @@ class MissileSimulator:
         missile = cls(uid=uid, color="Red", model=missile_model, dt=dt)
         missile.launch(parent, parent_ned, parent_rpy, parent_vel, parent_lat, parent_lon)
         missile.target(target)
+        # Store parent ACMI ID for Tacview Parent= attribute
+        missile._parent_uid = kwargs.get("parent_uid", "101")
         return missile
 
     def launch(
@@ -402,19 +405,29 @@ class MissileSimulator:
         lat, lon, alt = self.get_absolute_geodetic()
         return lon, lat, alt  # Tacview order: lon, lat, alt
 
+    def get_parent_uid(self) -> str:
+        """Return the parent aircraft's ACMI object ID."""
+        return getattr(self, '_parent_uid', '101')
+
     def log(self) -> str | None:
-        """Tacview-compatible log line — follows LAG's BaseSimulator.log() format.
+        """Tacview-compatible log line.
 
-        LAG missile format:
-          ALIVE:  ID,T=lon|lat|alt|roll|pitch|yaw,Name=AIM-9L,Color=Red
-          HIT:    -ID + IDF,T=...Type=Misc+Explosion,Color=Yellow,Radius=Rc
-          MISS:   -ID + ID,T=...,Name=AIM-9L,Color=Grey + explosion
-
-        NOTE: No Type= field during flight — LAG works without it.
+        Uses hex object IDs (301+ for missiles, 401+ for explosions),
+        Type=Air+FixedWing for rendering, and Parent= attribute to link
+        the missile to its launching aircraft.
         """
         if self.is_alive:
             lon, lat, alt = self._get_tacview_position()
             roll, pitch, yaw = self._posture * 180.0 / np.pi
+            parent_id = self.get_parent_uid()
+            if self._first_log:
+                self._first_log = False
+                return (
+                    f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
+                    f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
+                    f"Name={self.model},Type=Air+FixedWing,Color=Red,"
+                    f"Parent={parent_id}"
+                )
             return (
                 f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|"
                 f"{roll:.1f}|{pitch:.1f}|{yaw:.1f},"
@@ -425,22 +438,28 @@ class MissileSimulator:
             self.render_explosion = True
             lon, lat, alt = self._get_tacview_position()
 
+            # Generate explosion ID from missile ID (missile 301 → explosion 401)
+            try:
+                explosion_id = f"{int(self.uid, 16) + 0x100:X}"
+            except (ValueError, TypeError):
+                explosion_id = f"{int(self.uid) + 100}"
+
             msg = f"-{self.uid}\n"
 
             if self._status == MissileStatus.HIT:
-                # Yellow explosion at impact point (matching LAG)
+                # Yellow explosion at impact point
                 msg += (
-                    f"{self.uid}F,T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
+                    f"{explosion_id},T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Type=Misc+Explosion,Color=Yellow,Radius={self._params.Rc}"
                 )
             else:
-                # MISS: final position in Grey + explosion
+                # MISS: final Grey marker + Grey explosion
                 msg += (
                     f"{self.uid},T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Name={self.model},Color=Grey\n"
                 )
                 msg += (
-                    f"{self.uid}F,T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
+                    f"{explosion_id},T={lon:.6f}|{lat:.6f}|{alt:.1f}|0|0|0,"
                     f"Type=Misc+Explosion,Color=Grey,Radius={self._params.Rc}"
                 )
             return msg
