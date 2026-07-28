@@ -77,7 +77,7 @@ MAX_ATTACK_ANGLE = 45.0        # degrees — max ATA for valid launch
 MAX_ATTACK_DISTANCE = 14000.0   # meters — max range
 MIN_ATTACK_DISTANCE = 1000.0    # meters — min range (too close = danger)
 MIN_ATTACK_INTERVAL = 125       # decision steps — cooldown between launches
-NUM_MISSILES = 2                # per aircraft
+NUM_MISSILES = 6                # per aircraft
 
 # ── Reward weights ───────────────────────────────────────────────────────────
 REWARD_VALID_LAUNCH = 50.0      # immediate credit for firing in valid envelope

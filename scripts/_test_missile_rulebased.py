@@ -116,7 +116,7 @@ class RuleBasedPursuer:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    difficulty = float(sys.argv[1]) if len(sys.argv) > 1 else 0.0
+    difficulty = float(sys.argv[1]) if len(sys.argv) > 1 else 0.3  # S-turns for more dynamic chase
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 42
     acmi_out = sys.argv[3] if len(sys.argv) > 3 else 'results/test_missile_rulebased.acmi'
 
@@ -131,7 +131,7 @@ def main():
 
     p0 = env.pursuers[0]
     t0 = env.targets[0]
-    max_steps = 500
+    max_steps = 1500  # longer for multi-missile engagement
 
     # ── Force tail-chase: pursuer 3km behind target, both heading north ──
     # Key: set JSBSim lat/lon consistent with desired position_ned so ACMI renders correctly
@@ -139,18 +139,17 @@ def main():
     if _force_tail_chase:
         from src.dynamics.flight_controller import FlightControlTargets
         from src.environment.formation_task import PHYSICS_DT
-        t_hdg, t_spd, t_alt = 0.0, 180.0, 3000.0  # target flies NORTH (hdg=0)
-        p_spd, chase_dist = 260.0, 3000.0  # pursuer faster, starts 3km behind
-        # Target: at (120.0, 30.02) — ~2.2km north of reference
-        t_lat, t_lon = 30.02, 120.0
-        t0.aircraft.reset(lat_deg=t_lat, lon_deg=t_lon, alt_ft=int(t_alt*3.28084),
+        t_hdg, t_spd, t_alt = 0.0, 230.0, 3000.0  # target flies NORTH at 230m/s
+        p_spd, chase_dist = 280.0, 4000.0  # pursuer faster, starts 4km behind
+        # Target: ~2.2km north of reference (lat≈30.02, lon≈120.0)
+        t0.aircraft.reset(lat_deg=30.02, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
                           heading_deg=t_hdg, speed_kts=int(t_spd/0.5144), trim=False)
-        t0.aircraft.position_ned = np.array([2224.0, 0.0, t_alt])  # ~2.2km north
+        t0.aircraft.position_ned = np.array([2224.0, 0.0, t_alt])
         t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
-        # Pursuer: 3km SOUTH of target (behind, heading north → target is in front)
-        p_lat, p_lon = 29.993, 120.0  # ~770m south of 30.0
-        p_ned_north = t0.aircraft.position_ned[0] - chase_dist
-        p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt*3.28084),
+        # Pursuer: 4km south of target → ~1.8km south of reference (lat≈29.984)
+        p_ned_north = 2224.0 - chase_dist  # ≈ -1776
+        p_lat = 30.0 + p_ned_north / 111320.0  # ≈ 29.984
+        p0.aircraft.reset(lat_deg=p_lat, lon_deg=120.0, alt_ft=int(t_alt*3.28084),
                           heading_deg=t_hdg, speed_kts=int(p_spd/0.5144), trim=False)
         p0.aircraft.position_ned = np.array([p_ned_north, 0.0, t_alt])
         p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
@@ -177,6 +176,10 @@ def main():
     print(f"  Distance: {dist_init:.0f}m  (P0 behind T0, tail chase north)")
     print(f"  Missiles: {env.task.remaining_missiles}")
 
+    # Fire delay: let the pursuer chase for a few seconds before first launch
+    FIRE_DELAY_STEPS = 10   # 2 seconds at 5Hz
+    MIN_FIRE_DIST = 8000.0  # fire when within 8km (well within AIM-9L range)
+
     # Enable ACMI logging AFTER repositioning (so header shows correct positions)
     os.makedirs(os.path.dirname(acmi_out) or '.', exist_ok=True)
     env.enable_acmi_logging(acmi_out)
@@ -191,15 +194,16 @@ def main():
         # ── Compute rule-based action ──────────────────────────────────
         action_vec = pursuer.compute_action(p0, t0)
 
-        # Fire if in valid envelope AND task permits it
+        # Fire if: cooldown elapsed, valid envelope, within range, past delay
         prev_remaining = env.task.remaining_missiles.get('p0', 0)
-        if pursuer.should_fire(p0, t0) and prev_remaining > 0:
-            # Check cooldown
-            from src.environment.singlecombat_shoot_task import MIN_ATTACK_INTERVAL
-            if step - env.task._last_shoot_step.get('p0', -MIN_ATTACK_INTERVAL) >= MIN_ATTACK_INTERVAL:
-                action_vec[3] = 1  # fire!
-                missiles_launched += 1
-                fired_steps.append(step)
+        if prev_remaining > 0 and step >= FIRE_DELAY_STEPS:
+            dist = float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
+            if pursuer.should_fire(p0, t0) and dist <= MIN_FIRE_DIST:
+                from src.environment.singlecombat_shoot_task import MIN_ATTACK_INTERVAL
+                if step - env.task._last_shoot_step.get('p0', -MIN_ATTACK_INTERVAL) >= MIN_ATTACK_INTERVAL:
+                    action_vec[3] = 1  # fire!
+                    missiles_launched += 1
+                    fired_steps.append(step)
 
         action = {'p0': action_vec}
         obs, rews, terms, truncs, info = env.step(action)
