@@ -170,34 +170,43 @@ class SingleCombatShootTask(BaseTask):
         self._reward_breakdown: Dict[str, Dict[str, float]] = {}
 
         # ── Combat geometry: tail-chase at 2-5km range ──────────────────────
-        rng = np.random.default_rng()  # proper random variation per episode
+        # KEY: set JSBSim lat/lon directly for ACMI consistency
+        rng = np.random.default_rng()
         p0 = env.pursuers[0]; t0 = env.targets[0]
 
         t_alt = 3000.0
-        t_hdg = float(rng.uniform(0, 360))  # random target heading
-        t_spd = float(rng.uniform(180, 240))  # target speed 180-240 m/s
-
-        # Chase distance: 2-5km behind target
+        t_hdg = float(rng.uniform(0, 360))
+        t_spd = float(rng.uniform(180, 240))
         chase_dist = float(rng.uniform(2000, 5000))
-        # Slight lateral offset for pincer angle variation
         lateral = float(rng.uniform(-500, 500))
-
         t_hdg_rad = np.radians(t_hdg)
-        # Target at ~2km north of reference
-        t_north = 2000.0 + rng.uniform(-200, 200)
-        t_east = rng.uniform(-200, 200)
-        t0.aircraft.reset(lat_deg=30.02, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+
+        # WGS84 conversion constants at ~30°N
+        M_PER_DEG_LAT = 111132.0
+        M_PER_DEG_LON = 96420.0  # 111320 * cos(30°)
+
+        # Target at ~2km north of reference (30°N, 120°E)
+        t_north_m = 2000.0 + rng.uniform(-200, 200)
+        t_east_m = rng.uniform(-200, 200)
+        t_lat = 30.0 + t_north_m / M_PER_DEG_LAT
+        t_lon = 120.0 + t_east_m / M_PER_DEG_LON
+
+        # Pursuer BEHIND target (opposite of heading direction)
+        p_north_m = t_north_m - chase_dist * np.cos(t_hdg_rad) + lateral * np.sin(t_hdg_rad)
+        p_east_m = t_east_m - chase_dist * np.sin(t_hdg_rad) - lateral * np.cos(t_hdg_rad)
+        p_lat = 30.0 + p_north_m / M_PER_DEG_LAT
+        p_lon = 120.0 + p_east_m / M_PER_DEG_LON
+        p_spd = float(rng.uniform(240, 300))
+
+        # Reset JSBSim at CORRECT coordinates (ACMI will show these)
+        t0.aircraft.reset(lat_deg=t_lat, lon_deg=t_lon, alt_ft=int(t_alt * 3.28084),
                           heading_deg=t_hdg, speed_kts=int(t_spd / 0.5144), trim=False)
-        t0.aircraft.position_ned = np.array([t_north, t_east, t_alt])
+        t0.aircraft.position_ned = np.array([t_north_m, t_east_m, t_alt])
         t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
 
-        # Pursuer behind target
-        p_north = t_north - chase_dist * np.cos(t_hdg_rad) + lateral * np.sin(t_hdg_rad)
-        p_east = t_east - chase_dist * np.sin(t_hdg_rad) - lateral * np.cos(t_hdg_rad)
-        p_spd = float(rng.uniform(240, 300))  # pursuer faster
-        p0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+        p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt * 3.28084),
                           heading_deg=t_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
-        p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
+        p0.aircraft.position_ned = np.array([p_north_m, p_east_m, t_alt])
         p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
         p0._cmd_speed = p_spd
 
