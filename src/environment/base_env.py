@@ -102,6 +102,8 @@ class _Target:
     is_alive: bool = True
     launch_missiles: list = field(default_factory=list)
     under_missiles: list = field(default_factory=list)
+    hits_taken: int = 0
+    max_hits: int = 4  # how many missile hits the target can survive
 
     def shotdown(self):
         self.is_alive = False
@@ -275,8 +277,9 @@ class BaseEnv(MultiAgentEnv):
                 ts.autopilot.reset(initial_speed_mps=160.0)
                 ts.ref_hdg = target_hdg
                 ts.ref_alt_m = 3000.0
-                # Reset combat state (critical: target stays dead otherwise)
+                # Reset combat state
                 ts.is_alive = True
+                ts.hits_taken = 0
                 ts.launch_missiles.clear()
                 ts.under_missiles.clear()
 
@@ -392,11 +395,10 @@ class BaseEnv(MultiAgentEnv):
                 ts.aircraft.position_ned[2] = ts.aircraft.state["alt_m"]
 
             # ── Run missiles (60Hz — inside the sub-step loop) ──────────
+            # NOTE: missiles mark themselves HIT/MISS internally but do NOT
+            # auto-kill the target.  Target HP is managed by the task.
             for sim in list(self._tempsims.values()):
                 sim.run()
-                # Apply hit effect
-                if sim.is_success and sim.target_aircraft is not None:
-                    sim.target_aircraft.shotdown()
 
             # NaN guard
             for ps in self.pursuers:

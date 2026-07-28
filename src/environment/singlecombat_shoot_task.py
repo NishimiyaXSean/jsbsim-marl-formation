@@ -267,15 +267,27 @@ class SingleCombatShootTask(BaseTask):
                 self._update_target_evasion(env, ts)
 
     def step(self, env) -> None:
-        """Task-level per-step: apply hit effects, check self-launched missiles."""
+        """Task-level per-step: track missile hits, update target HP.
+
+        Missiles mark themselves HIT/MISS internally.  We detect new hits,
+        increment the target's hit counter, and issue rewards.
+        The target only dies when hits_taken >= max_hits.
+        """
         self._step_count += 1
-        # Track hit events for get_reward (one-shot per missile)
         self._hit_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
+        target = env.targets[0] if env.M > 0 else None
+
         for i, (ps, aid) in enumerate(zip(env.pursuers, AGENT_IDS)):
             for m in list(ps.launch_missiles):
                 if m.is_success and not getattr(m, '_hit_rewarded', False):
                     m._hit_rewarded = True
                     self._hit_this_step[aid] = True
+                    if target is not None:
+                        target.hits_taken += 1
+                    # Log the hit
+                    import sys
+                    print(f"\n[HIT!] {m.uid} hit target!  HP: {target.hits_taken}/{target.max_hits if target else '?'}",
+                          file=sys.stderr, flush=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Observation
@@ -430,32 +442,40 @@ class SingleCombatShootTask(BaseTask):
         truncateds = {}
         infos = {}
 
-        max_steps = 500
-        low_alt = 1500.0  # meters — allow tactical dive, target can reach 2200m at d=1.0
+        max_steps = 1500  # allow longer multi-hit engagements
+        low_alt = 1500.0
 
         for ps, aid in zip(env.pursuers, AGENT_IDS):
             s = ps.aircraft.state
             alt_m = float(s["alt_m"])
+            target = env.targets[0] if env.M > 0 else None
 
-            # Purseuer shotdown
+            # Pursuer shot down
             if not ps.is_alive:
                 terminateds[aid] = True
                 infos[aid] = {"termination_reason": "pursuer_shotdown"}
                 self._last_termination_reason = "pursuer_shotdown"
-            # Low altitude
+            # Low altitude crash
             elif alt_m < low_alt:
                 terminateds[aid] = True
                 infos[aid] = {"termination_reason": "low_altitude"}
                 self._last_termination_reason = "low_altitude"
-            # Target killed
-            elif not env.targets[0].is_alive:
+            # Target HP depleted (all hits landed)
+            elif target is not None and target.hits_taken >= target.max_hits:
                 terminateds[aid] = True
                 infos[aid] = {"termination_reason": "target_killed"}
                 self._last_termination_reason = "target_killed"
+            # All ammo spent and all missiles resolved
+            elif (self.remaining_missiles.get(aid, 0) == 0
+                  and all(m.is_done for m in ps.launch_missiles)):
+                terminateds[aid] = True
+                hits = target.hits_taken if target else 0
+                infos[aid] = {"termination_reason": f"ammo_exhausted_hits={hits}"}
+                self._last_termination_reason = "ammo_exhausted"
             # Lost target (too far)
-            elif ps.is_alive and env.targets[0].is_alive:
+            elif target is not None and target.is_alive:
                 dist = float(np.linalg.norm(
-                    ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
+                    ps.aircraft.position_ned - target.aircraft.position_ned))
                 if dist > MAX_DIST:
                     terminateds[aid] = True
                     infos[aid] = {"termination_reason": "lost_target"}
