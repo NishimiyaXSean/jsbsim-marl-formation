@@ -73,17 +73,17 @@ DELTA_HEADINGS  = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
 DELTA_ALTITUDES = [-100.0,   0.0, 100.0]      # meters
 
 # ── Missile launch parameters ────────────────────────────────────────────────
-MAX_ATTACK_ANGLE = 45.0        # degrees — max ATA for valid launch
+MAX_ATTACK_ANGLE = 45.0        # degrees — wide envelope for initial exploration
 MAX_ATTACK_DISTANCE = 14000.0   # meters — max range
 MIN_ATTACK_DISTANCE = 1000.0    # meters — min range (too close = danger)
-MIN_ATTACK_INTERVAL = 125       # decision steps — cooldown between launches
+MIN_ATTACK_INTERVAL = 15        # decision steps (3s at 5Hz) — short for exploration
 NUM_MISSILES = 6                # per aircraft
 
 # ── Reward weights ───────────────────────────────────────────────────────────
 REWARD_VALID_LAUNCH = 50.0      # immediate credit for firing in valid envelope
-REWARD_HIT = 200.0              # missile hit on enemy
-REWARD_SHOTDOWN = -200.0        # hit by enemy missile
-REWARD_CRASH = -200.0           # low altitude / overstress
+REWARD_HIT = 1000.0             # missile hit on enemy ← dominate over shaping
+REWARD_SHOTDOWN = -1000.0       # hit by enemy missile
+REWARD_CRASH = -1000.0          # low altitude / overstress
 REWARD_SHOOT_PENALTY = -10.0    # cost per missile fired (anti-spam)
 
 
@@ -433,20 +433,22 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
-        """Mask fire action when no missiles remain or target not alive."""
+        """Action mask for MultiDiscrete action space.
+
+        Flat mask layout: [speed(3), heading(5), altitude(3), fire(2)]
+        Fire indices: fire_start=11 (Hold=0), fire_start+1=12 (Fire=1)
+
+        CRITICAL: only mask the Fire logit, keep Hold alive.
+        Masking both → NaN in softmax normalisation → crash.
+        """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
 
-        # Fire action index = 10 (after speed(3) + heading(5) + altitude(3) = 11, but
-        # we encode fire as the 4th MultiDiscrete dimension)
-        # The mask is flat: [speed_delta(3), heading_delta(5), altitude_delta(3), fire(2)]
-        # Fire is at mask indices 11 and 12 (flat index for MultiDiscrete)
         fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 11
 
         if self.remaining_missiles.get(agent_id, 0) <= 0:
-            mask[fire_start:fire_start + N_FIRE] = 0.0
+            # Only mask Fire (index 12), leave Hold (index 11) unmasked
+            mask[fire_start + 1] = 0.0
 
-        # Also mask fire if enemy not alive (no point shooting a dead target)
-        # but keep this soft since scoring still matters
         return mask
 
     # ══════════════════════════════════════════════════════════════════════════

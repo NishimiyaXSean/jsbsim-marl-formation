@@ -4,7 +4,7 @@ The pursuer is controlled by a simple PID-like rule:
   1. Turn toward the target (minimize heading error)
   2. Maintain target altitude
   3. Maintain cruise speed
-  4. Fire when within valid launch envelope (1–5 km, ATA < 20°)
+  4. Fire when within valid launch envelope (1–14 km, ATA < 45°)
 
 This script validates:
   V1  Missile flies toward target (PN guidance)

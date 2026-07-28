@@ -329,6 +329,7 @@ class BaseEnv(MultiAgentEnv):
         4. Collect obs / rewards / termination from Task
         """
         dt = PHYSICS_DT
+        self._step_counter += 1
 
         # ── ① Task applies actions: RL output → PID setpoints ────────────
         self.task.apply_actions(self, action_dict)
