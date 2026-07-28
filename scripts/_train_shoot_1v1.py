@@ -109,8 +109,8 @@ def main():
             algo.save(f"{output_dir}/checkpoints/best")
 
         # Early success detection
-        if rew > 500:
-            print(f"  *** Fire+Hit likely detected at iter {i}: rew={rew:+.0f} ***")
+        if rew > 2200:
+            print(f"  *** HIT likely detected at iter {i}: rew={rew:+.0f} ***")
 
     algo.save(f"{output_dir}/checkpoints/final")
     print(f"\nDone. Best reward: {best_reward:+.0f}")

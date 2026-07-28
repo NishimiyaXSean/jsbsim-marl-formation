@@ -73,23 +73,22 @@ DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
 DELTA_HEADINGS  = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
 DELTA_ALTITUDES = [-100.0,   0.0, 100.0]      # meters
 
-# ── Missile launch parameters ────────────────────────────────────────────────
-MAX_ATTACK_ANGLE = 45.0        # degrees — wide envelope for initial exploration
-MAX_ATTACK_DISTANCE = 14000.0   # meters — max range
-MIN_ATTACK_DISTANCE = 1000.0    # meters — min range (too close = danger)
-MIN_ATTACK_INTERVAL = 15        # decision steps (3s at 5Hz) — short for exploration
-NUM_MISSILES = 6                # per aircraft
+# ── Missile launch parameters (WEZ: Weapons Engagement Zone) ──────────────────
+MAX_ATTACK_ANGLE = 15.0         # degrees — must be precisely on-target
+MAX_ATTACK_DISTANCE = 8000.0    # meters — missile effective range
+MIN_ATTACK_DISTANCE = 1500.0    # meters — avoid self-destruct at point-blank
+MIN_ATTACK_INTERVAL = 30        # decision steps (6s at 5Hz) — conserve ammo
+NUM_MISSILES = 4                # per aircraft — limited, force precision
 
 # ── Reward weights ───────────────────────────────────────────────────────────
-REWARD_VALID_LAUNCH = 50.0      # immediate credit for firing in valid envelope
-REWARD_HIT = 2000.0             # missile hit on enemy — must dominate all shaping
+REWARD_HIT = 2000.0             # missile hit — the ONLY launch-related reward
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
-REWARD_SHOOT_PENALTY = -10.0    # cost per missile fired (anti-spam)
+REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mask)
 
-# ── Shaping weight overrides (reduced to prevent reward hacking) ─────────────
-PROGRESS_WEIGHT = 0.2           # was 1.0 — reduced so hit reward dominates
-ATA_WEIGHT = 1.5                # was 8.0 — reduced so hit reward dominates
+# ── Shaping weight overrides ─────────────────────────────────────────────────
+PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
+ATA_WEIGHT = 1.5                # reduced — hit reward dominates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -166,7 +165,6 @@ class SingleCombatShootTask(BaseTask):
         self._prev_alive = {aid: True for aid in AGENT_IDS}
         self._prev_missile_count = {aid: NUM_MISSILES for aid in AGENT_IDS}
         self._has_launched_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
-        self._dry_fire_penalty: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
 
         # ── Reward breakdown for diagnostics ────────────────────────────────
         self._reward_breakdown: Dict[str, Dict[str, float]] = {}
@@ -247,14 +245,10 @@ class SingleCombatShootTask(BaseTask):
                 getattr(ps, '_cmd_speed', 200.0) + DELTA_SPEEDS[speed_idx],
                 120.0, 400.0))
 
-            # ── Fire logic ──────────────────────────────────────────────────
+            # ── Fire logic (WEZ-masked: fire only available in kill position) ──
             self._has_launched_this_step[aid] = False
-            self._dry_fire_penalty[aid] = False
-            if fire == 1 and ps.is_alive:
-                if self.remaining_missiles[aid] > 0:
-                    self._try_launch_missile(env, ps, aid, step)
-                else:
-                    self._dry_fire_penalty[aid] = True  # empty-magazine fire
+            if fire == 1 and ps.is_alive and self.remaining_missiles[aid] > 0:
+                self._try_launch_missile(env, ps, aid, step)
 
         # ── Target: rule-based evasion ──────────────────────────────────────
         for ts in env.targets:
@@ -382,20 +376,7 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_progress + r_ata + r_alt
 
-            # ── Launch reward / Dry-fire penalty ────────────────────────────
-            r_launch = 0.0
-            if self._dry_fire_penalty.get(aid, False):
-                r_launch = REWARD_SHOOT_PENALTY  # -10 for firing with empty mag
-                r += r_launch
-            elif self._has_launched_this_step.get(aid, False):
-                # Check if launch was within valid envelope
-                if self._is_valid_launch_envelope(ps, target):
-                    r_launch = REWARD_VALID_LAUNCH
-                else:
-                    r_launch = REWARD_SHOOT_PENALTY  # bad launch
-                r += r_launch
-
-            # ── Event-driven rewards ────────────────────────────────────────
+            # ── Event-driven rewards (no launch reward — WEZ mask gates fire) ─
             r_event = 0.0
 
             # Hit: use flag set in step() (avoids timing issues)
@@ -408,12 +389,10 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_event
 
-            # ── Store breakdown for diagnostics ────────────────────────────
             self._reward_breakdown = {
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
-                "LaunchOrDryFire": {"p0": r_launch},
                 "EventReward": {"p0": r_event},
             }
 
@@ -488,21 +467,58 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
-        """Action mask for MultiDiscrete action space.
+        """Action mask with WEZ (Weapons Engagement Zone) gating.
 
         Flat mask layout: [speed(3), heading(5), altitude(3), fire(2)]
-        Fire indices: fire_start=11 (Hold=0), fire_start+1=12 (Fire=1)
+        Fire indices: fire_start+0=Hold(11), fire_start+1=Fire(12)
 
-        CRITICAL: only mask the Fire logit, keep Hold alive.
-        Masking both → NaN in softmax normalisation → crash.
+        Fire is ONLY unmasked when ALL conditions are met:
+          - Target alive and within range (1.5-8km)
+          - ATA < 15° (nose precisely on target)
+          - Missiles remaining
+
+        This forces the RL agent to first learn manoeuvring into kill position.
         """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
-
         fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 11
 
-        if self.remaining_missiles.get(agent_id, 0) <= 0:
-            # Only mask Fire (index 12), leave Hold (index 11) unmasked
+        if env.M == 0:
             mask[fire_start + 1] = 0.0
+            return mask
+
+        target = env.targets[0]
+        aid_idx = env._agent_ids.index(agent_id) if agent_id in env._agent_ids else 0
+        ps = env.pursuers[aid_idx]
+
+        can_fire = True
+
+        # Condition 1: missiles remaining
+        if self.remaining_missiles.get(agent_id, 0) <= 0:
+            can_fire = False
+
+        # Condition 2: target alive
+        if not target.is_alive:
+            can_fire = False
+
+        # Condition 3: within WEZ range
+        if can_fire:
+            p_pos = ps.aircraft.position_ned
+            t_pos = target.aircraft.position_ned
+            dist = float(np.linalg.norm(p_pos - t_pos))
+            if dist < MIN_ATTACK_DISTANCE or dist > MAX_ATTACK_DISTANCE:
+                can_fire = False
+
+        # Condition 4: nose on target (ATA < 15°)
+        if can_fire:
+            p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+            los_dir = (t_pos - p_pos) / max(dist, 1e-6)
+            cos_ata = float(np.dot(p_fwd, los_dir))
+            ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
+            if ata_deg > MAX_ATTACK_ANGLE:
+                can_fire = False
+
+        if not can_fire:
+            mask[fire_start + 1] = 0.0  # lock Fire, allow Hold
 
         return mask
 
