@@ -28,6 +28,7 @@ from src.utils.units import kts_to_mps
 
 from .task_base import BaseTask
 from .missile_simulator import MissileSimulator
+from .formation_task import PHYSICS_DT
 from .reward_functions import (
     ProgressReward, ATAAlignmentReward, AltitudeDeviationPenalty,
 )
@@ -144,8 +145,13 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def reset(self, env) -> None:
-        """Initialize missile state, target evasion state, and reward tracking."""
-        self._step_count = 0  # track actual episode length
+        """Initialize missile state, target evasion, and combat geometry.
+
+        Overrides BaseEnv default reset to create proper medium-range
+        tail-chase or head-on geometry (2-5km range), suitable for
+        learning fire discipline and approach tactics.
+        """
+        self._step_count = 0
         self._last_termination_reason = "none"
 
         # ── Missile state ───────────────────────────────────────────────────
@@ -156,9 +162,53 @@ class SingleCombatShootTask(BaseTask):
         self._prev_alive = {aid: True for aid in AGENT_IDS}
         self._prev_missile_count = {aid: NUM_MISSILES for aid in AGENT_IDS}
         self._has_launched_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
+        self._dry_fire_penalty: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
 
         # ── Reward breakdown for diagnostics ────────────────────────────────
         self._reward_breakdown: Dict[str, Dict[str, float]] = {}
+
+        # ── Combat geometry: tail-chase at 2-5km range ──────────────────────
+        rng = np.random.default_rng()  # proper random variation per episode
+        p0 = env.pursuers[0]; t0 = env.targets[0]
+
+        t_alt = 3000.0
+        t_hdg = float(rng.uniform(0, 360))  # random target heading
+        t_spd = float(rng.uniform(180, 240))  # target speed 180-240 m/s
+
+        # Chase distance: 2-5km behind target
+        chase_dist = float(rng.uniform(2000, 5000))
+        # Slight lateral offset for pincer angle variation
+        lateral = float(rng.uniform(-500, 500))
+
+        t_hdg_rad = np.radians(t_hdg)
+        # Target at ~2km north of reference
+        t_north = 2000.0 + rng.uniform(-200, 200)
+        t_east = rng.uniform(-200, 200)
+        t0.aircraft.reset(lat_deg=30.02, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+                          heading_deg=t_hdg, speed_kts=int(t_spd / 0.5144), trim=False)
+        t0.aircraft.position_ned = np.array([t_north, t_east, t_alt])
+        t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
+
+        # Pursuer behind target
+        p_north = t_north - chase_dist * np.cos(t_hdg_rad) + lateral * np.sin(t_hdg_rad)
+        p_east = t_east - chase_dist * np.sin(t_hdg_rad) - lateral * np.cos(t_hdg_rad)
+        p_spd = float(rng.uniform(240, 300))  # pursuer faster
+        p0.aircraft.reset(lat_deg=30.0, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+                          heading_deg=t_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
+        p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
+        p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
+        p0._cmd_speed = p_spd
+
+        # Warmup JSBSim
+        for _ in range(int(1.0 * 60)):
+            for ac, h, a, s in [(p0, t_hdg, t_alt, p_spd), (t0, t_hdg, t_alt, t_spd)]:
+                st = ac.aircraft.state
+                tgt = FlightControlTargets(heading_deg=h, altitude_m=a, speed_mps=s)
+                thr, elev, ail, rud = ac.fc.compute(st, tgt, PHYSICS_DT)
+                ac.aircraft.set_controls(throttle=thr, elevator=elev, aileron=ail, rudder=rud)
+                ac.aircraft.run()
+                ac.aircraft.position_ned[0:2] += ac.aircraft.velocity_ned[0:2] * PHYSICS_DT
+                ac.aircraft.position_ned[2] = st["alt_m"]
 
         # ── Reset reward modules ────────────────────────────────────────────
         for ps in env.pursuers:
@@ -195,8 +245,12 @@ class SingleCombatShootTask(BaseTask):
 
             # ── Fire logic ──────────────────────────────────────────────────
             self._has_launched_this_step[aid] = False
-            if fire == 1 and ps.is_alive and self.remaining_missiles[aid] > 0:
-                self._try_launch_missile(env, ps, aid, step)
+            self._dry_fire_penalty[aid] = False
+            if fire == 1 and ps.is_alive:
+                if self.remaining_missiles[aid] > 0:
+                    self._try_launch_missile(env, ps, aid, step)
+                else:
+                    self._dry_fire_penalty[aid] = True  # empty-magazine fire
 
         # ── Target: rule-based evasion ──────────────────────────────────────
         for ts in env.targets:
@@ -323,9 +377,12 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_progress + r_ata + r_alt
 
-            # ── Valid launch reward ─────────────────────────────────────────
+            # ── Launch reward / Dry-fire penalty ────────────────────────────
             r_launch = 0.0
-            if self._has_launched_this_step.get(aid, False):
+            if self._dry_fire_penalty.get(aid, False):
+                r_launch = REWARD_SHOOT_PENALTY  # -10 for firing with empty mag
+                r += r_launch
+            elif self._has_launched_this_step.get(aid, False):
                 # Check if launch was within valid envelope
                 if self._is_valid_launch_envelope(ps, target):
                     r_launch = REWARD_VALID_LAUNCH
@@ -352,7 +409,7 @@ class SingleCombatShootTask(BaseTask):
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
-                "ValidLaunchReward": {"p0": r_launch},
+                "LaunchOrDryFire": {"p0": r_launch},
                 "EventReward": {"p0": r_event},
             }
 
@@ -373,7 +430,7 @@ class SingleCombatShootTask(BaseTask):
         infos = {}
 
         max_steps = 500
-        low_alt = 2500.0  # meters
+        low_alt = 1500.0  # meters — allow tactical dive, target can reach 2200m at d=1.0
 
         for ps, aid in zip(env.pursuers, AGENT_IDS):
             s = ps.aircraft.state
@@ -418,14 +475,7 @@ class SingleCombatShootTask(BaseTask):
         terminateds["__all__"] = any(terminateds.get(aid, False) for aid in AGENT_IDS)
         truncateds["__all__"] = all(truncateds.get(aid, False) for aid in AGENT_IDS)
 
-        # Debug: log actual episode length to info
-        if terminateds.get("__all__") or truncateds.get("__all__"):
-            for aid in AGENT_IDS:
-                infos[aid]["_episode_steps"] = self._step_count
-                infos[aid]["_termination"] = infos[aid].get("termination_reason", "?")
-                import sys
-                print(f"[EPISODE END] steps={self._step_count} reason={infos[aid].get('termination_reason','?')} "
-                      f"rem_missiles={self.remaining_missiles.get(aid,0)}", file=sys.stderr, flush=True)
+        self._last_episode_steps = self._step_count if (terminateds.get("__all__") or truncateds.get("__all__")) else 0
 
         return terminateds, truncateds, infos
 
@@ -564,7 +614,7 @@ class SingleCombatShootTask(BaseTask):
                     new_alt = 3000.0 - d * 800.0
 
         ts.ref_hdg = new_hdg
-        ts.ref_alt_m = max(500.0, new_alt)  # floor at 500m
+        ts.ref_alt_m = max(2000.0, new_alt)  # floor at 2000m — safe margin above crash threshold
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Internal: reward helpers

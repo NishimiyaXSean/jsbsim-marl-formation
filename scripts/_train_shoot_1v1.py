@@ -59,7 +59,7 @@ def main():
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=0.3,
+            entropy_coeff=0.03,
             vf_clip_param=1000.0,
             grad_clip=0.5,
             train_batch_size=1024,
@@ -91,7 +91,7 @@ def main():
     os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
 
     print(f"Training 1v1 shoot — {args.iterations} iters, difficulty={args.difficulty:.1f}, "
-          f"lr={args.lr}, entropy=0.3")
+          f"lr={args.lr}, entropy=0.03")
     print(f"Output: {output_dir}")
 
     for i in range(args.iterations):
