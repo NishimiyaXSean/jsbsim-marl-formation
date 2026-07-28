@@ -82,10 +82,14 @@ NUM_MISSILES = 6                # per aircraft
 
 # ── Reward weights ───────────────────────────────────────────────────────────
 REWARD_VALID_LAUNCH = 50.0      # immediate credit for firing in valid envelope
-REWARD_HIT = 1000.0             # missile hit on enemy ← dominate over shaping
-REWARD_SHOTDOWN = -1000.0       # hit by enemy missile
-REWARD_CRASH = -1000.0          # low altitude / overstress
+REWARD_HIT = 2000.0             # missile hit on enemy — must dominate all shaping
+REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
+REWARD_CRASH = -2000.0          # low altitude / overstress
 REWARD_SHOOT_PENALTY = -10.0    # cost per missile fired (anti-spam)
+
+# ── Shaping weight overrides (reduced to prevent reward hacking) ─────────────
+PROGRESS_WEIGHT = 0.2           # was 1.0 — reduced so hit reward dominates
+ATA_WEIGHT = 1.5                # was 8.0 — reduced so hit reward dominates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -119,9 +123,9 @@ class SingleCombatShootTask(BaseTask):
         self._observation_space = gym.spaces.Dict({aid: single_obs for aid in AGENT_IDS})
         self._action_space = gym.spaces.Dict({aid: single_act for aid in AGENT_IDS})
 
-        # ── Reward modules (reuse existing) ─────────────────────────────────
-        self._progress = ProgressReward(config)
-        self._ata = ATAAlignmentReward(config)
+        # ── Reward modules (reuse existing with reduced shaping weights) ────
+        self._progress = ProgressReward({**config, "progress_weight": PROGRESS_WEIGHT})
+        self._ata = ATAAlignmentReward({**config, "ata_weight": ATA_WEIGHT})
         self._alt_penalty = AltitudeDeviationPenalty()
 
         # ── Task state ──────────────────────────────────────────────────────
@@ -260,12 +264,13 @@ class SingleCombatShootTask(BaseTask):
     def step(self, env) -> None:
         """Task-level per-step: apply hit effects, check self-launched missiles."""
         self._step_count += 1
-        # Check if any pursuer-launched missile hit
-        for ps in env.pursuers:
+        # Track hit events for get_reward (one-shot per missile)
+        self._hit_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
+        for i, (ps, aid) in enumerate(zip(env.pursuers, AGENT_IDS)):
             for m in list(ps.launch_missiles):
-                if m.is_success:
-                    # Mark reward — handled in get_reward
-                    pass
+                if m.is_success and not getattr(m, '_hit_rewarded', False):
+                    m._hit_rewarded = True
+                    self._hit_this_step[aid] = True
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Observation
@@ -393,12 +398,11 @@ class SingleCombatShootTask(BaseTask):
             # ── Event-driven rewards ────────────────────────────────────────
             r_event = 0.0
 
-            # Hit: check launched missiles for success
-            for m in ps.launch_missiles:
-                if m.is_success:
-                    r_event += REWARD_HIT
+            # Hit: use flag set in step() (avoids timing issues)
+            if self._hit_this_step.get(aid, False):
+                r_event += REWARD_HIT
 
-            # Shot down by enemy
+            # Shot down by enemy (one-shot)
             if self._prev_alive.get(aid, True) and not ps.is_alive:
                 r_event += REWARD_SHOTDOWN
 
@@ -627,7 +631,7 @@ class SingleCombatShootTask(BaseTask):
         prev_dist_2d = getattr(ps, 'prev_dist', cur_dist_2d)
         delta = prev_dist_2d - cur_dist_2d  # positive = closing
         dist_factor = 1.0 + max(0.0, (500.0 - cur_dist_2d) / 250.0)
-        reward = delta * 0.5 * DECISION_STEPS * dist_factor
+        reward = PROGRESS_WEIGHT * delta * 0.5 * DECISION_STEPS * dist_factor
         ps.prev_dist = cur_dist_2d
         return float(reward)
 
@@ -639,7 +643,7 @@ class SingleCombatShootTask(BaseTask):
         los_dir = los_vec / max(dist, 1e-6)
         cos_ata = float(np.dot(p_fwd, los_dir))
         dist_factor = np.clip(1.0 - dist / MAX_DIST, 0.1, 1.0)
-        return float(8.0 * cos_ata * dist_factor * DECISION_STEPS)
+        return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS)
 
     def _alt_reward(self, ps, target) -> float:
         """Penalty for extreme altitude deviation from target."""
