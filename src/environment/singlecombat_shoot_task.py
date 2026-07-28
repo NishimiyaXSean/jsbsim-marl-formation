@@ -165,6 +165,7 @@ class SingleCombatShootTask(BaseTask):
         self._prev_alive = {aid: True for aid in AGENT_IDS}
         self._prev_missile_count = {aid: NUM_MISSILES for aid in AGENT_IDS}
         self._has_launched_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
+        self._commanded_fire: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
 
         # ── Reward breakdown for diagnostics ────────────────────────────────
         self._reward_breakdown: Dict[str, Dict[str, float]] = {}
@@ -256,6 +257,7 @@ class SingleCombatShootTask(BaseTask):
 
             # ── Fire logic (WEZ-masked: fire only available in kill position) ──
             self._has_launched_this_step[aid] = False
+            self._commanded_fire[aid] = (fire == 1)
             if fire == 1 and ps.is_alive and self.remaining_missiles[aid] > 0:
                 self._try_launch_missile(env, ps, aid, step)
 
@@ -385,7 +387,13 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_progress + r_ata + r_alt
 
-            # ── Event-driven rewards (no launch reward — WEZ mask gates fire) ─
+            # ── Fire-spam penalty: commanded fire but blocked by cooldown/WEZ ──
+            r_spam = 0.0
+            if self._commanded_fire.get(aid, False) and not self._has_launched_this_step.get(aid, False):
+                r_spam = -1.0  # small penalty for holding down the fire key
+            r += r_spam
+
+            # ── Event-driven rewards ────────────────────────────────────────
             r_event = 0.0
 
             # Hit: use flag set in step() (avoids timing issues)
@@ -402,6 +410,7 @@ class SingleCombatShootTask(BaseTask):
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
+                "FireSpamPenalty": {"p0": r_spam},
                 "EventReward": {"p0": r_event},
             }
 
