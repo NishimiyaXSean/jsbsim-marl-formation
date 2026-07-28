@@ -476,17 +476,15 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
-        """Action mask with WEZ (Weapons Engagement Zone) gating.
+        """Action mask with WEZ + Dynamic Launch Zone (DLZ) gating.
 
         Flat mask layout: [speed(3), heading(5), altitude(3), fire(2)]
-        Fire indices: fire_start+0=Hold(11), fire_start+1=Fire(12)
+        Fire = index 12, only unmasked when ALL conditions met.
 
-        Fire is ONLY unmasked when ALL conditions are met:
-          - Target alive and within range (1.5-8km)
-          - ATA < 15° (nose precisely on target)
-          - Missiles remaining
-
-        This forces the RL agent to first learn manoeuvring into kill position.
+        Dynamic DLZ: max range depends on Aspect Angle (AA)
+          - Head-on  (AA≈180°): missile+target closing fast → 8km
+          - Tail-chase (AA≈0°):  missile must catch up    → 3km
+          - Linear interpolation between
         """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
         fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 11
@@ -509,25 +507,31 @@ class SingleCombatShootTask(BaseTask):
         if not target.is_alive:
             can_fire = False
 
-        # Condition 3: within WEZ range
+        # Condition 3: nose on target (ATA < MAX_ATTACK_ANGLE)
         if can_fire:
             p_pos = ps.aircraft.position_ned
             t_pos = target.aircraft.position_ned
             dist = float(np.linalg.norm(p_pos - t_pos))
-            if dist < MIN_ATTACK_DISTANCE or dist > MAX_ATTACK_DISTANCE:
-                can_fire = False
-
-        # Condition 4: nose on target (ATA < 15°)
-        if can_fire:
-            p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
             los_dir = (t_pos - p_pos) / max(dist, 1e-6)
+            p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
             cos_ata = float(np.dot(p_fwd, los_dir))
             ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
             if ata_deg > MAX_ATTACK_ANGLE:
                 can_fire = False
 
+        # Condition 4: within Dynamic DLZ range
+        if can_fire:
+            t_fwd = compute_forward_vector(target.aircraft.rpy_rad)
+            # AA: angle between target nose and LOS (0=target facing away, 180=target facing toward)
+            cos_aa = float(np.dot(t_fwd, los_dir))
+            aa_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_aa))))
+            # Dynamic max range: 3km (tail) → 8km (head-on)
+            dynamic_max_dist = 3000.0 + 5000.0 * (aa_deg / 180.0)
+            if dist < MIN_ATTACK_DISTANCE or dist > dynamic_max_dist:
+                can_fire = False
+
         if not can_fire:
-            mask[fire_start + 1] = 0.0  # lock Fire, allow Hold
+            mask[fire_start + 1] = 0.0
 
         return mask
 
