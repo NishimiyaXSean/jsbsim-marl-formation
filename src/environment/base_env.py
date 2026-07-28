@@ -275,6 +275,10 @@ class BaseEnv(MultiAgentEnv):
                 ts.autopilot.reset(initial_speed_mps=160.0)
                 ts.ref_hdg = target_hdg
                 ts.ref_alt_m = 3000.0
+                # Reset combat state (critical: target stays dead otherwise)
+                ts.is_alive = True
+                ts.launch_missiles.clear()
+                ts.under_missiles.clear()
 
         # ── Warmup: 3s level flight ─────────────────────────────────────
         warmup = int(3.0 * CTRL_FREQ)

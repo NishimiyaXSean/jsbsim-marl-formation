@@ -109,11 +109,9 @@ class SingleCombatShootTask(BaseTask):
         self.M = N_TARGETS
 
         # ── Spaces ──────────────────────────────────────────────────────────
-        single_obs = gym.spaces.Dict({
-            "obs": gym.spaces.Box(-1.0, 1.0, (OBS_DIM,), dtype=np.float32),
-            "global_state": gym.spaces.Box(-1.0, 1.0, (GLOBAL_DIM,), dtype=np.float32),
-            "action_mask": gym.spaces.Box(0.0, 1.0, (N_ACTIONS,), dtype=np.float32),
-        })
+        # Flat observation = obs(25) + action_mask(13) = 38-dim Box
+        # This avoids Dict spaces that complicate RLlib model serialisation
+        single_obs = gym.spaces.Box(-1.0, 1.0, (OBS_DIM + N_ACTIONS,), dtype=np.float32)
         single_act = gym.spaces.MultiDiscrete(
             [N_SPEED_DELTA, N_HEADING_DELTA, N_ALT_DELTA, N_FIRE])
 
@@ -147,6 +145,7 @@ class SingleCombatShootTask(BaseTask):
 
     def reset(self, env) -> None:
         """Initialize missile state, target evasion state, and reward tracking."""
+        self._step_count = 0  # track actual episode length
         self._last_termination_reason = "none"
 
         # ── Missile state ───────────────────────────────────────────────────
@@ -206,6 +205,7 @@ class SingleCombatShootTask(BaseTask):
 
     def step(self, env) -> None:
         """Task-level per-step: apply hit effects, check self-launched missiles."""
+        self._step_count += 1
         # Check if any pursuer-launched missile hit
         for ps in env.pursuers:
             for m in list(ps.launch_missiles):
@@ -298,18 +298,10 @@ class SingleCombatShootTask(BaseTask):
                     ], dtype=np.float32)
 
             obs = np.concatenate([self_feat, target_feat, missile_feat]).astype(np.float32)
-
-            # ── Global state (both aircraft) ────────────────────────────────
-            global_state = self._build_global_state(env)
-
-            # ── Action mask ─────────────────────────────────────────────────
+            # Flatten: obs + action_mask concatenated → single Box
             mask = self.get_action_mask(env, aid)
-
-            obs_dict[aid] = {
-                "obs": obs,
-                "global_state": global_state,
-                "action_mask": mask,
-            }
+            flat_obs = np.concatenate([obs, mask]).astype(np.float32)
+            obs_dict[aid] = flat_obs
 
         return obs_dict
 
@@ -425,6 +417,15 @@ class SingleCombatShootTask(BaseTask):
 
         terminateds["__all__"] = any(terminateds.get(aid, False) for aid in AGENT_IDS)
         truncateds["__all__"] = all(truncateds.get(aid, False) for aid in AGENT_IDS)
+
+        # Debug: log actual episode length to info
+        if terminateds.get("__all__") or truncateds.get("__all__"):
+            for aid in AGENT_IDS:
+                infos[aid]["_episode_steps"] = self._step_count
+                infos[aid]["_termination"] = infos[aid].get("termination_reason", "?")
+                import sys
+                print(f"[EPISODE END] steps={self._step_count} reason={infos[aid].get('termination_reason','?')} "
+                      f"rem_missiles={self.remaining_missiles.get(aid,0)}", file=sys.stderr, flush=True)
 
         return terminateds, truncateds, infos
 
