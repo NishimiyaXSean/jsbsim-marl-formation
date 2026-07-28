@@ -513,21 +513,57 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def _update_target_evasion(self, env, ts) -> None:
-        """Rule-based target control — gentle S-turns.
+        """Rule-based target control — S-turns + missile evasion reaction.
 
-        The target simply maintains altitude and speed while varying heading
-        sinusoidally. This gives the pursuer a moving target that is easy to
-        track, suitable for initial training.
+        difficulty=0.0: straight-and-level (no evasion).  Easy target for
+                       Stage 1 curriculum — RL learns fire→hit→+1000.
+
+        difficulty>0.0: S-turn evasion + missile threat reaction.
+                       Higher difficulty → harder evasion → forced to close
+                       range before firing for a reliable hit.
         """
         self._target_evasion_step += 1
         t = self._target_evasion_step * DECISION_DT
-
-        # Gentle S-turn: ±30° oscillation, period ~20s
         d = self._difficulty
-        hdg_var = d * 30.0 * math.sin(t * 0.3)
 
-        ts.ref_hdg = float((self._target_base_hdg + hdg_var) % 360.0)
-        ts.ref_alt_m = 3000.0
+        # ── Baseline S-turn ────────────────────────────────────────────────
+        hdg_var = d * 30.0 * math.sin(t * 0.3)
+        new_hdg = float((self._target_base_hdg + hdg_var) % 360.0)
+        new_alt = 3000.0
+
+        # ── Missile threat reaction (difficulty > 0 only) ──────────────────
+        if d > 0.0 and len(ts.under_missiles) > 0:
+            # Find the closest incoming missile
+            closest_dist = float('inf')
+            closest_missile = None
+            for m in ts.under_missiles:
+                if m.is_alive:
+                    dist = m.target_distance
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_missile = m
+
+            if closest_missile is not None:
+                # Hard break turn away from missile + dive for energy
+                m_pos = closest_missile.get_absolute_position()
+                t_pos = ts.aircraft.position_ned
+                los_to_missile = np.arctan2(m_pos[1] - t_pos[1],
+                                             m_pos[0] - t_pos[0])
+
+                # Turn perpendicular to incoming missile (beam defence)
+                # More aggressive at higher difficulty and closer ranges
+                break_strength = d * min(1.0, 3000.0 / max(closest_dist, 1.0))
+                side = 1.0 if math.sin(t * 0.5) > 0 else -1.0  # alternate direction
+                evade_hdg = float(np.degrees(los_to_missile) + side * 90.0 * break_strength)
+                new_hdg = float((new_hdg + evade_hdg) * break_strength +
+                                new_hdg * (1.0 - break_strength)) % 360.0
+
+                # Dive to trade altitude for speed (energy manoeuvre)
+                if closest_dist < 5000.0:
+                    new_alt = 3000.0 - d * 800.0
+
+        ts.ref_hdg = new_hdg
+        ts.ref_alt_m = max(500.0, new_alt)  # floor at 500m
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Internal: reward helpers

@@ -118,7 +118,12 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--difficulty", type=float, default=0.0,
+                        help="Target evasion difficulty: 0.0=straight, 0.3=gentle, 0.5=aggressive")
     args = parser.parse_args()
+
+    # ── Curriculum config ───────────────────────────────────────────────
+    env_config = {"difficulty_level": args.difficulty}
 
     # ── Register env and model ──────────────────────────────────────────
     register_env(ENV_NAME, lambda c: env_creator(c))
@@ -130,8 +135,6 @@ def main():
     ray.init(ignore_reinit_error=True, num_cpus=2, logging_level="ERROR")
 
     # ── Build config ────────────────────────────────────────────────────
-    env_config = {"difficulty_level": 0.0}
-
     config = (
         PPOConfig()
         .environment(ENV_NAME, env_config=env_config)
