@@ -248,8 +248,7 @@ class MissileSimulator:
     ) -> None:
         """Activate the missile at the parent's current NED position."""
         self.parent_aircraft = parent
-
-        # Set launch origin to parent's current absolute NED
+        self.parent_aircraft.launch_missiles.append(self)
         self._launch_origin = parent_ned.copy()
 
         # Store WGS84 reference for ACMI rendering
