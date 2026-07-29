@@ -406,7 +406,10 @@ class SingleCombatShootTask(BaseTask):
             r_ata = self._ata_reward(ps, target)
             r_alt = self._alt_reward(ps, target)
 
-            r += r_progress + r_ata + r_alt
+            # WEZ maintenance: reward for staying in kill position
+            r_wez = 2.0 if self._is_valid_launch_envelope(ps, target) else 0.0
+
+            r += r_progress + r_ata + r_alt + r_wez
 
             # ── Fire-spam penalty: commanded fire but blocked by cooldown/WEZ ──
             r_spam = 0.0
@@ -423,7 +426,10 @@ class SingleCombatShootTask(BaseTask):
                     m._accuracy_rewarded = True
                     actual_dist = getattr(m, 'miss_distance', 300.0)
                     accuracy_score = max(0.0, 1.0 - (actual_dist / 300.0))
-                    missile_reward = REWARD_HIT_BASE + (REWARD_HIT_BONUS * accuracy_score)
+                    # Launch range multiplier: 1500m→1.0, 4000m→~0.3
+                    l_dist = getattr(m, 'launch_dist', 3000.0)
+                    range_mult = np.clip(1.0 - (l_dist - 1500.0) / 3500.0, 0.3, 1.0)
+                    missile_reward = (REWARD_HIT_BASE + REWARD_HIT_BONUS * accuracy_score) * range_mult
                     r_event += missile_reward
 
             # Shot down by enemy (one-shot)
@@ -441,6 +447,7 @@ class SingleCombatShootTask(BaseTask):
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
+                "WEZ_Maintenance": {"p0": r_wez},
                 "FireSpamPenalty": {"p0": r_spam},
                 "EventReward": {"p0": r_event},
             }
@@ -462,7 +469,7 @@ class SingleCombatShootTask(BaseTask):
         infos = {}
 
         max_steps = 1500  # allow longer multi-hit engagements
-        low_alt = 1500.0
+        low_alt = 1000.0  # tolerance for vertical manoeuvres when chasing diving target
 
         for ps, aid in zip(env.pursuers, AGENT_IDS):
             s = ps.aircraft.state
@@ -639,6 +646,9 @@ class SingleCombatShootTask(BaseTask):
         m = MissileSimulator.create(
             parent=ps, target=target, uid=uid, dt=1.0 / 60.0,
             parent_uid=parent_uid)
+        # Record launch distance for range-based reward multiplier
+        m.launch_dist = float(np.linalg.norm(
+            ps.aircraft.position_ned - target.aircraft.position_ned))
         env.add_temp_simulator(m)
 
         # Update state
