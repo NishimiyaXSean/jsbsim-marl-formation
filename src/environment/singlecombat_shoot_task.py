@@ -249,8 +249,12 @@ class SingleCombatShootTask(BaseTask):
             # ── Flight: incremental deltas on current reference ─────────────
             ps.ref_hdg = float(
                 (ps.ref_hdg + DELTA_HEADINGS[hdg_idx]) % 360.0)
+            # Clamp altitude to target ± 2000m engagement cylinder
+            t_alt = float(env.targets[0].aircraft.state["alt_m"]) if env.M > 0 else 3000.0
             ps.ref_alt_m = float(np.clip(
-                ps.ref_alt_m + DELTA_ALTITUDES[alt_idx], 500.0, 8000.0))
+                ps.ref_alt_m + DELTA_ALTITUDES[alt_idx],
+                max(500.0, t_alt - 2000.0),
+                t_alt + 2000.0))
             ps._cmd_speed = float(np.clip(
                 getattr(ps, '_cmd_speed', 200.0) + DELTA_SPEEDS[speed_idx],
                 120.0, 400.0))
@@ -417,6 +421,11 @@ class SingleCombatShootTask(BaseTask):
             if self._prev_alive.get(aid, True) and not ps.is_alive:
                 r_event += REWARD_SHOTDOWN
 
+            # Fled combat — altitude desertion (one-shot, same severity as crash)
+            if (target.is_alive and
+                abs(float(ps.aircraft.state["alt_m"]) - float(target.aircraft.state["alt_m"])) > 3000.0):
+                r_event += REWARD_CRASH
+
             r += r_event
 
             self._reward_breakdown = {
@@ -461,6 +470,12 @@ class SingleCombatShootTask(BaseTask):
                 terminateds[aid] = True
                 infos[aid] = {"termination_reason": "low_altitude"}
                 self._last_termination_reason = "low_altitude"
+            # Fled combat — altitude deviation > 3000m from target
+            elif (target is not None and target.is_alive
+                  and abs(alt_m - float(target.aircraft.state["alt_m"])) > 3000.0):
+                terminateds[aid] = True
+                infos[aid] = {"termination_reason": "fled_combat_altitude"}
+                self._last_termination_reason = "fled_combat_altitude"
             # Target HP depleted (all hits landed)
             elif target is not None and target.hits_taken >= target.max_hits:
                 terminateds[aid] = True
@@ -705,12 +720,20 @@ class SingleCombatShootTask(BaseTask):
         return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS)
 
     def _alt_reward(self, ps, target) -> float:
-        """Penalty for extreme altitude deviation from target."""
+        """Penalty for altitude deviation — linear then quadratic.
+
+        - 300-1500m: mild linear penalty
+        - >1500m:    severe quadratic penalty (discourages fleeing to space)
+        """
         t_alt = float(target.aircraft.state["alt_m"])
-        alt_diff = abs(float(ps.aircraft.state["alt_m"]) - t_alt)
+        p_alt = float(ps.aircraft.state["alt_m"])
+        alt_diff = abs(p_alt - t_alt)
+        penalty = 0.0
         if alt_diff > 300.0:
-            return float(-0.1 * (alt_diff - 300.0) / 1000.0 * DECISION_STEPS)
-        return 0.0
+            penalty -= 0.1 * (alt_diff - 300.0) / 1000.0 * DECISION_STEPS
+        if alt_diff > 1500.0:
+            penalty -= 2.0 * ((alt_diff - 1500.0) / 1000.0) ** 2 * DECISION_STEPS
+        return float(penalty)
 
     def _is_valid_launch_envelope(self, ps, target) -> bool:
         """Check if current state is within valid missile launch parameters."""
