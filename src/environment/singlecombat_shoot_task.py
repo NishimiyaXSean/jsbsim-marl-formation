@@ -274,14 +274,14 @@ class SingleCombatShootTask(BaseTask):
         The target only dies when hits_taken >= max_hits.
         """
         self._step_count += 1
-        self._hit_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
+        self._hit_this_step: Dict[str, int] = {aid: 0 for aid in AGENT_IDS}
         target = env.targets[0] if env.M > 0 else None
 
         for i, (ps, aid) in enumerate(zip(env.pursuers, AGENT_IDS)):
             for m in list(ps.launch_missiles):
                 if m.is_success and not getattr(m, '_hit_rewarded', False):
                     m._hit_rewarded = True
-                    self._hit_this_step[aid] = True
+                    self._hit_this_step[aid] += 1  # counter, not bool (twin missiles)
                     if target is not None:
                         target.hits_taken += 1
                     # Log the hit
@@ -408,9 +408,10 @@ class SingleCombatShootTask(BaseTask):
             # ── Event-driven rewards ────────────────────────────────────────
             r_event = 0.0
 
-            # Hit: use flag set in step() (avoids timing issues)
-            if self._hit_this_step.get(aid, False):
-                r_event += REWARD_HIT
+            # Hit: use counter from step() — handles twin missiles in same frame
+            hits_now = self._hit_this_step.get(aid, 0)
+            if hits_now > 0:
+                r_event += REWARD_HIT * hits_now
 
             # Shot down by enemy (one-shot)
             if self._prev_alive.get(aid, True) and not ps.is_alive:
