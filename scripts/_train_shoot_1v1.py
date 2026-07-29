@@ -101,8 +101,8 @@ def main():
         # Fire rate: fraction of actions where fire==1 (flat index 12 of 13)
         # Note: this is an approximation — RLlib doesn't expose action histograms easily
 
-        if i % 10 == 0 or i < 5:
-            print(f"  iter {i:3d}: rew={rew:+.0f}  len={length:.0f}")
+        # Log every iteration for fine-grained per-episode analysis
+        print(f"  iter {i:3d}: rew={rew:+.0f}  len={length:.0f}")
 
         if not np.isnan(rew) and rew > best_reward:
             best_reward = rew
