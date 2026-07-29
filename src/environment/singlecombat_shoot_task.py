@@ -216,9 +216,9 @@ class SingleCombatShootTask(BaseTask):
         p0.ref_hdg, p0.ref_alt_m = p0_hdg, t_alt
         p0._cmd_speed = p_spd
 
-        # Warmup JSBSim
+        # Warmup JSBSim — P0 flies at its OWN offset heading, T0 at its heading
         for _ in range(int(1.0 * 60)):
-            for ac, h, a, s in [(p0, t_hdg, t_alt, p_spd), (t0, t_hdg, t_alt, t_spd)]:
+            for ac, h, a, s in [(p0, p0_hdg, t_alt, p_spd), (t0, t_hdg, t_alt, t_spd)]:
                 st = ac.aircraft.state
                 tgt = FlightControlTargets(heading_deg=h, altitude_m=a, speed_mps=s)
                 thr, elev, ail, rud = ac.fc.compute(st, tgt, PHYSICS_DT)
