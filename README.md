@@ -739,6 +739,145 @@ data/models/           — Pretrained weights
 
 ---
 
-##   License##   License
+##  Guided Weapon System — 1v1 Missile Combat (Jul 27-29)
+
+> **Status:** Phase 1-5 complete — Proximity fuze + WEZ mask + Dynamic DLZ + Multi-hit HP + Anti-climb guard.
+>
+> End-to-end missile combat system: point-mass 3-DOF missile dynamics, proportional navigation guidance,
+> proximity fuze, RL-based shooter with WEZ-gated firing, curriculum training.
+
+---
+
+###  Missile Physics: MissileSimulator
+
+3-DOF point-mass model with proportional navigation (PN guidance, K=3).
+Integrated at **60 Hz** inside BaseEnv's 12-step physics loop. No JSBSim dependency.
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Mass | 84 kg | AIM-9L initial mass |
+| Burn time | 3 s | Engine thrust duration |
+| Isp | 120 s | Specific impulse |
+| Lethal radius | 300 m | Proximity fuze trigger range |
+| Contact fuze | 10 m | Direct-hit threshold |
+| Max flight time | 60 s | Self-destruct after |
+| Min speed | 150 m/s | Self-destruct below |
+
+**Proximity Fuze Logic:**
+1. Track `min_distance` (Closest Point of Approach) continuously
+2. Contact fuze: distance < 10m → instant detonation
+3. Proximity fuze: within 300m AND distance increasing (past CPA) → detonate at closest point
+4. Miss distance recorded as `miss_distance` for accuracy-based RL reward
+
+**ACMI Rendering:**
+- Active missile: hex ID (301+), `Name=AIM-9L`, `Type=Air+FixedWing`, `Color=Red`, `Parent=<aircraft_id>` 
+- Hit: Yellow explosion (`Type=Misc+Explosion`)
+- Miss: Grey marker + Grey explosion
+- WGS84 coordinate conversion from NED via stored launch lat/lon
+
+---
+
+###  1v1 Task: SingleCombatShootTask
+
+| Component | Specification |
+|-----------|--------------|
+| N/M | 1 pursuer, 1 target |
+| Action | `MultiDiscrete([3 speed_delta, 5 hdg_delta, 3 alt_delta, 2 fire])` |
+| Observation | `Box(38)` — self(12) + target(7) + missile(6) + mask(13) |
+| Agent IDs | `["p0"]` |
+| Decision rate | 5 Hz (0.2s, 12 sub-steps at 60 Hz) |
+
+**Geometry:** Task `reset()` overrides BaseEnv default → tail-chase at 2-5 km, both aircraft same heading.
+Pursuer behind target (opposite-of-heading displacement), JSBSim lat/lon synced with position_ned.
+
+---
+
+###  Combat Mechanics
+
+**WEZ (Weapons Engagement Zone) Mask:**
+Fire action (index 12) is only unmasked when ALL conditions are met:
+- Target alive + missiles remaining
+- Distance 1.5–8 km
+- ATA (Antenna Train Angle) < 15° — nose precisely on target
+
+**Dynamic DLZ (Dynamic Launch Zone):**
+Max range depends on Aspect Angle:
+- Head-on (AA≈180°): 8 km
+- Tail-chase (AA≈0°): 3 km
+- Linear interpolation: `dynamic_max_dist = 3000 + 5000 × (AA_deg / 180)`
+
+**Multi-Hit HP System:**
+- Target has `hits_taken` / `max_hits` (4)
+- Missile physics do NOT auto-kill target → task tracks hits independently
+- Episode ends when HP=0 OR all missiles launched + resolved
+- Per-missile accuracy reward: `REWARD_HIT_BASE(1000) + REWARD_HIT_BONUS(1000) × accuracy_score`
+
+**Anti-Climb Triple Guard:**
+1. `ref_alt_m` clamped to target ±2000m in `apply_actions()`
+2. Quadratic altitude penalty (>1500m deviation = severe)
+3. Desertion termination (>3000m deviation = fled_combat, -2000 pts)
+
+**Reward Structure:**
+| Module | Weight | Signal |
+|--------|--------|--------|
+| Progress | 0.2 | 2D horizontal approach |
+| ATA | 1.5 | Nose-on-target alignment |
+| Altitude | linear + quadratic | Deviation penalty |
+| Hit base | +1000 | Guaranteed for any hit |
+| Hit bonus | +1000 × accuracy | 0m→1000, 300m→0 |
+| Fire spam | -1 | Fire command blocked by WEZ/cooldown |
+| Shot down/crash | -2000 | One-shot |
+| Desertion | -2000 | >3000m altitude deviation |
+
+**Termination Conditions:**
+- `target_killed` — HP depleted (hits ≥ max_hits)
+- `ammo_exhausted` — all missiles launched AND resolved
+- `low_altitude` — < 1500m
+- `fled_combat_altitude` — altitude deviation > 3000m
+- `lost_target` — > 15 km
+- `timeout` — > 1500 steps
+
+---
+
+###  Training: Curriculum Learning
+
+| Stage | Difficulty | Target Behavior | Iterations | Best Reward |
+|-------|-----------|----------------|-----------|-------------|
+| Stage 1 | d=0.0 | Straight flight | 300 | +7,500+ |
+| Stage 2 | d=0.3 | S-turn + missile evasion | 300 | +8,200 |
+
+Training script: `scripts/_train_shoot_1v1.py`
+- RLlib PPO with MLP default model (FCN [256,256])
+- LR=1e-3, entropy=0.03, train_batch=1024
+- Flat Box(38) observation (no Dict spaces — avoids Ray serialization issues)
+
+**Eval Scripts:**
+- `scripts/_test_missile_rulebased.py` — rule-based fire-at-range test (verifies missile physics)
+- `scripts/_render_shoot_acmi.py` — ACMI + top-down trajectory for trained checkpoints
+- `scripts/_render_wez_results.py` — ACMI + top-down + 3D trajectory for WEZ checkpoints
+
+---
+
+###  Key Files (Weapon System)
+
+```
+src/environment/
+  missile_simulator.py           ★ 3-DOF missile + PN guidance + proximity fuze
+  singlecombat_shoot_task.py     ★ 1v1 shoot: WEZ mask, DLZ, HP, reward, termination
+  base_env.py                    Extended: _tempsims, 60Hz loop, ACMI missile log
+
+scripts/
+  _train_shoot_1v1.py            ★ RLlib PPO for 1v1 shoot
+  _test_missile_rulebased.py     Rule-based missile verification
+  _render_shoot_acmi.py          ACMI + trajectory plot renderer
+  _render_wez_results.py         WEZ results: ACMI + top-down + 3D
+
+results/shoot_training/          ★ Training outputs (ACMI, PNG plots)
+marl_runs/shoot_v*/              Training checkpoint archives
+```
+
+---
+
+##   License
 
 MIT — see [LICENSE](LICENSE) for details.
