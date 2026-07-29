@@ -206,10 +206,14 @@ class SingleCombatShootTask(BaseTask):
         t0.aircraft.position_ned = np.array([t_north_m, t_east_m, t_alt])
         t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
 
+        # Initial heading offset: force agent to MANEUVER into WEZ first
+        heading_bias = float(rng.uniform(30, 60) * rng.choice([-1, 1]))
+        p0_hdg = float((t_hdg + heading_bias) % 360.0)
+
         p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt * 3.28084),
-                          heading_deg=t_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
+                          heading_deg=p0_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
         p0.aircraft.position_ned = np.array([p_north_m, p_east_m, t_alt])
-        p0.ref_hdg, p0.ref_alt_m = t_hdg, t_alt
+        p0.ref_hdg, p0.ref_alt_m = p0_hdg, t_alt
         p0._cmd_speed = p_spd
 
         # Warmup JSBSim
