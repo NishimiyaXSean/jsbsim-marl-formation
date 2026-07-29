@@ -97,6 +97,10 @@ class MissileSimulator:
         self._dphi: float = 0.0
         self._distance_pre: float = np.inf
 
+        # Proximity fuze: track closest approach
+        self.min_distance: float = float('inf')
+        self.miss_distance: float = 0.0  # distance at detonation (for RL reward)
+
         # Launch origin (NED of parent at launch time)
         self._launch_origin: np.ndarray = np.zeros(3)
 
@@ -271,6 +275,8 @@ class MissileSimulator:
         self._dtheta = 0.0
         self._dphi = 0.0
         self._distance_pre = np.inf
+        self.min_distance = float('inf')
+        self.miss_distance = 0.0
         self._dist_increment.clear()
         self._left_t = int(1.0 / self.dt)
         self.render_explosion = False
@@ -298,20 +304,34 @@ class MissileSimulator:
         self._dist_increment.append(distance > self._distance_pre)
         self._distance_pre = distance
 
-        # ── Hit / Miss detection ──────────────────────────────────────────
+        # ── Proximity fuze hit detection ──────────────────────────────────
         target_alive = getattr(self.target_aircraft, 'is_alive', True) if self.target_aircraft is not None else False
-        if distance < self._params.Rc and target_alive:
-            self._status = MissileStatus.HIT
-        elif (
-            self._t > self._params.t_max
-            or np.linalg.norm(self._velocity) < self._params.v_min
-            or sum(self._dist_increment) >= self._dist_increment.maxlen
-            or not target_alive
-        ):
-            self._status = MissileStatus.MISS
-        else:
-            # ── State transition ──────────────────────────────────────────
-            self._state_trans(action)
+
+        if target_alive:
+            # Track closest approach
+            self.min_distance = min(self.min_distance, distance)
+
+            # Contact fuze: direct hit within 10m
+            if distance < 10.0:
+                self.miss_distance = distance
+                self._status = MissileStatus.HIT
+            # Proximity fuze: within lethal radius AND past CPA (distance increasing)
+            elif (distance < self._params.Rc
+                  and distance > self.min_distance
+                  and self.min_distance < self._params.Rc):
+                self.miss_distance = self.min_distance  # detonate at closest point
+                self._status = MissileStatus.HIT
+
+        if self._status != MissileStatus.HIT:
+            if (
+                self._t > self._params.t_max
+                or np.linalg.norm(self._velocity) < self._params.v_min
+                or sum(self._dist_increment) >= self._dist_increment.maxlen
+                or not target_alive
+            ):
+                self._status = MissileStatus.MISS
+            else:
+                self._state_trans(action)
 
     # ── Guidance law (proportional navigation) ───────────────────────────────
 

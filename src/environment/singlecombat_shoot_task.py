@@ -81,7 +81,8 @@ MIN_ATTACK_INTERVAL = 30        # decision steps (6s at 5Hz) — conserve ammo
 NUM_MISSILES = 4                # per aircraft — limited, force precision
 
 # ── Reward weights ───────────────────────────────────────────────────────────
-REWARD_HIT = 2000.0             # missile hit — the ONLY launch-related reward
+REWARD_HIT_BASE = 1000.0        # guaranteed for any hit within lethal radius
+REWARD_HIT_BONUS = 1000.0       # scaled by accuracy: 0m→+1000, 300m→+0
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
 REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mask)
@@ -412,10 +413,14 @@ class SingleCombatShootTask(BaseTask):
             # ── Event-driven rewards ────────────────────────────────────────
             r_event = 0.0
 
-            # Hit: use counter from step() — handles twin missiles in same frame
-            hits_now = self._hit_this_step.get(aid, 0)
-            if hits_now > 0:
-                r_event += REWARD_HIT * hits_now
+            # Hit: per-missile accuracy-based reward
+            for m in list(ps.launch_missiles):
+                if m.is_success and not getattr(m, '_accuracy_rewarded', False):
+                    m._accuracy_rewarded = True
+                    actual_dist = getattr(m, 'miss_distance', 300.0)
+                    accuracy_score = max(0.0, 1.0 - (actual_dist / 300.0))
+                    missile_reward = REWARD_HIT_BASE + (REWARD_HIT_BONUS * accuracy_score)
+                    r_event += missile_reward
 
             # Shot down by enemy (one-shot)
             if self._prev_alive.get(aid, True) and not ps.is_alive:
