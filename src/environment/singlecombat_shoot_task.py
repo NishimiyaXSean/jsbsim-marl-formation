@@ -167,6 +167,15 @@ class SingleCombatShootTask(BaseTask):
         self._has_launched_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
         self._commanded_fire: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
 
+        # ── Launch quality tracking ────────────────────────────────────────
+        self._launch_stats: Dict[str, list] = {
+            "bad": [], "good": [], "premium": [],
+            "closure_vals": [], "ata_vals": [], "range_vals": [],
+        }
+        self._episode_wez_first_step: Dict[str, int] = {aid: 0 for aid in AGENT_IDS}
+        self._episode_fire_first_step: int = 0
+        self._episodes_completed: int = 0
+
         # ── Reward breakdown for diagnostics ────────────────────────────────
         self._reward_breakdown: Dict[str, Dict[str, float]] = {}
 
@@ -555,6 +564,20 @@ class SingleCombatShootTask(BaseTask):
         terminateds["__all__"] = any(terminateds.get(aid, False) for aid in AGENT_IDS)
         truncateds["__all__"] = all(truncateds.get(aid, False) for aid in AGENT_IDS)
 
+        if terminateds.get("__all__") or truncateds.get("__all__"):
+            self._episodes_completed += 1
+            wez_s = self._episode_wez_first_step.get("p0", 0)
+            fire_s = self._episode_fire_first_step if self._episode_fire_first_step > 0 else 0
+            if wez_s > 0:
+                import sys
+                print(f"[TIMING] ep={self._episodes_completed} WEZ_first={wez_s} fire_first={fire_s} "
+                      f"fire_after_WEZ={fire_s - wez_s if fire_s > 0 else 'never'} "
+                      f"ep_steps={self._step_count}",
+                      file=sys.stderr, flush=True)
+            # Reset per-episode trackers
+            self._episode_wez_first_step = {aid: 0 for aid in AGENT_IDS}
+            self._episode_fire_first_step = 0
+
         self._last_episode_steps = self._step_count if (terminateds.get("__all__") or truncateds.get("__all__")) else 0
 
         return terminateds, truncateds, infos
@@ -620,6 +643,10 @@ class SingleCombatShootTask(BaseTask):
 
         if not can_fire:
             mask[fire_start + 1] = 0.0
+        else:
+            # Track first WEZ entry this episode
+            if self._episode_wez_first_step.get(aid, 0) == 0:
+                self._episode_wez_first_step[aid] = self._step_count
 
         return mask
 
@@ -690,6 +717,36 @@ class SingleCombatShootTask(BaseTask):
               f"hdg_err={(ps.ref_hdg-target.ref_hdg+180)%360-180:.0f}deg",
               file=sys.stderr, flush=True)
         env.add_temp_simulator(m)
+
+        # ── Classify launch quality ────────────────────────────────────────
+        closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned,
+                               (t_pos - p_pos) / max(m.launch_dist, 1e-6)))
+        self._launch_stats["closure_vals"].append(closure)
+        self._launch_stats["ata_vals"].append(ata_deg if 'ata_deg' in dir() else 0)
+        self._launch_stats["range_vals"].append(m.launch_dist)
+        if closure > 0 and 'ata_deg' in dir() and ata_deg < 10 and 2000 < m.launch_dist < 4000:
+            self._launch_stats["premium"].append(m.launch_dist)
+            tag = "PREMIUM"
+        elif closure > 0:
+            self._launch_stats["good"].append(closure)
+            tag = "GOOD"
+        else:
+            self._launch_stats["bad"].append(closure)
+            tag = "BAD"
+        # Print every 20 launches summary
+        total = len(self._launch_stats["good"]) + len(self._launch_stats["bad"]) + len(self._launch_stats["premium"])
+        if total % 20 == 0:
+            import sys
+            print(f"[LAUNCH-STATS] total={total} good={len(self._launch_stats['good'])} "
+                  f"bad={len(self._launch_stats['bad'])} premium={len(self._launch_stats['premium'])} "
+                  f"good_ratio={len(self._launch_stats['good'])/max(total,1)*100:.0f}% "
+                  f"premium_ratio={len(self._launch_stats['premium'])/max(total,1)*100:.0f}% "
+                  f"closure_mean={np.mean(self._launch_stats['closure_vals']):.0f}m/s",
+                  file=sys.stderr, flush=True)
+
+        # Track first fire step this episode
+        if self._episode_fire_first_step == 0:
+            self._episode_fire_first_step = self._step_count
 
         # Update state
         self.remaining_missiles[aid] -= 1
