@@ -410,11 +410,37 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_progress + r_ata + r_alt + r_wez
 
-            # ── Fire-spam penalty: commanded fire but blocked by cooldown/WEZ ──
+            # ── Fire-spam penalty ──────────────────────────────────────────
             r_spam = 0.0
             if self._commanded_fire.get(aid, False) and not self._has_launched_this_step.get(aid, False):
-                r_spam = -1.0  # small penalty for holding down the fire key
+                r_spam = -1.0
             r += r_spam
+
+            # ── Closure shaping at launch ──────────────────────────────────
+            r_closure = 0.0
+            if self._has_launched_this_step.get(aid, False):
+                # Compute closure speed when the agent actually fired
+                p_pos = ps.aircraft.position_ned
+                t_pos = target.aircraft.position_ned
+                los = t_pos - p_pos
+                los_dir = los / max(np.linalg.norm(los), 1e-6)
+                rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
+                closure = float(np.dot(rel_vel, los_dir))
+                # Reward positive closure, penalize negative (target escaping)
+                r_closure = np.clip(closure / 50.0, -5.0, 5.0)
+            r += r_closure
+
+            # ── Quality launch bonus ───────────────────────────────────────
+            r_quality = 0.0
+            if self._has_launched_this_step.get(aid, False):
+                dist = float(np.linalg.norm(ps.aircraft.position_ned - target.aircraft.position_ned))
+                p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+                los_dir = (target.aircraft.position_ned - ps.aircraft.position_ned) / max(dist, 1e-6)
+                cos_ata = float(np.dot(p_fwd, los_dir))
+                ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
+                if closure > 0 and ata_deg < 10.0 and 2000 < dist < 4000:
+                    r_quality = 20.0  # premium launch window
+            r += r_quality
 
             # ── Event-driven rewards ────────────────────────────────────────
             r_event = 0.0
@@ -448,6 +474,8 @@ class SingleCombatShootTask(BaseTask):
                 "AltitudeDeviationPenalty": {"p0": r_alt},
                 "WEZ_Maintenance": {"p0": r_wez},
                 "FireSpamPenalty": {"p0": r_spam},
+                "ClosureShaping": {"p0": r_closure},
+                "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
             }
 
@@ -751,12 +779,13 @@ class SingleCombatShootTask(BaseTask):
         return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS)
 
     def _alt_reward(self, ps, target) -> float:
-        """Penalty for altitude deviation — linear then quadratic.
+        """Penalty for altitude deviation + low-altitude soft warning.
 
-        - 300-1500m: mild linear penalty
+        - 300-1500m: mild linear penalty (deviation from target)
         - >1500m:    severe quadratic penalty (discourages fleeing to space)
+        - <1500m:    soft penalty encouraging higher altitude (AIM-9 needs energy)
         """
-        t_alt = float(target.aircraft.state["alt_m"])
+        t_alt = float(target.aircraft.state["alt_m"]) if target is not None else 3000.0
         p_alt = float(ps.aircraft.state["alt_m"])
         alt_diff = abs(p_alt - t_alt)
         penalty = 0.0
@@ -764,6 +793,9 @@ class SingleCombatShootTask(BaseTask):
             penalty -= 0.1 * (alt_diff - 300.0) / 1000.0 * DECISION_STEPS
         if alt_diff > 1500.0:
             penalty -= 2.0 * ((alt_diff - 1500.0) / 1000.0) ** 2 * DECISION_STEPS
+        # Soft low-altitude penalty — discourage energy loss, not hard termination
+        if p_alt < 1500.0:
+            penalty -= 0.5 * (1500.0 - p_alt) / 500.0 * DECISION_STEPS
         return float(penalty)
 
     def _is_valid_launch_envelope(self, ps, target) -> bool:
