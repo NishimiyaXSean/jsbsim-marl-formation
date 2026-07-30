@@ -122,7 +122,7 @@ class HeadingStabilizer:
     # F-16 at 200 m/s, 70° bank: max turn rate ≈ 7.7°/s (physics limit).
     # The agent learns energy management — slowing to 130 m/s gives 11.9°/s.
     ROLL_PER_DEG_HEADING = 2.5      # deg bank per deg heading error
-    MAX_BANK_DEG = 70.0
+    MAX_BANK_DEG = 55.0  # gentler BFM — avoid energy bleed in missile phase
 
     def __init__(self) -> None:
         # Roll PID with BFM-ported smooth gains + moderate output range.

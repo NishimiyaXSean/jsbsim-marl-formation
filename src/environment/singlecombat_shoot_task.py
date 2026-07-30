@@ -56,8 +56,6 @@ SELF_DIM = 12
 TARGET_DIM = 7
 # Missile threat (incoming): delta_v, delta_alt, AO, TA, distance, side_flag
 MISSILE_DIM = 6
-OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM  # 25
-
 # ── Global state (for centralized critic) ────────────────────────────────────
 GLOBAL_PER_AIRCRAFT = 8    # alt, roll_sin, roll_cos, pitch_sin, pitch_cos, vc, heading_sin, heading_cos
 GLOBAL_DIM = (N_PURSUERS + N_TARGETS) * GLOBAL_PER_AIRCRAFT  # 16
@@ -65,13 +63,15 @@ GLOBAL_DIM = (N_PURSUERS + N_TARGETS) * GLOBAL_PER_AIRCRAFT  # 16
 # ── Action space ─────────────────────────────────────────────────────────────
 N_SPEED_DELTA = 3
 N_HEADING_DELTA = 5
-N_ALT_DELTA = 3
+N_ALT_DELTA = 1     # frozen altitude — missile phase, not rate-fight
 N_FIRE = 2
-N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 13 for mask
+N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 11
+
+OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 25 + 11 = 36
 
 DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
-DELTA_HEADINGS  = [-30.0, -15.0, 0.0, 15.0, 30.0]  # degrees
-DELTA_ALTITUDES = [-100.0,   0.0, 100.0]      # meters
+DELTA_HEADINGS  = [-10.0, -5.0, 0.0, 5.0, 10.0]  # degrees — gentler BFM
+DELTA_ALTITUDES = [0.0]                            # frozen — missile phase, not rate-fight
 
 # ── Missile launch parameters (WEZ: Weapons Engagement Zone) ──────────────────
 MAX_ATTACK_ANGLE = 15.0         # degrees — must be precisely on-target
@@ -548,7 +548,7 @@ class SingleCombatShootTask(BaseTask):
           - Linear interpolation between
         """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
-        fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 11
+        fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 3+5+1=9
 
         if env.M == 0:
             mask[fire_start + 1] = 0.0
@@ -646,9 +646,22 @@ class SingleCombatShootTask(BaseTask):
         m = MissileSimulator.create(
             parent=ps, target=target, uid=uid, dt=1.0 / 60.0,
             parent_uid=parent_uid)
-        # Record launch distance for range-based reward multiplier
-        m.launch_dist = float(np.linalg.norm(
-            ps.aircraft.position_ned - target.aircraft.position_ned))
+        # Record launch geometry for diagnostics
+        t_pos = target.aircraft.position_ned
+        p_pos = ps.aircraft.position_ned
+        m.launch_dist = float(np.linalg.norm(p_pos - t_pos))
+        p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
+        t_fwd = compute_forward_vector(target.aircraft.rpy_rad)
+        los_dir = (t_pos - p_pos) / max(m.launch_dist, 1e-6)
+        cos_ata = float(np.dot(p_fwd, los_dir))
+        cos_aa = float(np.dot(t_fwd, los_dir))
+        closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
+        import sys
+        print(f"[LAUNCH] {uid}: range={m.launch_dist:.0f}m ATA={math.degrees(math.acos(max(-1,min(1,cos_ata)))):.0f}deg "
+              f"AA={math.degrees(math.acos(max(-1,min(1,cos_aa)))):.0f}deg closure={closure:.0f}m/s "
+              f"alt={ps.aircraft.state['alt_m']:.0f}m roll={ps.aircraft.state['roll_deg']:.0f}deg "
+              f"hdg_err={(ps.ref_hdg-target.ref_hdg+180)%360-180:.0f}deg",
+              file=sys.stderr, flush=True)
         env.add_temp_simulator(m)
 
         # Update state
