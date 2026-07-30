@@ -24,7 +24,7 @@ from ray.tune.registry import register_env
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
-ENV_NAME = "jsbsim_shoot_1v1_v1"
+ENV_NAME = "jsbsim_shoot_v101"
 
 
 def env_creator(config):

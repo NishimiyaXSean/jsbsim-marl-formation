@@ -67,7 +67,7 @@ N_ALT_DELTA = 1     # frozen altitude — missile phase, not rate-fight
 N_FIRE = 2
 N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 11
 
-OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 25 + 11 = 36
+OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 12+7+6+11=36
 
 DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
 DELTA_HEADINGS  = [-10.0, -5.0, 0.0, 5.0, 10.0]  # degrees — gentler BFM
@@ -114,9 +114,8 @@ class SingleCombatShootTask(BaseTask):
         self.M = N_TARGETS
 
         # ── Spaces ──────────────────────────────────────────────────────────
-        # Flat observation = obs(25) + action_mask(13) = 38-dim Box
-        # This avoids Dict spaces that complicate RLlib model serialisation
-        single_obs = gym.spaces.Box(-1.0, 1.0, (OBS_DIM + N_ACTIONS,), dtype=np.float32)
+        # Flat observation = obs(25) + action_mask(11) = 36-dim Box
+        single_obs = gym.spaces.Box(-1.0, 1.0, (OBS_DIM,), dtype=np.float32)
         single_act = gym.spaces.MultiDiscrete(
             [N_SPEED_DELTA, N_HEADING_DELTA, N_ALT_DELTA, N_FIRE])
 
