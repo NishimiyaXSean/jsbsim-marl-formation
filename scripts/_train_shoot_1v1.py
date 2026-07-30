@@ -23,6 +23,8 @@ from ray.tune.registry import register_env
 
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
+from ray.rllib.models import ModelCatalog
+from src.models.shoot_mask_model import ShootMaskModel
 
 ENV_NAME = "jsbsim_shoot_v101"
 
@@ -42,6 +44,7 @@ def main():
     args = parser.parse_args()
 
     register_env(ENV_NAME, lambda c: env_creator(c))
+    ModelCatalog.register_custom_model("shoot_mask_model", ShootMaskModel)
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
@@ -49,7 +52,7 @@ def main():
 
     env_config = {"difficulty_level": args.difficulty}
 
-    # Use RLlib's default model — no custom TorchModelV2 needed with flat Box obs
+    # Use custom model with real action mask support
     config = (
         PPOConfig()
         .environment(ENV_NAME, env_config=env_config)
@@ -65,7 +68,7 @@ def main():
             train_batch_size=1024,
             minibatch_size=128,
             num_epochs=10,
-            model={"fcnet_hiddens": [256, 256], "fcnet_activation": "tanh"},
+            model={"custom_model": "shoot_mask_model"},
         )
         .env_runners(
             num_env_runners=1,
