@@ -758,16 +758,18 @@ Integrated at **60 Hz** inside BaseEnv's 12-step physics loop. No JSBSim depende
 | Mass | 84 kg | AIM-9L initial mass |
 | Burn time | 3 s | Engine thrust duration |
 | Isp | 120 s | Specific impulse |
-| Lethal radius | 300 m | Proximity fuze trigger range |
+| Lethal radius | 300 m | Proximity fuze arming radius |
+| Deep penetration | 200 m | CPA must be < 200m to trigger |
 | Contact fuze | 10 m | Direct-hit threshold |
 | Max flight time | 60 s | Self-destruct after |
 | Min speed | 150 m/s | Self-destruct below |
 
-**Proximity Fuze Logic:**
-1. Track `min_distance` (Closest Point of Approach) continuously
-2. Contact fuze: distance < 10m → instant detonation
-3. Proximity fuze: within 300m AND distance increasing (past CPA) → detonate at closest point
-4. Miss distance recorded as `miss_distance` for accuracy-based RL reward
+**Two-Stage Proximity Fuze (v10):**
+1. Stage 1 (arm): enters 300m sphere → `_fuze_armed = True`
+2. Stage 2 (deep): CPA < 200m → `_fuze_deep = True` (confirmed penetration)
+3. Trigger: armed + deep + distance now increasing (past CPA) → detonate at CPA
+4. Miss distance (`miss_distance`) stored for accuracy-based RL reward scoring
+5. Without Stage 2 confirmation, missile continues flying (no edge-grazing explosions)
 
 **ACMI Rendering:**
 - Active missile: hex ID (301+), `Name=AIM-9L`, `Type=Air+FixedWing`, `Color=Red`, `Parent=<aircraft_id>` 
@@ -841,15 +843,35 @@ Max range depends on Aspect Angle:
 
 ###  Training: Curriculum Learning
 
-| Stage | Difficulty | Target Behavior | Iterations | Best Reward |
-|-------|-----------|----------------|-----------|-------------|
-| Stage 1 | d=0.0 | Straight flight | 300 | +7,500+ |
-| Stage 2 | d=0.3 | S-turn + missile evasion | 300 | +8,200 |
+| Version | Stage | Key Features | Iter | Best Reward |
+|---------|-------|-------------|------|-------------|
+| v6 | S1 | Multi-hit HP (4×) + DLZ + WEZ mask | 300 | +7,467 |
+| v6 | S2 | + evasive target (d=0.3) | 300 | +8,182 |
+| v8 | S1 | + Proximity fuze + Anti-climb guard | 300 | +7,435 |
+| v8 | S2 | + Accuracy reward (0m→+1000, 300m→+0) | 300 | +9,713 |
+| v9 | S1 | **+ Heading offset 30-60°** → must learn to turn first | 300 | +1,828 |
+| v9 | S2 | + WEZ maint + Range discount + Hard deck 1000m | 300 | +2,385 |
+| **v10** | **S1** | **+ Fixed warmup (P0 own heading) + Two-stage fuze (CPA<200m)** | **300** | **+2,832** |
+| v10 | S2 | (in progress) | 300 | TBD |
 
-Training script: `scripts/_train_shoot_1v1.py`
+> **v8→v9→v10 进化路径**: 航向偏置让训练从"出身即满分"(+7k)回归真实的"先学飞再学打"(−9k→+2.8k)。
+> 两阶段引信确保导弹深侵彻(CPA<200m)再引爆, Tacview中爆炸紧贴目标。
+
+**Training script:** `scripts/_train_shoot_1v1.py`
 - RLlib PPO with MLP default model (FCN [256,256])
 - LR=1e-3, entropy=0.03, train_batch=1024
 - Flat Box(38) observation (no Dict spaces — avoids Ray serialization issues)
+- Now logs every iteration (not every 10) for fine-grained per-episode analysis
+- TensorBoard: `tensorboard --logdir=~/ray_results/ --port=6006`
+
+**v9/v10 Key Optimizations:**
+1. **Heading offset (30-60°)**: P0 starts misaligned—WEZ locked—must learn to turn toward target before firing
+2. **WEZ maintenance reward (+2/step)**: staying in kill position continuously rewarded, encourages "six o'clock" discipline
+3. **Launch range discount**: closer launch = higher reward multiplier (1500m→1.0, 4000m→0.3)
+4. **Two-stage proximity fuze**: arm at 300m → deep penetration (CPA<200m) → trigger on pull-away. Explosions now visually on-target in Tacview
+5. **Hard deck 1500→1000m**: more room for vertical maneuvers when chasing diving targets
+6. **Dry-fire penalty (-1)**: discourages spamming fire key when WEZ-locked
+7. **Anti-climb triple guard**: altitude clamp ±2000m + quadratic penalty + desertion termination
 
 **Eval Scripts:**
 - `scripts/_test_missile_rulebased.py` — rule-based fire-at-range test (verifies missile physics)
