@@ -97,9 +97,11 @@ class MissileSimulator:
         self._dphi: float = 0.0
         self._distance_pre: float = np.inf
 
-        # Proximity fuze: track closest approach
+        # Proximity fuze: two-stage (arm → penetrate deep → trigger on pull-away)
         self.min_distance: float = float('inf')
         self.miss_distance: float = 0.0  # distance at detonation (for RL reward)
+        self._fuze_armed: bool = False   # entered 300m sphere
+        self._fuze_deep: bool = False    # CPA < 200m (confirmed deep penetration)
 
         # Launch origin (NED of parent at launch time)
         self._launch_origin: np.ndarray = np.zeros(3)
@@ -277,6 +279,8 @@ class MissileSimulator:
         self._distance_pre = np.inf
         self.min_distance = float('inf')
         self.miss_distance = 0.0
+        self._fuze_armed = False
+        self._fuze_deep = False
         self._dist_increment.clear()
         self._left_t = int(1.0 / self.dt)
         self.render_explosion = False
@@ -304,22 +308,28 @@ class MissileSimulator:
         self._dist_increment.append(distance > self._distance_pre)
         self._distance_pre = distance
 
-        # ── Proximity fuze hit detection ──────────────────────────────────
+        # ── Two-stage proximity fuze ──────────────────────────────────────
         target_alive = getattr(self.target_aircraft, 'is_alive', True) if self.target_aircraft is not None else False
 
         if target_alive:
-            # Track closest approach
             self.min_distance = min(self.min_distance, distance)
+
+            # Stage 1: fuze arms when entering 300m sphere
+            if distance < self._params.Rc:
+                self._fuze_armed = True
+            # Stage 2: confirm deep penetration (CPA < 200m)
+            if self._fuze_armed and self.min_distance < 200.0:
+                self._fuze_deep = True
 
             # Contact fuze: direct hit within 10m
             if distance < 10.0:
                 self.miss_distance = distance
                 self._status = MissileStatus.HIT
-            # Proximity fuze: within lethal radius AND past CPA (distance increasing)
-            elif (distance < self._params.Rc
+            # Proximity fuze: armed + deep + pulling away from CPA
+            elif (self._fuze_deep
                   and distance > self.min_distance
-                  and self.min_distance < self._params.Rc):
-                self.miss_distance = self.min_distance  # detonate at closest point
+                  and distance < self._params.Rc):
+                self.miss_distance = self.min_distance
                 self._status = MissileStatus.HIT
 
         if self._status != MissileStatus.HIT:
