@@ -89,7 +89,7 @@ REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mas
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
 PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
-ATA_WEIGHT = 1.5                # reduced — hit reward dominates
+ATA_WEIGHT = 3.0                # v11.1: stronger turn-toward incentive
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -662,6 +662,10 @@ class SingleCombatShootTask(BaseTask):
             # Track first WEZ entry this episode
             if self._episode_wez_first_step.get(agent_id, 0) == 0:
                 self._episode_wez_first_step[agent_id] = self._step_count
+            # ── v11 diagnostic: log fire-relevant state when mask is open ──
+            if not hasattr(self, '_audit_fire_open'):
+                self._audit_fire_open = 0
+            self._audit_fire_open += 1
 
         return mask
 
