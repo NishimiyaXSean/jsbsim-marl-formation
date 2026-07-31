@@ -412,30 +412,21 @@ class SingleCombatShootTask(BaseTask):
             r_ata = self._ata_reward(ps, target)
             r_alt = self._alt_reward(ps, target)
 
-            # WEZ maintenance: reward for staying in kill position
+            # WEZ maintenance + dense range delta
             r_wez = 2.0 if self._is_valid_launch_envelope(ps, target) else 0.0
+            # Dense approach: reward distance closing every step (v10.4-A)
+            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned[:2] - target.aircraft.position_ned[:2]))
+            prev_dist = getattr(ps, 'prev_dist_dense', cur_dist)
+            r_dense_range = np.clip((prev_dist - cur_dist) / 50.0, -1.0, 1.0)
+            ps.prev_dist_dense = cur_dist
 
-            r += r_progress + r_ata + r_alt + r_wez
+            r += r_progress + r_ata + r_alt + r_wez + r_dense_range
 
             # ── Fire-spam penalty ──────────────────────────────────────────
             r_spam = 0.0
             if self._commanded_fire.get(aid, False) and not self._has_launched_this_step.get(aid, False):
                 r_spam = -1.0
             r += r_spam
-
-            # ── Closure shaping at launch ──────────────────────────────────
-            r_closure = 0.0
-            if self._has_launched_this_step.get(aid, False):
-                # Compute closure speed when the agent actually fired
-                p_pos = ps.aircraft.position_ned
-                t_pos = target.aircraft.position_ned
-                los = t_pos - p_pos
-                los_dir = los / max(np.linalg.norm(los), 1e-6)
-                rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
-                closure = float(np.dot(rel_vel, los_dir))
-                # Reward positive closure, penalize negative (target escaping)
-                r_closure = np.clip(closure / 50.0, -5.0, 5.0)
-            r += r_closure
 
             # ── Quality launch bonus ───────────────────────────────────────
             r_quality = 0.0
@@ -445,8 +436,9 @@ class SingleCombatShootTask(BaseTask):
                 los_dir = (target.aircraft.position_ned - ps.aircraft.position_ned) / max(dist, 1e-6)
                 cos_ata = float(np.dot(p_fwd, los_dir))
                 ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
+                closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
                 if closure > 0 and ata_deg < 10.0 and 2000 < dist < 4000:
-                    r_quality = 20.0  # premium launch window
+                    r_quality = 20.0
             r += r_quality
 
             # ── Event-driven rewards ────────────────────────────────────────
@@ -480,8 +472,8 @@ class SingleCombatShootTask(BaseTask):
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
                 "WEZ_Maintenance": {"p0": r_wez},
+                "DenseRangeShaping": {"p0": r_dense_range},
                 "FireSpamPenalty": {"p0": r_spam},
-                "ClosureShaping": {"p0": r_closure},
                 "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
             }
