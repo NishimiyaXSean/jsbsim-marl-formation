@@ -89,7 +89,7 @@ REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mas
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
 PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
-ATA_WEIGHT = 3.0                # v11.1: stronger turn-toward incentive
+ATA_WEIGHT = 5.0                # v11.2: aggressive turn-toward incentive
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
