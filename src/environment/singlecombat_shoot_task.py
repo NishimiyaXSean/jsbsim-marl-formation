@@ -583,7 +583,7 @@ class SingleCombatShootTask(BaseTask):
 
         if terminateds.get("__all__") or truncateds.get("__all__"):
             self._episodes_completed += 1
-            wez_s = self._episode_wez_first_step.get("p0", 0)
+            wez_s = self._episode_wez_first_step.get(AGENT_IDS[0], 0)
             fire_s = self._episode_fire_first_step if self._episode_fire_first_step > 0 else 0
             if wez_s > 0:
                 print(f"[TIMING] ep={self._episodes_completed} WEZ_first={wez_s} fire_first={fire_s} "
@@ -660,8 +660,8 @@ class SingleCombatShootTask(BaseTask):
             mask[fire_start + 1] = 0.0
         else:
             # Track first WEZ entry this episode
-            if self._episode_wez_first_step.get(aid, 0) == 0:
-                self._episode_wez_first_step[aid] = self._step_count
+            if self._episode_wez_first_step.get(agent_id, 0) == 0:
+                self._episode_wez_first_step[agent_id] = self._step_count
 
         return mask
 
