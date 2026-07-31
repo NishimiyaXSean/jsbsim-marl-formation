@@ -302,9 +302,7 @@ class SingleCombatShootTask(BaseTask):
                     if target is not None:
                         target.hits_taken += 1
                     # Log the hit
-                    import sys
-                    print(f"\n[HIT!] {m.uid} hit target!  HP: {target.hits_taken}/{target.max_hits if target else '?'}",
-                          file=sys.stderr, flush=True)
+                    print(f"\n[HIT!] {m.uid} hit target!  HP: {target.hits_taken}/{target.max_hits if target else '?'}")
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Observation
@@ -569,11 +567,9 @@ class SingleCombatShootTask(BaseTask):
             wez_s = self._episode_wez_first_step.get("p0", 0)
             fire_s = self._episode_fire_first_step if self._episode_fire_first_step > 0 else 0
             if wez_s > 0:
-                import sys
                 print(f"[TIMING] ep={self._episodes_completed} WEZ_first={wez_s} fire_first={fire_s} "
                       f"fire_after_WEZ={fire_s - wez_s if fire_s > 0 else 'never'} "
-                      f"ep_steps={self._step_count}",
-                      file=sys.stderr, flush=True)
+                      f"ep_steps={self._step_count}")
             # Reset per-episode trackers
             self._episode_wez_first_step = {aid: 0 for aid in AGENT_IDS}
             self._episode_fire_first_step = 0
@@ -710,12 +706,10 @@ class SingleCombatShootTask(BaseTask):
         cos_ata = float(np.dot(p_fwd, los_dir))
         cos_aa = float(np.dot(t_fwd, los_dir))
         closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
-        import sys
         print(f"[LAUNCH] {uid}: range={m.launch_dist:.0f}m ATA={math.degrees(math.acos(max(-1,min(1,cos_ata)))):.0f}deg "
               f"AA={math.degrees(math.acos(max(-1,min(1,cos_aa)))):.0f}deg closure={closure:.0f}m/s "
               f"alt={ps.aircraft.state['alt_m']:.0f}m roll={ps.aircraft.state['roll_deg']:.0f}deg "
-              f"hdg_err={(ps.ref_hdg-target.ref_hdg+180)%360-180:.0f}deg",
-              file=sys.stderr, flush=True)
+              f"hdg_err={(ps.ref_hdg-target.ref_hdg+180)%360-180:.0f}deg")
         env.add_temp_simulator(m)
 
         # ── Classify launch quality ────────────────────────────────────────
@@ -736,13 +730,11 @@ class SingleCombatShootTask(BaseTask):
         # Print every 20 launches summary
         total = len(self._launch_stats["good"]) + len(self._launch_stats["bad"]) + len(self._launch_stats["premium"])
         if total % 20 == 0:
-            import sys
             print(f"[LAUNCH-STATS] total={total} good={len(self._launch_stats['good'])} "
                   f"bad={len(self._launch_stats['bad'])} premium={len(self._launch_stats['premium'])} "
                   f"good_ratio={len(self._launch_stats['good'])/max(total,1)*100:.0f}% "
                   f"premium_ratio={len(self._launch_stats['premium'])/max(total,1)*100:.0f}% "
-                  f"closure_mean={np.mean(self._launch_stats['closure_vals']):.0f}m/s",
-                  file=sys.stderr, flush=True)
+                  f"closure_mean={np.mean(self._launch_stats['closure_vals']):.0f}m/s")
 
         # Track first fire step this episode
         if self._episode_fire_first_step == 0:
