@@ -235,10 +235,12 @@ class SingleCombatShootTask(BaseTask):
                 ac.aircraft.position_ned[0:2] += ac.aircraft.velocity_ned[0:2] * PHYSICS_DT
                 ac.aircraft.position_ned[2] = st["alt_m"]
 
-        # ── Reset reward modules ────────────────────────────────────────────
+        # ── Reset reward modules + WEZ tracking ─────────────────────────
         for ps in env.pursuers:
             ps.prev_dist = float(np.linalg.norm(
                 ps.aircraft.position_ned - env.targets[0].aircraft.position_ned))
+            ps._wez_entered = False
+            ps._wez_steps = 0
 
         # ── Target evasion state ────────────────────────────────────────────
         self._target_base_hdg = float(env.targets[0].aircraft.state["yaw_deg"])
@@ -407,28 +409,51 @@ class SingleCombatShootTask(BaseTask):
         for ps, aid in zip(env.pursuers, AGENT_IDS):
             r = 0.0
 
-            # ── Continuous shaping rewards ─────────────────────────────────
-            r_progress = self._progress_reward(ps, target)
-            r_ata = self._ata_reward(ps, target)
-            r_alt = self._alt_reward(ps, target)
+            # ── Reward chain: Approach → WEZ entry → Fire → Hit ──────────
 
-            # WEZ maintenance + dense range delta
-            r_wez = 2.0 if self._is_valid_launch_envelope(ps, target) else 0.0
-            # Dense approach: reward distance closing every step (v10.4-A)
-            cur_dist = float(np.linalg.norm(ps.aircraft.position_ned[:2] - target.aircraft.position_ned[:2]))
+            # (1) Dense approach — low-weight, not dominant
+            cur_dist = float(np.linalg.norm(
+                ps.aircraft.position_ned[:2] - target.aircraft.position_ned[:2]))
             prev_dist = getattr(ps, 'prev_dist_dense', cur_dist)
             r_dense_range = np.clip((prev_dist - cur_dist) / 50.0, -1.0, 1.0)
             ps.prev_dist_dense = cur_dist
 
-            r += r_progress + r_ata + r_alt + r_wez + r_dense_range
+            # (2) Continuous shaping (reduced weight)
+            r_progress = self._progress_reward(ps, target)
+            r_ata = self._ata_reward(ps, target)
+            r_alt = self._alt_reward(ps, target)
 
-            # ── Fire-spam penalty ──────────────────────────────────────────
+            # (3) WEZ first-entry bonus — one-shot per episode
+            in_wez = self._is_valid_launch_envelope(ps, target)
+            r_wez_entry = 0.0
+            if in_wez and not getattr(ps, '_wez_entered', False):
+                r_wez_entry = 20.0
+                ps._wez_entered = True
+
+            # (4) WEZ dwell bonus — reward sustained WEZ presence (>3s = 15 steps)
+            r_wez_dwell = 0.0
+            if in_wez:
+                ps._wez_steps = getattr(ps, '_wez_steps', 0) + 1
+                if ps._wez_steps >= 15 and ps._wez_steps % 10 == 0:
+                    r_wez_dwell = 10.0
+            else:
+                ps._wez_steps = 0
+
+            r += r_progress + r_ata + r_alt + r_dense_range + r_wez_entry + r_wez_dwell
+
+            # (5) Fire success reward — small, encouraging legal launch
+            r_launch = 0.0
+            if self._has_launched_this_step.get(aid, False):
+                r_launch = 10.0  # modest — hit reward is the real target
+            r += r_launch
+
+            # (6) Fire-spam penalty
             r_spam = 0.0
             if self._commanded_fire.get(aid, False) and not self._has_launched_this_step.get(aid, False):
                 r_spam = -1.0
             r += r_spam
 
-            # ── Quality launch bonus ───────────────────────────────────────
+            # (7) Quality launch bonus
             r_quality = 0.0
             if self._has_launched_this_step.get(aid, False):
                 dist = float(np.linalg.norm(ps.aircraft.position_ned - target.aircraft.position_ned))
@@ -471,9 +496,11 @@ class SingleCombatShootTask(BaseTask):
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
-                "WEZ_Maintenance": {"p0": r_wez},
-                "DenseRangeShaping": {"p0": r_dense_range},
-                "FireSpamPenalty": {"p0": r_spam},
+                "DenseRange": {"p0": r_dense_range},
+                "WEZ_Entry": {"p0": r_wez_entry},
+                "WEZ_Dwell": {"p0": r_wez_dwell},
+                "LaunchSuccess": {"p0": r_launch},
+                "FireSpam": {"p0": r_spam},
                 "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
             }
