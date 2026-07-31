@@ -727,14 +727,17 @@ class SingleCombatShootTask(BaseTask):
         else:
             self._launch_stats["bad"].append(closure)
             tag = "BAD"
-        # Print every 20 launches summary
+        # Write launch stats to disk every 20 launches (stdout lost inside Ray workers)
         total = len(self._launch_stats["good"]) + len(self._launch_stats["bad"]) + len(self._launch_stats["premium"])
         if total % 20 == 0:
-            print(f"[LAUNCH-STATS] total={total} good={len(self._launch_stats['good'])} "
-                  f"bad={len(self._launch_stats['bad'])} premium={len(self._launch_stats['premium'])} "
-                  f"good_ratio={len(self._launch_stats['good'])/max(total,1)*100:.0f}% "
-                  f"premium_ratio={len(self._launch_stats['premium'])/max(total,1)*100:.0f}% "
-                  f"closure_mean={np.mean(self._launch_stats['closure_vals']):.0f}m/s")
+            import os as _os
+            stats_path = _os.environ.get("LAUNCH_STATS_FILE", "/tmp/launch_stats.log")
+            with open(stats_path, "a") as f:
+                f.write(f"[LAUNCH-STATS] total={total} good={len(self._launch_stats['good'])} "
+                        f"bad={len(self._launch_stats['bad'])} premium={len(self._launch_stats['premium'])} "
+                        f"good_ratio={len(self._launch_stats['good'])/max(total,1)*100:.0f}% "
+                        f"premium_ratio={len(self._launch_stats['premium'])/max(total,1)*100:.0f}% "
+                        f"closure_mean={np.mean(self._launch_stats['closure_vals']):.0f}m/s\n")
 
         # Track first fire step this episode
         if self._episode_fire_first_step == 0:
