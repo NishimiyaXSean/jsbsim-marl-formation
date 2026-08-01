@@ -89,7 +89,7 @@ REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mas
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
 PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
-ATA_WEIGHT = 3.0                # v11.1: balanced turn-toward (5.0 caused angle-only hack)
+ATA_WEIGHT = 4.0                # v11.3: sweet spot between too-weak(3) and angle-hack(5)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -851,7 +851,9 @@ class SingleCombatShootTask(BaseTask):
         los_dir = los_vec / max(dist, 1e-6)
         cos_ata = float(np.dot(p_fwd, los_dir))
         dist_factor = np.clip(1.0 - dist / MAX_DIST, 0.1, 1.0)
-        return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS)
+        # Range guard: only reward ATA if within reasonable engagement range (<6km)
+        range_gate = 1.0 if dist < 6000.0 else 0.1
+        return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS * range_gate)
 
     def _alt_reward(self, ps, target) -> float:
         """Penalty for altitude deviation + low-altitude soft warning.
