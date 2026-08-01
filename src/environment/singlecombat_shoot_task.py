@@ -441,11 +441,22 @@ class SingleCombatShootTask(BaseTask):
 
             r += r_progress + r_ata + r_alt + r_dense_range + r_wez_entry + r_wez_dwell
 
-            # (5) Fire success reward — small, encouraging legal launch
+            # (5) Fire success reward — modest, encourages legal launch
             r_launch = 0.0
             if self._has_launched_this_step.get(aid, False):
-                r_launch = 10.0  # modest — hit reward is the real target
+                r_launch = 10.0
             r += r_launch
+
+            # (5b) Phase 2-A: positive closure bonus (fire-time only, no penalty)
+            r_closure_bonus = 0.0
+            if self._has_launched_this_step.get(aid, False):
+                p_pos = ps.aircraft.position_ned
+                t_pos = target.aircraft.position_ned
+                los_dir = (t_pos - p_pos) / max(np.linalg.norm(t_pos - p_pos), 1e-6)
+                closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
+                if closure > 0:
+                    r_closure_bonus = 2.0  # small, encourages waiting for good window
+            r += r_closure_bonus
 
             # (6) Fire-spam penalty
             r_spam = 0.0
@@ -500,6 +511,7 @@ class SingleCombatShootTask(BaseTask):
                 "WEZ_Entry": {"p0": r_wez_entry},
                 "WEZ_Dwell": {"p0": r_wez_dwell},
                 "LaunchSuccess": {"p0": r_launch},
+                "ClosureBonus": {"p0": r_closure_bonus},
                 "FireSpam": {"p0": r_spam},
                 "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
