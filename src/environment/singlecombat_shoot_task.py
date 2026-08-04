@@ -53,10 +53,12 @@ N_TARGETS = 1
 AGENT_IDS = ["p0"]
 
 # ── Observation dimensions ───────────────────────────────────────────────────
-# Self: alt, roll_sin, roll_cos, pitch_sin, pitch_cos, v_body_xyz (3), vc, AoA, heading_sin, heading_cos
+# Self: alt, roll_sin, roll_cos, pitch_sin, pitch_cos, v_body_xyz (3), airspeed, AoA, heading_sin, heading_cos
 SELF_DIM = 12
 # Target: delta_altitude, delta_heading, delta_speed, AO, TA, distance, side_flag
 TARGET_DIM = 7
+# Target (P0-2 extended): + closure (LOS closing speed) + LOS angular rate
+TARGET_DIM_EXT = 9
 # Missile threat (incoming): delta_v, delta_alt, AO, TA, distance, side_flag
 MISSILE_DIM = 6
 # ── Global state (for centralized critic) ────────────────────────────────────
@@ -70,7 +72,7 @@ N_ALT_DELTA = 1     # frozen altitude — missile phase, not rate-fight
 N_FIRE = 2
 N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 11
 
-OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 12+7+6+11=36
+OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 36 legacy; 38 with closure (P0-2)
 
 DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
 DELTA_HEADINGS  = [-10.0, -5.0, 0.0, 5.0, 10.0]  # degrees — gentler BFM
@@ -117,8 +119,12 @@ class SingleCombatShootTask(BaseTask):
         self.M = N_TARGETS
 
         # ── Spaces ──────────────────────────────────────────────────────────
-        # Flat observation = obs(25) + action_mask(11) = 36-dim Box
-        single_obs = gym.spaces.Box(-1.0, 1.0, (OBS_DIM,), dtype=np.float32)
+        # P0-2: closure + LOS-rate features are configurable to keep legacy
+        # checkpoints (36-dim obs) loadable; new runs default to 38-dim.
+        self._obs_include_closure = bool(config.get("obs_include_closure", True))
+        target_dim = TARGET_DIM_EXT if self._obs_include_closure else TARGET_DIM
+        self._obs_dim = SELF_DIM + target_dim + MISSILE_DIM + N_ACTIONS
+        single_obs = gym.spaces.Box(-1.0, 1.0, (self._obs_dim,), dtype=np.float32)
         single_act = gym.spaces.MultiDiscrete(
             [N_SPEED_DELTA, N_HEADING_DELTA, N_ALT_DELTA, N_FIRE])
 
@@ -338,7 +344,7 @@ class SingleCombatShootTask(BaseTask):
                 float(s["u_fps"]) * 0.3048 / MAX_VEL,         # 5. v_body_x
                 float(s["v_fps"]) * 0.3048 / MAX_VEL,         # 6. v_body_y
                 float(s["w_fps"]) * 0.3048 / MAX_VEL,         # 7. v_body_z
-                float(s["airspeed_mps"]) / MAX_VEL,           # 8. vc
+                float(s["airspeed_mps"]) / MAX_VEL,           # 8. airspeed
                 float(s["alpha_deg"]) / 30.0,                 # 9. alpha
                 math.sin(yaw_r),                               # 10. heading_sin
                 math.cos(yaw_r),                               # 11. heading_cos
@@ -359,16 +365,28 @@ class SingleCombatShootTask(BaseTask):
             side_flag = float(np.sign(np.cross(
                 p_fwd[:2], los_dir[:2])))
 
-            target_feat = np.array([
+            aa_deg = self._compute_aa_deg(p_fwd, t_fwd, los_dir)
+            target_feat = [
                 np.clip((float(target.aircraft.state["alt_m"]) - alt_m) / 5000.0, -1.0, 1.0),  # 0. delta_alt
                 self._delta_heading_rad(ps, target),                               # 1. delta_hdg
                 np.clip((float(target.aircraft.state["airspeed_mps"]) - float(s["airspeed_mps"]))
                         / 200.0, -1.0, 1.0),                                       # 2. delta_speed
                 ata_deg / 180.0,                                                    # 3. ATA
-                self._compute_aa_deg(p_fwd, t_fwd, los_dir) / 180.0,              # 4. AA
+                aa_deg / 180.0,                                                     # 4. AA
                 np.clip(dist / MAX_DIST, 0.0, 1.0),                               # 5. distance
                 side_flag,                                                          # 6. side
-            ], dtype=np.float32)
+            ]
+            if self._obs_include_closure:
+                # P0-2: make the launch-window state directly observable.
+                rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
+                closure = float(np.dot(rel_vel, los_dir))
+                cross2d = los_vec[0] * rel_vel[1] - los_vec[1] * rel_vel[0]
+                los_rate = float(abs(cross2d) / max(los_vec[0] ** 2 + los_vec[1] ** 2, 1e-6))
+                target_feat += [
+                    np.clip(closure / 300.0, -1.0, 1.0),    # 7. closure (m/s, ±300)
+                    np.clip(los_rate / 0.5, -1.0, 1.0),     # 8. LOS angular rate (rad/s, ±0.5)
+                ]
+            target_feat = np.array(target_feat, dtype=np.float32)
 
             # ── Missile threat features (incoming) ──────────────────────────
             missile_feat = np.zeros(MISSILE_DIM, dtype=np.float32)

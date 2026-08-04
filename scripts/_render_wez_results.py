@@ -17,14 +17,37 @@ from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
 ENV = "jsbsim_shoot_1v1"
 OUTDIR = "results/shoot_training"
-COLORS = {'p0': '#377eb8', 't0': '#e41a1c', 'missile': '#ff7f00'}
+ACTION_DIMS = [3, 5, 1, 2]  # speed, heading, altitude, fire
 
+
+def _decode_action(raw):
+    """Convert RLlib compute_single_action output to a per-dim action vector."""
+    if isinstance(raw, (int, np.integer)):
+        flat = int(raw)
+    else:
+        arr = np.asarray(raw).reshape(-1)
+        if arr.size == len(ACTION_DIMS):
+            return arr.astype(np.int64)
+        flat = int(arr[0])
+    out = np.zeros(len(ACTION_DIMS), dtype=np.int64)
+    for i, d in enumerate(ACTION_DIMS):
+        out[i] = flat % d
+        flat //= d
+    return out
+
+
+COLORS = {'p0': '#377eb8', 't0': '#e41a1c', 'missile': '#ff7f00'}
 def render_and_plot(tag, ckpt, difficulty, seed):
-    register_env(ENV, lambda c: BaseEnv(task=SingleCombatShootTask(c)))
+    for _name in [ENV, "jsbsim_shoot_v101", "jsbsim_shoot_1v1_v1"]:
+        register_env(_name, lambda c: BaseEnv(task=SingleCombatShootTask(c)))
     ray.init(ignore_reinit_error=True, num_cpus=1, logging_level="ERROR")
     algo = PPO.from_checkpoint(os.path.abspath(ckpt))
     policy = algo.get_policy("default_policy")
-    env = BaseEnv(task=SingleCombatShootTask({"difficulty_level": difficulty}))
+    pol_obs_dim = int(policy.observation_space.shape[0])
+    env = BaseEnv(task=SingleCombatShootTask({
+        "difficulty_level": difficulty,
+        "obs_include_closure": pol_obs_dim >= 38,
+    }))
     obs, _ = env.reset(seed=seed)
     p0 = env.pursuers[0]; t0 = env.targets[0]
 
@@ -47,10 +70,7 @@ def render_and_plot(tag, ckpt, difficulty, seed):
 
     for step in range(300):
         a = policy.compute_single_action(obs['p0'], explore=False)[0]
-        if isinstance(a, (int, np.integer)):
-            a = np.array([a%3, (a//3)%5, (a//15)%3, (a//45)%2], dtype=np.int64)
-        else:
-            a = np.asarray(a, dtype=np.int64).flatten()
+        a = _decode_action(a)
         if a[3] == 1: fires_attempted += 1
         prev_count = len(env._tempsims)
         obs, rews, terms, truncs, info = env.step({'p0': a})

@@ -1,8 +1,12 @@
 """ShootMaskModel — TorchModelV2 with action masking for 1v1 missile task.
 
-Reads a flat Box(36) observation split into:
-  - obs[:, :25]  — aircraft + target + missile state
-  - obs[:, 25:]  — action mask (N_ACTIONS=11 dims)
+Reads a flat Box observation (36-dim legacy or 38-dim with closure features)
+split into:
+  - obs[:, :obs_dim]     — aircraft + target + missile state
+  - obs[:, obs_dim:]     — action mask (N_ACTIONS=11 dims)
+
+obs_dim is derived at construction from the observation space, so legacy and
+extended observations both work without code changes.
 
 Applies mask to MultiDiscrete logits: invalid actions → -1e9 (≈ probability 0).
 Reference: formation_rllib_model.py mask logic.
@@ -21,7 +25,7 @@ class ShootMaskModel(TorchModelV2, nn.Module):
     """MLP policy with proper action mask support for MultiDiscrete actions.
 
     Action space: MultiDiscrete([3 speed, 5 heading, 1 altitude, 2 fire])
-    Observation: Box(36) — first 25 obs, last 11 mask.
+    Observation: Box(36/38) — first (dim-11) obs, last 11 mask.
     """
 
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
@@ -31,9 +35,13 @@ class ShootMaskModel(TorchModelV2, nn.Module):
         self._action_dims = [3, 5, 1, 2]  # speed, heading, altitude, fire
         self._total_actions = sum(self._action_dims)  # 11
 
+        # Derive obs dim from the action-mask tail: flat = obs + mask.
+        obs_shape = getattr(obs_space, "shape", None)
+        self._obs_dim = int(obs_shape[0]) - self._total_actions if obs_shape is not None else 25
+
         # Encoder MLP
         self.encoder = nn.Sequential(
-            nn.Linear(25, 256), nn.Tanh(),
+            nn.Linear(self._obs_dim, 256), nn.Tanh(),
             nn.Linear(256, 256), nn.Tanh(),
             nn.Linear(256, 128), nn.Tanh(),
         )
@@ -57,9 +65,9 @@ class ShootMaskModel(TorchModelV2, nn.Module):
         if flat_obs.dim() == 1:
             flat_obs = flat_obs.unsqueeze(0)
 
-        # Split: first 25 = real obs, last 11 = action mask
-        obs = flat_obs[:, :25]
-        mask = flat_obs[:, 25:36]
+        # Split: first obs_dim = real obs, last 11 = action mask
+        obs = flat_obs[:, :self._obs_dim]
+        mask = flat_obs[:, self._obs_dim:self._obs_dim + self._total_actions]
 
         feat = self.encoder(obs)  # [B, 128]
         self._features = feat

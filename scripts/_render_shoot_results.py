@@ -13,10 +13,29 @@ from ray.tune.registry import register_env
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
-# Must match the env name used during training
+# Register the canonical env name + legacy aliases so old checkpoints render.
 ENV = "jsbsim_shoot_1v1"
-register_env(ENV, lambda c: BaseEnv(task=SingleCombatShootTask(c)))
+ACTION_DIMS = [3, 5, 1, 2]  # speed, heading, altitude, fire
 
+
+def _decode_action(raw):
+    """Convert RLlib compute_single_action output to a per-dim action vector."""
+    if isinstance(raw, (int, np.integer)):
+        flat = int(raw)
+    else:
+        arr = np.asarray(raw).reshape(-1)
+        if arr.size == len(ACTION_DIMS):
+            return arr.astype(np.int64)
+        flat = int(arr[0])
+    out = np.zeros(len(ACTION_DIMS), dtype=np.int64)
+    for i, d in enumerate(ACTION_DIMS):
+        out[i] = flat % d
+        flat //= d
+    return out
+
+
+for _name in [ENV, "jsbsim_shoot_v101", "jsbsim_shoot_1v1_v1"]:
+    register_env(_name, lambda c: BaseEnv(task=SingleCombatShootTask(c)))
 
 def render_checkpoint(ckpt_path, difficulty, seed, acmi_path, label):
     """Load RLlib checkpoint and render one episode to ACMI."""
@@ -25,7 +44,11 @@ def render_checkpoint(ckpt_path, difficulty, seed, acmi_path, label):
     algo = PPO.from_checkpoint(os.path.abspath(ckpt_path))
     policy = algo.get_policy("default_policy")
 
-    env = BaseEnv(task=SingleCombatShootTask({"difficulty_level": difficulty}))
+    pol_obs_dim = int(policy.observation_space.shape[0])
+    env = BaseEnv(task=SingleCombatShootTask({
+        "difficulty_level": difficulty,
+        "obs_include_closure": pol_obs_dim >= 38,
+    }))
     obs, _ = env.reset(seed=seed)
 
     # Force tail-chase geometry for visual clarity
@@ -62,16 +85,7 @@ def render_checkpoint(ckpt_path, difficulty, seed, acmi_path, label):
     for step in range(500):
         o = obs["p0"]
         act_raw = policy.compute_single_action(o, explore=False)[0]
-        # RLlib returns flat action index for MultiDiscrete; decode manually
-        if isinstance(act_raw, (int, np.integer)):
-            act = np.array([
-                act_raw % 3,
-                (act_raw // 3) % 5,
-                (act_raw // 15) % 3,
-                (act_raw // 45) % 2,
-            ], dtype=np.int64)
-        else:
-            act = np.asarray(act_raw, dtype=np.int64).flatten()
+        act = _decode_action(act_raw)
         if act[3] == 1: fires += 1
         obs, rews, terms, truncs, info = env.step({"p0": act})
         env.log_acmi_step()

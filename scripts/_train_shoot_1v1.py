@@ -27,10 +27,17 @@ from ray.rllib.models import ModelCatalog
 from src.models.shoot_mask_model import ShootMaskModel
 
 ENV_NAME = "jsbsim_shoot_1v1"
+# Legacy env names used by older checkpoints (P0-1): keep them registered so old
+# checkpoints can be resumed/rendered after the env-name unification.
+ENV_ALIASES = ["jsbsim_shoot_v101", "jsbsim_shoot_1v1_v1"]
 
 
 def env_creator(config):
     return BaseEnv(task=SingleCombatShootTask(config))
+
+
+for _name in [ENV_NAME] + ENV_ALIASES:
+    register_env(_name, lambda c: env_creator(c))
 
 
 def main():
@@ -41,6 +48,8 @@ def main():
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--difficulty", type=float, default=0.0)
+    parser.add_argument("--legacy-obs", action="store_true",
+                        help="use 36-dim legacy observation (no closure/LOS-rate); required when resuming pre-P0-2 checkpoints")
     args = parser.parse_args()
 
     register_env(ENV_NAME, lambda c: env_creator(c))
@@ -48,9 +57,21 @@ def main():
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.environ["PYTHONPATH"] = project_root + ":" + os.environ.get("PYTHONPATH", "")
+
+    # P0-4: persist launch-quality stats inside the run dir.  Set before ray.init
+    # so env-runner workers inherit LAUNCH_STATS_FILE.
+    output_dir = args.output or f"marl_runs/shoot_1v1_d{args.difficulty:.1f}_s{args.seed}"
+    os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
+    launch_stats_path = os.path.join(output_dir, "launch_stats.log")
+    os.environ["LAUNCH_STATS_FILE"] = launch_stats_path
+    with open(launch_stats_path, "w") as _stats_f:
+        _stats_f.write("# launch quality stats: good/bad/premium + closure/ATA/range\n")
+
     ray.init(ignore_reinit_error=True, num_cpus=2, logging_level="ERROR")
 
     env_config = {"difficulty_level": args.difficulty}
+    if args.legacy_obs:
+        env_config["obs_include_closure"] = False
 
     # Use custom model with real action mask support
     config = (
@@ -90,12 +111,11 @@ def main():
         print(f"Resumed from {args.checkpoint}")
 
     best_reward = -float("inf")
-    output_dir = args.output or f"marl_runs/shoot_1v1_d{args.difficulty:.1f}_s{args.seed}"
-    os.makedirs(f"{output_dir}/checkpoints", exist_ok=True)
 
     print(f"Training 1v1 shoot — {args.iterations} iters, difficulty={args.difficulty:.1f}, "
           f"lr={args.lr}, entropy=0.03")
     print(f"Output: {output_dir}")
+    print(f"Launch stats: {launch_stats_path}")
 
     for i in range(args.iterations):
         result = algo.train()
