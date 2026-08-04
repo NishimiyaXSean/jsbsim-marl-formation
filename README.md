@@ -1,4 +1,4 @@
-# jsbsim-marl-formation
+﻿# jsbsim-marl-formation
 
 **Multi-agent reinforcement learning for cooperative formation pursuit**, powered by JSBSim 6-DOF F-16 flight dynamics, Self-Attention CTDE, RLlib MAPPO, and discrete tactical action primitives.
 
@@ -739,9 +739,11 @@ data/models/           — Pretrained weights
 
 ---
 
-##  Guided Weapon System — 1v1 Missile Combat (Jul 27-29)
+##  Guided Weapon System — 1v1 Missile Combat (Jul 27 – Aug 2)
 
 > **Status:** Phase 1-5 complete — Proximity fuze + WEZ mask + Dynamic DLZ + Multi-hit HP + Anti-climb guard.
+> **v10.1 → Phase 2-A (Jul 30 – Aug 2):** real fire action masking, control ablation, dense range shaping,
+> launch-quality rewards, ATA weight tuning (3→5→3→4 + >6km guard), and positive launch closure bonus.
 >
 > End-to-end missile combat system: point-mass 3-DOF missile dynamics, proportional navigation guidance,
 > proximity fuze, RL-based shooter with WEZ-gated firing, curriculum training.
@@ -823,7 +825,11 @@ Max range depends on Aspect Angle:
 | Module | Weight | Signal |
 |--------|--------|--------|
 | Progress | 0.2 | 2D horizontal approach |
-| ATA | 1.5 | Nose-on-target alignment |
+| ATA | 4.0 (v11.3) | Nose-on-target alignment (×0.1 beyond 6km) |
+| Dense range | ±1/step | Closing-distance delta shaping (v10.4) |
+| WEZ entry/dwell | +20 / +10 | First-entry one-shot + sustained-WEZ reward |
+| Launch quality | +20 | Premium launch: closure>0 + ATA<10° + 2–4km |
+| Closure bonus | +2 | Launch-time closure>0 (Phase 2-A, positive-only) |
 | Altitude | linear + quadratic | Deviation penalty |
 | Hit base | +1000 | Guaranteed for any hit |
 | Hit bonus | +1000 × accuracy | 0m→1000, 300m→0 |
@@ -853,25 +859,40 @@ Max range depends on Aspect Angle:
 | v9 | S2 | + WEZ maint + Range discount + Hard deck 1000m | 300 | +2,385 |
 | **v10** | **S1** | **+ Fixed warmup (P0 own heading) + Two-stage fuze (CPA<200m)** | **300** | **+2,832** |
 | v10 | S2 | (in progress) | 300 | TBD |
+| v10.1 | S1 | + Control ablation (freeze alt + gentle turn + 55° bank) | — | — |
+| v10.2 | S1 | + ShootMaskModel — real fire action mask | smoke | — |
+| v10.3 | S1 | + Launch-quality rewards (WEZ entry/dwell/premium) | 300 | — |
+| v10.4 | S1 | + Dense range shaping → 7-layer reward chain | — | — |
+| v11.1→v11.3 | S1 | ATA weight 1.5→3→5→3→4 + >6km guard (×0.1) | — | — |
+| **Phase 2-A** | S1 | + Launch closure>0 bonus (+2, positive-only) | — | run `shoot_v11_4_A` |
 
 > **v8→v9→v10 进化路径**: 航向偏置让训练从"出身即满分"(+7k)回归真实的"先学飞再学打"(−9k→+2.8k)。
 > 两阶段引信确保导弹深侵彻(CPA<200m)再引爆, Tacview中爆炸紧贴目标。
+> **v10.1 → Phase 2-A (Jul 30 – Aug 2)**: 真实 action mask、控制消融、稠密距离塑形与发射质量奖励链;
+> ATA 权重 1.5→3→5→3→4 调参中发现 5.0 诱发"追角度"奖励 hack,最终定 4.0 + >6km 距离防护;
+> Phase 2-A 在发射瞬间 closure>0 时奖励 +2(仅正向,无惩罚)。
 
 **Training script:** `scripts/_train_shoot_1v1.py`
-- RLlib PPO with MLP default model (FCN [256,256])
+- RLlib PPO with MLP default model (FCN [256,256]); v10.2 `ShootMaskModel` gates the fire head by WEZ/DLZ/ammo
 - LR=1e-3, entropy=0.03, train_batch=1024
 - Flat Box(38) observation (no Dict spaces — avoids Ray serialization issues)
 - Now logs every iteration (not every 10) for fine-grained per-episode analysis
 - TensorBoard: `tensorboard --logdir=~/ray_results/ --port=6006`
 
-**v9/v10 Key Optimizations:**
+**v9–v11 Key Optimizations:**
 1. **Heading offset (30-60°)**: P0 starts misaligned—WEZ locked—must learn to turn toward target before firing
-2. **WEZ maintenance reward (+2/step)**: staying in kill position continuously rewarded, encourages "six o'clock" discipline
+2. **WEZ entry/dwell rewards**: first entry +20 (one-shot), sustained presence +10 per 10 steps after 3s — encourages "six o'clock" discipline
 3. **Launch range discount**: closer launch = higher reward multiplier (1500m→1.0, 4000m→0.3)
 4. **Two-stage proximity fuze**: arm at 300m → deep penetration (CPA<200m) → trigger on pull-away. Explosions now visually on-target in Tacview
 5. **Hard deck 1500→1000m**: more room for vertical maneuvers when chasing diving targets
 6. **Dry-fire penalty (-1)**: discourages spamming fire key when WEZ-locked
 7. **Anti-climb triple guard**: altitude clamp ±2000m + quadratic penalty + desertion termination
+8. **Real fire action masking (v10.2)**: `ShootMaskModel` gates the fire head by WEZ/DLZ/ammo — dry-fire becomes structurally impossible
+9. **Control ablation (v10.1)**: freeze altitude + gentler turn + 55° bank limit — removes hidden controller assistance
+10. **Launch-quality rewards (v10.3)**: WEZ entry +20, WEZ dwell +10, premium launch +20 (closure>0 + ATA<10° + 2–4km)
+11. **Dense range shaping (v10.4)**: per-step closing-distance delta (clipped ±1 per 50m) replaces terminal closure reward → complete 7-layer per-step chain
+12. **ATA weight tuning (v11.1–v11.3)**: 1.5→3.0→5.0 produced a chase-angle reward hack, regressed to 3.0, settled at 4.0 + >6km range guard (×0.1)
+13. **Phase 2-A closure bonus**: +2 at launch when closure>0 (positive-only, no penalty) — encourages waiting for a closing launch window
 
 **Eval Scripts:**
 - `scripts/_test_missile_rulebased.py` — rule-based fire-at-range test (verifies missile physics)
@@ -887,6 +908,9 @@ src/environment/
   missile_simulator.py           ★ 3-DOF missile + PN guidance + proximity fuze
   singlecombat_shoot_task.py     ★ 1v1 shoot: WEZ mask, DLZ, HP, reward, termination
   base_env.py                    Extended: _tempsims, 60Hz loop, ACMI missile log
+
+src/models/
+  shoot_mask_model.py            ★ v10.2: WEZ/DLZ-gated fire action mask (TorchModelV2)
 
 scripts/
   _train_shoot_1v1.py            ★ RLlib PPO for 1v1 shoot
