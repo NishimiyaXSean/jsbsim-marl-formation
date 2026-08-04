@@ -240,8 +240,11 @@ class FlightController:
         # maintain altitude. A feedforward term independent of alt error
         # ensures compensation even when error=0 (e.g., entry into turn).
         # Scale: at 60° bank (cos=0.5), we add ~0.15 extra elevator.
+        # NOTE (2026-08-05): sign fixed — positive bank MUST pull (negative
+        # elevator in this model) to hold altitude; the old +bank_ff pushed
+        # the nose down and made the aircraft dive during turns.
         K_bank_ff = 0.30
-        bank_ff = K_bank_ff * (bank_factor - 1.0)  # 0 at 0° bank
+        bank_ff = -K_bank_ff * (bank_factor - 1.0)  # negative = pull up in turn
         # PID correction amplified for the reduced lift component
         d_elev = d_elev * bank_factor + bank_ff
 
