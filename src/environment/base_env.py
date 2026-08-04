@@ -43,6 +43,14 @@ from .formation_task import FormationTask, DECISION_STEPS, PHYSICS_DT, CTRL_FREQ
 
 logger = logging.getLogger(__name__)
 
+# JSBSim state keys consumed by observations — guard ALL of them against NaN
+# and physically-impossible magnitudes (finite-but-huge values also diverge).
+NAN_GUARD_KEYS = {
+    "n_z_g": 100.0, "airspeed_mps": 1000.0, "alt_m": 20000.0,
+    "roll_deg": 720.0, "pitch_deg": 720.0, "yaw_deg": 720.0,
+    "u_fps": 5000.0, "v_fps": 5000.0, "w_fps": 5000.0, "alpha_deg": 180.0,
+}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Internal aircraft wrapper dataclasses
@@ -400,10 +408,13 @@ class BaseEnv(MultiAgentEnv):
             for sim in list(self._tempsims.values()):
                 sim.run()
 
-            # NaN guard
-            for ps in self.pursuers:
-                if any(not np.isfinite(float(ps.aircraft.state[k]))
-                       for k in ["n_z_g", "airspeed_mps", "alt_m"]):
+            # NaN guard — check every float used in observations (JSBSim can
+            # diverge in one channel while others stay finite).
+            nan_units = list(self.pursuers) + list(self.targets)
+            for unit in nan_units:
+                if any(not (np.isfinite(float(v)) and abs(float(v)) <= limit)
+                       for k, limit in NAN_GUARD_KEYS.items()
+                       for v in [unit.aircraft.state.get(k, 0.0)]):
                     for aid in self._agent_ids:
                         rewards[aid] += -3000.0
                     obs = self.task.get_obs(self)

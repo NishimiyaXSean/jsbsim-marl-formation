@@ -119,9 +119,10 @@ class SingleCombatShootTask(BaseTask):
         self.M = N_TARGETS
 
         # ── Spaces ──────────────────────────────────────────────────────────
-        # P0-2: closure + LOS-rate features are configurable to keep legacy
-        # checkpoints (36-dim obs) loadable; new runs default to 38-dim.
-        self._obs_include_closure = bool(config.get("obs_include_closure", True))
+        # P0-2: closure + LOS-rate features are configurable.  Default False keeps
+        # legacy checkpoints (36-dim obs) loadable via PPO.from_checkpoint; the
+        # training script explicitly enables closure for new runs (38-dim).
+        self._obs_include_closure = bool(config.get("obs_include_closure", False))
         target_dim = TARGET_DIM_EXT if self._obs_include_closure else TARGET_DIM
         self._obs_dim = SELF_DIM + target_dim + MISSILE_DIM + N_ACTIONS
         single_obs = gym.spaces.Box(-1.0, 1.0, (self._obs_dim,), dtype=np.float32)
@@ -870,7 +871,7 @@ class SingleCombatShootTask(BaseTask):
         cur_dist_2d = float(np.linalg.norm(
             ps.aircraft.position_ned[:2] - target.aircraft.position_ned[:2]))
         prev_dist_2d = getattr(ps, 'prev_dist', cur_dist_2d)
-        delta = prev_dist_2d - cur_dist_2d  # positive = closing
+        delta = float(np.clip(prev_dist_2d - cur_dist_2d, -100.0, 100.0))  # positive = closing
         dist_factor = 1.0 + max(0.0, (500.0 - cur_dist_2d) / 250.0)
         reward = PROGRESS_WEIGHT * delta * 0.5 * DECISION_STEPS * dist_factor
         ps.prev_dist = cur_dist_2d

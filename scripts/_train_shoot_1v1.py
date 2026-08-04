@@ -69,9 +69,10 @@ def main():
 
     ray.init(ignore_reinit_error=True, num_cpus=2, logging_level="ERROR")
 
-    env_config = {"difficulty_level": args.difficulty}
-    if args.legacy_obs:
-        env_config["obs_include_closure"] = False
+    # Always persist obs_include_closure in the checkpoint's env_config so
+    # PPO.from_checkpoint rebuilds the identical obs dim (38 new / 36 legacy).
+    env_config = {"difficulty_level": args.difficulty,
+                  "obs_include_closure": not args.legacy_obs}
 
     # Use custom model with real action mask support
     config = (

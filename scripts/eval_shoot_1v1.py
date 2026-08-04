@@ -164,6 +164,9 @@ def evaluate_checkpoint(ckpt_path, difficulties, episodes, seed, outdir):
                 if terms.get("__all__") or truncs.get("__all__"):
                     reason = info.get("p0", {}).get("termination_reason", "unknown")
                     break
+                if not np.isfinite(obs["p0"]).all():
+                    reason = "jsbsim_nan"
+                    break
 
             for m in env.pursuers[0].launch_missiles:
                 if not m.is_done:
