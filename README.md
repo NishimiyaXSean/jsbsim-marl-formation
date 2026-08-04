@@ -786,12 +786,12 @@ Integrated at **60 Hz** inside BaseEnv's 12-step physics loop. No JSBSim depende
 | Component | Specification |
 |-----------|--------------|
 | N/M | 1 pursuer, 1 target |
-| Action | `MultiDiscrete([3 speed_delta, 5 hdg_delta, 3 alt_delta, 2 fire])` |
-| Observation | `Box(38)` — self(12) + target(7) + missile(6) + mask(13) |
+| Action | `MultiDiscrete([3 speed_delta, 5 hdg_delta, 1 alt_delta (frozen), 2 fire])` |
+| Observation | `Box(36)` — self(12) + target(7) + missile(6) + mask(11) |
 | Agent IDs | `["p0"]` |
 | Decision rate | 5 Hz (0.2s, 12 sub-steps at 60 Hz) |
 
-**Geometry:** Task `reset()` overrides BaseEnv default → tail-chase at 2-5 km, both aircraft same heading.
+**Geometry:** Task `reset()` overrides BaseEnv default → tail-chase at 2-5 km with pursuer heading offset ±30-60° (must maneuver into WEZ first).
 Pursuer behind target (opposite-of-heading displacement), JSBSim lat/lon synced with position_ned.
 
 ---
@@ -799,7 +799,7 @@ Pursuer behind target (opposite-of-heading displacement), JSBSim lat/lon synced 
 ###  Combat Mechanics
 
 **WEZ (Weapons Engagement Zone) Mask:**
-Fire action (index 12) is only unmasked when ALL conditions are met:
+Fire action (index 10) is only unmasked when ALL conditions are met:
 - Target alive + missiles remaining
 - Distance 1.5–8 km
 - ATA (Antenna Train Angle) < 15° — nose precisely on target
@@ -840,7 +840,7 @@ Max range depends on Aspect Angle:
 **Termination Conditions:**
 - `target_killed` — HP depleted (hits ≥ max_hits)
 - `ammo_exhausted` — all missiles launched AND resolved
-- `low_altitude` — < 1500m
+- `low_altitude` — < 1000m
 - `fled_combat_altitude` — altitude deviation > 3000m
 - `lost_target` — > 15 km
 - `timeout` — > 1500 steps
@@ -875,7 +875,7 @@ Max range depends on Aspect Angle:
 **Training script:** `scripts/_train_shoot_1v1.py`
 - RLlib PPO with MLP default model (FCN [256,256]); v10.2 `ShootMaskModel` gates the fire head by WEZ/DLZ/ammo
 - LR=1e-3, entropy=0.03, train_batch=1024
-- Flat Box(38) observation (no Dict spaces — avoids Ray serialization issues)
+- Flat Box(36) observation (no Dict spaces — avoids Ray serialization issues)
 - Now logs every iteration (not every 10) for fine-grained per-episode analysis
 - TensorBoard: `tensorboard --logdir=~/ray_results/ --port=6006`
 

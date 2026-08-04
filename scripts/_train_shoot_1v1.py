@@ -26,7 +26,7 @@ from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 from ray.rllib.models import ModelCatalog
 from src.models.shoot_mask_model import ShootMaskModel
 
-ENV_NAME = "jsbsim_shoot_v101"
+ENV_NAME = "jsbsim_shoot_1v1"
 
 
 def env_creator(config):
@@ -101,7 +101,7 @@ def main():
         result = algo.train()
         rew = result.get("env_runners", {}).get("episode_reward_mean", float("nan"))
         length = result.get("env_runners", {}).get("episode_len_mean", 0)
-        # Fire rate: fraction of actions where fire==1 (flat index 12 of 13)
+        # Fire rate: fraction of actions where fire==1 (flat index 10 of 11)
         # Note: this is an approximation — RLlib doesn't expose action histograms easily
 
         # Log every iteration for fine-grained per-episode analysis

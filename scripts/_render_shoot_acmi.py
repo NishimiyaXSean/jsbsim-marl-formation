@@ -12,7 +12,7 @@ from ray.tune.registry import register_env
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
-ENV = "jsbsim_shoot_1v1_v1"
+ENV = "jsbsim_shoot_1v1"
 OUTDIR = "results/shoot_training"
 
 
@@ -53,7 +53,7 @@ def render_one(tag, ckpt, difficulty, seed, acmi_path):
             min_d = d
         if step < 5 or step % 30 == 0 or a[3] == 1:
             bd = env.task._reward_breakdown
-            lr = bd.get("ValidLaunchReward", {}).get("p0", 0)
+            lr = bd.get("LaunchSuccess", {}).get("p0", 0)
             fire_mark = "FIRE!" if a[3] == 1 else ""
             print(f"  step {step:3d}: dist={d:.0f}m rew={total_r:+.0f} launch={lr:+.0f} {fire_mark}")
         if terms.get("__all__") or truncs.get("__all__"):

@@ -14,7 +14,7 @@ from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
 # Must match the env name used during training
-ENV = "jsbsim_shoot_1v1_v1"
+ENV = "jsbsim_shoot_1v1"
 register_env(ENV, lambda c: BaseEnv(task=SingleCombatShootTask(c)))
 
 
@@ -81,7 +81,7 @@ def render_checkpoint(ckpt_path, difficulty, seed, acmi_path, label):
         if not t0.is_alive: hits += 1  # count hit events
         if step < 5 or step % 20 == 0 or act[3] == 1:
             bd = env.task._reward_breakdown
-            lr = bd.get("ValidLaunchReward", {}).get("p0", 0)
+            lr = bd.get("LaunchSuccess", {}).get("p0", 0)
             print(f"  [{label}] step {step:3d}: dist={d:.0f}m  rew={total_r:+.0f}  "
                   f"{'FIRE!' if act[3]==1 else ''}  launch_r={lr:+.0f}")
         if terms.get("__all__") or truncs.get("__all__"):

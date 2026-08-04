@@ -1,17 +1,20 @@
-"""SingleCombatShootTask — 1v1 missile combat for BaseEnv + RLlib MAPPO.
+"""SingleCombatShootTask — 1v1 missile combat for BaseEnv + RLlib PPO.
 
 The RL agent (p0) controls:
-  - Flight:   MultiDiscrete([speed_delta(3), heading_delta(5), altitude_delta(3)])
-  - Fire:     fire/no-fire as an extra action dimension
+  - Flight:   MultiDiscrete([speed_delta(3), heading_delta(5), altitude_delta(1)])
+  - Fire:     fire/no-fire as an extra action dimension (WEZ/DLZ-masked)
 
-The target (t0) is rule-based — flies straight-and-level with gentle heading
-changes for now, providing a stationary-like target for initial training.
+The target (t0) is rule-based — S-turn evasion scaled by difficulty, with
+missile-threat break-turn reaction at difficulty > 0.
 
-KEY DESIGN DECISIONS (per user feedback):
+KEY DESIGN DECISIONS:
   1. No new Env class — instantiate as BaseEnv(task=SingleCombatShootTask(...))
-  2. ValidLaunchReward (+50): immediate credit for firing within valid parameters
-     (1–5 km, ATA < 20°), solving the +200 hit reward's long credit-assignment delay
-  3. Action mask: fire action is masked when remaining_missiles == 0
+  2. Reward chain: dense range shaping → WEZ entry/dwell → launch success →
+     closure bonus (Phase 2-A) → quality launch → per-missile hit accuracy
+  3. Real action masking (ShootMaskModel): fire masked by ATA < 15°, Dynamic DLZ
+     (1.5 km min, 3–8 km by aspect), ammo, and cooldown
+  4. Two-stage proximity fuze (arm 300m → CPA<200m → pull-away trigger);
+     multi-hit HP (4) — missiles do not auto-kill
 """
 
 from __future__ import annotations
@@ -85,7 +88,7 @@ REWARD_HIT_BASE = 1000.0        # guaranteed for any hit within lethal radius
 REWARD_HIT_BONUS = 1000.0       # scaled by accuracy: 0m→+1000, 300m→+0
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
-REWARD_SHOOT_PENALTY = -10.0    # dry-fire penalty (should never happen with mask)
+REWARD_SHOOT_PENALTY = -1.0     # fire blocked by WEZ/cooldown (mask should prevent most)
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
 PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
@@ -461,7 +464,7 @@ class SingleCombatShootTask(BaseTask):
             # (6) Fire-spam penalty
             r_spam = 0.0
             if self._commanded_fire.get(aid, False) and not self._has_launched_this_step.get(aid, False):
-                r_spam = -1.0
+                r_spam = REWARD_SHOOT_PENALTY
             r += r_spam
 
             # (7) Quality launch bonus
@@ -616,8 +619,8 @@ class SingleCombatShootTask(BaseTask):
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
         """Action mask with WEZ + Dynamic Launch Zone (DLZ) gating.
 
-        Flat mask layout: [speed(3), heading(5), altitude(3), fire(2)]
-        Fire = index 12, only unmasked when ALL conditions met.
+        Flat mask layout: [speed(3), heading(5), altitude(1), fire(2)]
+        Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL conditions met.
 
         Dynamic DLZ: max range depends on Aspect Angle (AA)
           - Head-on  (AA≈180°): missile+target closing fast → 8km

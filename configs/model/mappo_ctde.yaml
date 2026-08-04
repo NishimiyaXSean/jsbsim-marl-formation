@@ -1,12 +1,15 @@
-# MAPPO CTDE Model Configuration
+# 制导武器系统策略模型参考配置 (Reference only)
+# 注意: 当前训练脚本 scripts/_train_shoot_1v1.py 不读取本文件,
+# 实际模型见 src/models/shoot_mask_model.py (ShootMaskModel, 单智能体 PPO)
 model:
-  custom_model: "mappo_ctde_model"
-  actor:
-    hidden_dims: [256, 256]
+  custom_model: "shoot_mask_model"
+  action_space: "MultiDiscrete([3 speed, 5 heading, 1 altitude, 2 fire])"
+  local_obs_dim: 25        # 不含掩码: 12 self + 7 target + 6 missile
+  action_mask_dim: 11
+  flat_obs_dim: 36         # 25 + 11
+  mask_invalid_logit: -1e9
+  encoder:
+    hidden_dims: [256, 256, 128]
     activation: "tanh"
-  critic:
-    hidden_dims: [256, 256]
-    activation: "tanh"
-  local_obs_dim: 19
-  global_state_dim: 26
-  action_dim: 4  # [throttle, elevator, aileron, rudder]
+  value:
+    hidden_dims: [256, 1]

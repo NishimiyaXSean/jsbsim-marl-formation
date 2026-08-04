@@ -217,7 +217,7 @@ def main():
             dist = float(np.linalg.norm(
                 p0.aircraft.position_ned - t0.aircraft.position_ned))
             bd = env.task._reward_breakdown
-            launch_r = bd.get('ValidLaunchReward', {}).get('p0', 0)
+            launch_r = bd.get('LaunchSuccess', {}).get('p0', 0)
             print(f"  step {step:3d}: dist={dist:.0f}m  "
                   f"hdg={p0.ref_hdg:.0f}°  spd={p0.aircraft.state['airspeed_mps']:.0f}m/s  "
                   f"rew={total_rew:+.0f}  {'FIRE!' if action_vec[3]==1 else ''}"

@@ -16,7 +16,7 @@ from ray.tune.registry import register_env
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
-ENV = "jsbsim_shoot_1v1_v1"
+ENV = "jsbsim_shoot_1v1"
 C = {'p0': '#377eb8', 't0': '#e41a1c', 'm': '#ff7f00'}
 OUT = '/home/sean/jsbsim-marl-formation/results/shoot_training'
 
