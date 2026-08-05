@@ -17,6 +17,7 @@ warnings.filterwarnings('ignore')
 for n in ['jsbsim', 'gymnasium']:
     logging.getLogger(n).setLevel(logging.CRITICAL)
 
+import torch
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import register_env
@@ -49,7 +50,14 @@ def main():
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--legacy-obs", action="store_true",
-                        help="use 36-dim legacy observation (no closure/LOS-rate); required when resuming pre-P0-2 checkpoints")
+                        help="use legacy observation without closure features; required when resuming pre-P0-2 checkpoints")
+    parser.add_argument("--train-batch-size", type=int, default=2048,
+                        help="rollout steps per PPO iteration (episodes are ~900 steps; "
+                             "1024 = only ~1 episode per update -> noisy, unstable)")
+    parser.add_argument("--minibatch-size", type=int, default=256)
+    parser.add_argument("--num-envs", type=int, default=2,
+                        help="parallel envs per rollout worker")
+    parser.add_argument("--num-gpus", type=int, default=1)
     args = parser.parse_args()
 
     register_env(ENV_NAME, lambda c: env_creator(c))
@@ -87,17 +95,17 @@ def main():
             entropy_coeff=0.03,  # annealed manually in the loop (old API stack)
             vf_clip_param=1000.0,
             grad_clip=0.5,
-            train_batch_size=1024,
-            minibatch_size=128,
+            train_batch_size=args.train_batch_size,
+            minibatch_size=args.minibatch_size,
             num_epochs=10,
             model={"custom_model": "shoot_mask_model"},
         )
         .env_runners(
             num_env_runners=1,
-            num_envs_per_env_runner=1,
+            num_envs_per_env_runner=args.num_envs,
             sample_timeout_s=120,
         )
-        .resources(num_gpus=0)
+        .resources(num_gpus=(args.num_gpus if torch.cuda.is_available() else 0))
         .debugging(log_level="WARN", seed=args.seed)
         .api_stack(
             enable_rl_module_and_learner=False,
@@ -120,8 +128,10 @@ def main():
 
     best_reward = -float("inf")
 
+    gpu_note = "GPU" if (args.num_gpus and torch.cuda.is_available()) else "CPU"
     print(f"Training 1v1 shoot — {args.iterations} iters, difficulty={args.difficulty:.1f}, "
-          f"lr={args.lr}->{args.lr*0.2:.1e}, entropy=0.03->0.005")
+          f"lr={args.lr}->{args.lr*0.2:.1e}, entropy=0.03->0.005, "
+          f"batch={args.train_batch_size}, envs={args.num_envs}, {gpu_note}")
     print(f"Output: {output_dir}")
     print(f"Launch stats: {launch_stats_path}")
 
