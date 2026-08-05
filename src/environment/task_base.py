@@ -135,9 +135,3 @@ class BaseTask(ABC):
         """
         return np.zeros(0)
 
-    def get_terminal_reward(self, env) -> Dict[str, float]:
-        """One-shot rewards applied on the final step of an episode.
-
-        Used for e.g. unused-ammo penalties that must only apply once.
-        """
-        return {aid: 0.0 for aid in self._agent_ids}

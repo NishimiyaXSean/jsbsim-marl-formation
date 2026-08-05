@@ -36,3 +36,7 @@ Thumbs.db
 .claude/
 *Zone.Identifier
 results/neural_tracking/
+
+# Generated visualization / eval artifacts (regenerable via scripts/)
+results/ctrl_viz/
+results/shoot_eval/eval_*.json
