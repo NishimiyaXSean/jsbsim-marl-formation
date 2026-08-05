@@ -98,11 +98,11 @@ REWARD_MISS_PENALTY = -50.0     # P1: wasted missile (4 ammo / 4 HP budget)
 REWARD_SHOOT_PENALTY = -1.0     # fire blocked by WEZ/cooldown (mask should prevent most)
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
-PROGRESS_WEIGHT = 0.3           # v22: modest approach shaping
-ATA_WEIGHT = 1.2                # v22: alignment reinforcement only — the cmd_hdg
-                                # reward does the primary steering.  ATA=4.0 let the
-                                # policy collect +24k/ep just by pointing at the
-                                # target from a standoff (the v21b hover exploit).
+PROGRESS_WEIGHT = 0.4           # v23: modest approach shaping
+ATA_WEIGHT = 4.0                # v23: restored — v22's 1.2 was too weak to teach
+                                # steering (91% lost_target).  The hover exploit is
+                                # now killed by the closure gate below, not by
+                                # weakening ATA.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -953,21 +953,25 @@ class SingleCombatShootTask(BaseTask):
         return float(reward)
 
     def _ata_reward(self, ps, target) -> float:
-        """Nose-on-target reward — scaled by proximity (v21b).
+        """Nose-on-target reward — gated by closing speed (v23).
 
-        Aligning is worth more when close: at 500m the reward is ~1.44x,
-        at 3km ~1.1x, at 6km ~0.75x.  This breaks the standoff local optimum
-        where the policy hovers at 3km collecting flat ATA reward.
+        ATA is only paid while the pursuer is CLOSING on the target
+        (scaled 0 at hover to full at 50+ m/s closure).  This keeps the strong
+        steering signal (ATA 4.0) during the productive approach while making
+        the v21b standoff exploit unprofitable: hovering aligned at 3km has
+        closure ~ 0, so ATA pays ~ nothing.
         """
         p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
         los_vec = target.aircraft.position_ned - ps.aircraft.position_ned
         dist = float(np.linalg.norm(los_vec))
         los_dir = los_vec / max(dist, 1e-6)
         cos_ata = float(np.dot(p_fwd, los_dir))
-        proximity_scale = float(np.clip(1.5 - dist / 8000.0, 0.5, 1.5))
+        rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
+        closure = float(np.dot(rel_vel, los_dir))
+        close_gate = float(np.clip(closure / 50.0, 0.0, 1.0))
         # Range guard: only reward ATA if within reasonable engagement range (<6km)
         range_gate = 1.0 if dist < 6000.0 else 0.1
-        return float(ATA_WEIGHT * cos_ata * proximity_scale *
+        return float(ATA_WEIGHT * cos_ata * close_gate *
                      DECISION_STEPS * range_gate)
 
     def _alt_reward(self, ps, target) -> float:
