@@ -84,7 +84,7 @@ def main():
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=0.03,
+            entropy_coeff=0.05,  # annealed manually in the loop (old API stack)
             vf_clip_param=1000.0,
             grad_clip=0.5,
             train_batch_size=1024,
@@ -111,14 +111,28 @@ def main():
         algo.restore(os.path.abspath(args.checkpoint))
         print(f"Resumed from {args.checkpoint}")
 
+    # P1: manual lr/entropy annealing (dict schedules unsupported in the old
+    # API stack).  Linear decay to 20% of the initial values over the run —
+    # v14 showed a late-training collapse with fixed lr/entropy.
+    _policy = algo.get_policy("default_policy")
+    _optim = _policy._optimizers[0] if getattr(_policy, "_optimizers", None) else None
+    _ENTROPY0, _ENTROPY1 = 0.05, 0.01
+
     best_reward = -float("inf")
 
     print(f"Training 1v1 shoot — {args.iterations} iters, difficulty={args.difficulty:.1f}, "
-          f"lr={args.lr}, entropy=0.03")
+          f"lr={args.lr}->{args.lr*0.2:.1e}, entropy=0.05->0.01")
     print(f"Output: {output_dir}")
     print(f"Launch stats: {launch_stats_path}")
 
     for i in range(args.iterations):
+        frac = i / max(args.iterations - 1, 1)
+        cur_lr = args.lr * (1.0 - 0.8 * frac)
+        cur_entropy = _ENTROPY0 - (_ENTROPY0 - _ENTROPY1) * frac
+        _policy.config["entropy_coeff"] = cur_entropy
+        if _optim is not None:
+            for _g in _optim.param_groups:
+                _g["lr"] = cur_lr
         result = algo.train()
         rew = result.get("env_runners", {}).get("episode_reward_mean", float("nan"))
         length = result.get("env_runners", {}).get("episode_len_mean", 0)

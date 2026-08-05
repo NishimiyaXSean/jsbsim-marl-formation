@@ -12,7 +12,7 @@ KEY DESIGN DECISIONS:
   2. Reward chain: dense range shaping → WEZ entry/dwell → launch success →
      closure bonus (Phase 2-A) → quality launch → per-missile hit accuracy
   3. Real action masking (ShootMaskModel): fire masked by ATA < 15°, Dynamic DLZ
-     (1.5 km min, 3–8 km by aspect), ammo, and cooldown
+     (1.5 km min, 3–8 km by aspect), closure > 0 (P1), ammo, and cooldown
   4. Two-stage proximity fuze (arm 300m → CPA<200m → pull-away trigger);
      multi-hit HP (4) — missiles do not auto-kill
 """
@@ -90,6 +90,7 @@ REWARD_HIT_BASE = 1000.0        # guaranteed for any hit within lethal radius
 REWARD_HIT_BONUS = 1000.0       # scaled by accuracy: 0m→+1000, 300m→+0
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
+REWARD_MISS_PENALTY = -50.0     # P1: wasted missile (4 ammo / 4 HP budget)
 REWARD_SHOOT_PENALTY = -1.0     # fire blocked by WEZ/cooldown (mask should prevent most)
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
@@ -469,16 +470,8 @@ class SingleCombatShootTask(BaseTask):
                 r_launch = 10.0
             r += r_launch
 
-            # (5b) Phase 2-A: positive closure bonus (fire-time only, no penalty)
-            r_closure_bonus = 0.0
-            if self._has_launched_this_step.get(aid, False):
-                p_pos = ps.aircraft.position_ned
-                t_pos = target.aircraft.position_ned
-                los_dir = (t_pos - p_pos) / max(np.linalg.norm(t_pos - p_pos), 1e-6)
-                closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
-                if closure > 0:
-                    r_closure_bonus = 2.0  # small, encourages waiting for good window
-            r += r_closure_bonus
+            # (5b) closure bonus removed (P1): closure>0 is now structurally
+            # guaranteed by the fire mask, so this reward is redundant.
 
             # (6) Fire-spam penalty
             r_spam = 0.0
@@ -496,7 +489,7 @@ class SingleCombatShootTask(BaseTask):
                 ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
                 closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
                 if closure > 0 and ata_deg < 10.0 and 2000 < dist < 4000:
-                    r_quality = 20.0
+                    r_quality = 40.0  # P1: premium window worth waiting for
             r += r_quality
 
             # ── Event-driven rewards ────────────────────────────────────────
@@ -513,6 +506,12 @@ class SingleCombatShootTask(BaseTask):
                     range_mult = np.clip(1.0 - (l_dist - 1500.0) / 3500.0, 0.3, 1.0)
                     missile_reward = (REWARD_HIT_BASE + REWARD_HIT_BONUS * accuracy_score) * range_mult
                     r_event += missile_reward
+
+            # Miss penalty (P1): a wasted missile is costly with 4 ammo / 4 HP.
+            for m in list(ps.launch_missiles):
+                if m.is_done and not m.is_success and not getattr(m, '_miss_penalty_rewarded', False):
+                    m._miss_penalty_rewarded = True
+                    r_event += REWARD_MISS_PENALTY
 
             # Shot down by enemy (one-shot)
             if self._prev_alive.get(aid, True) and not ps.is_alive:
@@ -533,7 +532,6 @@ class SingleCombatShootTask(BaseTask):
                 "WEZ_Entry": {"p0": r_wez_entry},
                 "WEZ_Dwell": {"p0": r_wez_dwell},
                 "LaunchSuccess": {"p0": r_launch},
-                "ClosureBonus": {"p0": r_closure_bonus},
                 "FireSpam": {"p0": r_spam},
                 "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
@@ -639,7 +637,8 @@ class SingleCombatShootTask(BaseTask):
         """Action mask with WEZ + Dynamic Launch Zone (DLZ) gating.
 
         Flat mask layout: [speed(3), heading(5), altitude(1), fire(2)]
-        Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL conditions met.
+        Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL
+        conditions met (P1: includes closure > 0 — no firing at separating targets).
 
         Dynamic DLZ: max range depends on Aspect Angle (AA)
           - Head-on  (AA≈180°): missile+target closing fast → 8km
@@ -688,6 +687,14 @@ class SingleCombatShootTask(BaseTask):
             # Dynamic max range: 3km (tail) → 8km (head-on)
             dynamic_max_dist = 3000.0 + 5000.0 * (aa_deg / 180.0)
             if dist < MIN_ATTACK_DISTANCE or dist > dynamic_max_dist:
+                can_fire = False
+
+        # Condition 5 (P1): closure > 0 — never fire at a separating target.
+        # v14 showed 99% of launches had negative closure (fire-anyway behavior).
+        if can_fire:
+            rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
+            closure = float(np.dot(rel_vel, los_dir))
+            if closure <= 0.0:
                 can_fire = False
 
         if not can_fire:
