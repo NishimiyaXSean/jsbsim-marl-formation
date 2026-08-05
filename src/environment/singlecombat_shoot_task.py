@@ -1,7 +1,7 @@
 """SingleCombatShootTask — 1v1 missile combat for BaseEnv + RLlib PPO.
 
 The RL agent (p0) controls:
-  - Flight:   MultiDiscrete([speed_delta(3), heading_sector(16), altitude_delta(1)])
+  - Flight:   MultiDiscrete([speed_delta(3), heading_delta(5), altitude_delta(1)])
   - Fire:     fire/no-fire as an extra action dimension (WEZ/DLZ-masked)
 
 The target (t0) is rule-based — S-turn evasion scaled by difficulty, with
@@ -53,8 +53,10 @@ N_TARGETS = 1
 AGENT_IDS = ["p0"]
 
 # ── Observation dimensions ───────────────────────────────────────────────────
-# Self: alt, roll_sin, roll_cos, pitch_sin, pitch_cos, v_body_xyz (3), airspeed, AoA, heading_sin, heading_cos
-SELF_DIM = 12
+# Self: alt, roll_sin, roll_cos, pitch_sin, pitch_cos, v_body_xyz (3), airspeed, AoA,
+#       heading_sin, heading_cos, ref_hdg_sin, ref_hdg_cos (commanded sector — the
+#       stateless policy cannot remember its last sector choice otherwise)
+SELF_DIM = 14
 # Target: delta_altitude, delta_heading, delta_speed, AO, TA, distance, side_flag,
 #         heading-command error (bearing - commanded sector)
 TARGET_DIM = 8
@@ -68,19 +70,15 @@ GLOBAL_DIM = (N_PURSUERS + N_TARGETS) * GLOBAL_PER_AIRCRAFT  # 16
 
 # ── Action space ─────────────────────────────────────────────────────────────
 N_SPEED_DELTA = 3
-# Absolute heading sectors (22.5 deg each).  The heading-hold controller flies the
-# aircraft to the selected sector; max residual error 11.25 deg < 15 deg ATA gate
-# so a fireable alignment is always reachable.  Replaces the hard-to-control
-# incremental heading deltas (ref rotated 50 deg/s vs ~6-8 deg/s physical turn).
-N_HEADING_SECTORS = 16
+N_HEADING_DELTA = 5
 N_ALT_DELTA = 1     # frozen altitude — missile phase, not rate-fight
 N_FIRE = 2
-N_ACTIONS = N_SPEED_DELTA + N_HEADING_SECTORS + N_ALT_DELTA + N_FIRE  # 22
+N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 11
 
-OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 48 legacy; 50 with closure
+OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 39 legacy; 41 with closure
 
 DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
-HEADING_SECTORS = [i * (360.0 / N_HEADING_SECTORS) for i in range(N_HEADING_SECTORS)]
+DELTA_HEADINGS  = [-10.0, -5.0, 0.0, 5.0, 10.0]  # degrees — gentler BFM
 DELTA_ALTITUDES = [0.0]                            # frozen — missile phase, not rate-fight
 
 # ── Missile launch parameters (WEZ: Weapons Engagement Zone) ──────────────────
@@ -133,7 +131,7 @@ class SingleCombatShootTask(BaseTask):
         self._obs_dim = SELF_DIM + target_dim + MISSILE_DIM + N_ACTIONS
         single_obs = gym.spaces.Box(-1.0, 1.0, (self._obs_dim,), dtype=np.float32)
         single_act = gym.spaces.MultiDiscrete(
-            [N_SPEED_DELTA, N_HEADING_SECTORS, N_ALT_DELTA, N_FIRE])
+            [N_SPEED_DELTA, N_HEADING_DELTA, N_ALT_DELTA, N_FIRE])
 
         self._observation_space = gym.spaces.Dict({aid: single_obs for aid in AGENT_IDS})
         self._action_space = gym.spaces.Dict({aid: single_act for aid in AGENT_IDS})
@@ -277,8 +275,11 @@ class SingleCombatShootTask(BaseTask):
             speed_idx, hdg_idx, alt_idx, fire = (
                 int(action[0]), int(action[1]), int(action[2]), int(action[3]))
 
-            # ── Flight: absolute heading sector (heading-hold controller) ──
-            ps.ref_hdg = float(HEADING_SECTORS[hdg_idx])
+            # ── Flight: incremental deltas on current reference ─────────────
+            # Steering quality comes from the CmdHeading shaping + the
+            # ref_hdg / cmd_hdg_err observation features (v17/v18 additions).
+            ps.ref_hdg = float(
+                (ps.ref_hdg + DELTA_HEADINGS[hdg_idx]) % 360.0)
             # Clamp altitude to target ± 2000m engagement cylinder
             t_alt = float(env.targets[0].aircraft.state["alt_m"]) if env.M > 0 else 3000.0
             ps.ref_alt_m = float(np.clip(
@@ -354,6 +355,8 @@ class SingleCombatShootTask(BaseTask):
                 float(s["alpha_deg"]) / 30.0,                 # 9. alpha
                 math.sin(yaw_r),                               # 10. heading_sin
                 math.cos(yaw_r),                               # 11. heading_cos
+                math.sin(np.radians(ps.ref_hdg)),              # 12. ref_hdg_sin
+                math.cos(np.radians(ps.ref_hdg)),              # 13. ref_hdg_cos
             ], dtype=np.float32)
 
             # ── Target relative features ───────────────────────────────────
@@ -456,6 +459,18 @@ class SingleCombatShootTask(BaseTask):
             r_ata = self._ata_reward(ps, target)
             r_alt = self._alt_reward(ps, target)
 
+            # (2b) Command-heading shaping (absolute-sector interface):
+            # immediate feedback on the sector CHOICE — graded by the wrapped
+            # angle from the commanded sector to the target bearing, before the
+            # aircraft has physically turned there.  ATA alone is delayed by the
+            # ~2-5s turn response, which made sector selection hard to learn.
+            bearing_deg = float((math.degrees(math.atan2(
+                target.aircraft.position_ned[1] - ps.aircraft.position_ned[1],
+                target.aircraft.position_ned[0] - ps.aircraft.position_ned[0]))
+                + 360.0) % 360.0)
+            cmd_hdg_err = (bearing_deg - ps.ref_hdg + 180.0) % 360.0 - 180.0
+            r_cmd_hdg = -1.0 * (abs(cmd_hdg_err) / 180.0) * DECISION_STEPS
+
             # (3) WEZ first-entry bonus — one-shot per episode
             in_wez = self._is_valid_launch_envelope(ps, target)
             r_wez_entry = 0.0
@@ -472,7 +487,7 @@ class SingleCombatShootTask(BaseTask):
             else:
                 ps._wez_steps = 0
 
-            r += r_progress + r_ata + r_alt + r_dense_range + r_wez_entry + r_wez_dwell
+            r += r_progress + r_ata + r_alt + r_cmd_hdg + r_dense_range + r_wez_entry + r_wez_dwell
 
             # (5) Fire success reward — modest, encourages legal launch
             r_launch = 0.0
@@ -537,6 +552,7 @@ class SingleCombatShootTask(BaseTask):
             self._reward_breakdown = {
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
+                "CmdHeading": {"p0": r_cmd_hdg},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
                 "DenseRange": {"p0": r_dense_range},
                 "WEZ_Entry": {"p0": r_wez_entry},
@@ -646,8 +662,8 @@ class SingleCombatShootTask(BaseTask):
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
         """Action mask with WEZ + Dynamic Launch Zone (DLZ) gating.
 
-        Flat mask layout: [speed(3), heading(16), altitude(1), fire(2)]
-        Fire = index 21 (0-based in the 22-dim mask), only unmasked when ALL
+        Flat mask layout: [speed(3), heading(5), altitude(1), fire(2)]
+        Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL
         conditions met (P1: includes closure > 0 — no firing at separating targets).
 
         Dynamic DLZ: max range depends on Aspect Angle (AA)
@@ -656,7 +672,7 @@ class SingleCombatShootTask(BaseTask):
           - Linear interpolation between
         """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
-        fire_start = N_SPEED_DELTA + N_HEADING_SECTORS + N_ALT_DELTA  # 3+16+1=20
+        fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 3+5+1=9
 
         if env.M == 0:
             mask[fire_start + 1] = 0.0

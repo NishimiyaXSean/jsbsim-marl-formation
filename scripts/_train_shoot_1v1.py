@@ -84,7 +84,7 @@ def main():
             gamma=0.99,
             lambda_=0.95,
             clip_param=0.2,
-            entropy_coeff=0.05,  # annealed manually in the loop (old API stack)
+            entropy_coeff=0.03,  # annealed manually in the loop (old API stack)
             vf_clip_param=1000.0,
             grad_clip=0.5,
             train_batch_size=1024,
@@ -116,12 +116,12 @@ def main():
     # v14 showed a late-training collapse with fixed lr/entropy.
     _policy = algo.get_policy("default_policy")
     _optim = _policy._optimizers[0] if getattr(_policy, "_optimizers", None) else None
-    _ENTROPY0, _ENTROPY1 = 0.05, 0.01
+    _ENTROPY0, _ENTROPY1 = 0.03, 0.005
 
     best_reward = -float("inf")
 
     print(f"Training 1v1 shoot — {args.iterations} iters, difficulty={args.difficulty:.1f}, "
-          f"lr={args.lr}->{args.lr*0.2:.1e}, entropy=0.05->0.01")
+          f"lr={args.lr}->{args.lr*0.2:.1e}, entropy=0.03->0.005")
     print(f"Output: {output_dir}")
     print(f"Launch stats: {launch_stats_path}")
 
