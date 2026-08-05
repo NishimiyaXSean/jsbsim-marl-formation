@@ -15,7 +15,7 @@ from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
 # Register the canonical env name + legacy aliases so old checkpoints render.
 ENV = "jsbsim_shoot_1v1"
-ACTION_DIMS = [3, 5, 1, 2]  # speed, heading, altitude, fire
+ACTION_DIMS = [3, 16, 1, 2]  # speed, heading, altitude, fire
 
 
 def _decode_action(raw):

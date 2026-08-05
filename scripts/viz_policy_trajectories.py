@@ -26,7 +26,7 @@ from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 from src.models.shoot_mask_model import ShootMaskModel
 
-DIMS = [3, 5, 1, 2]
+DIMS = [3, 16, 1, 2]
 
 
 def decode(raw):

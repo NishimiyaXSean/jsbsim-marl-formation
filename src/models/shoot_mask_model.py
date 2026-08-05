@@ -24,16 +24,16 @@ from ray.rllib.utils.torch_utils import FLOAT_MIN
 class ShootMaskModel(TorchModelV2, nn.Module):
     """MLP policy with proper action mask support for MultiDiscrete actions.
 
-    Action space: MultiDiscrete([3 speed, 5 heading, 1 altitude, 2 fire])
-    Observation: Box(39/41) — first (dim-11) obs, last 11 mask.
+    Action space: MultiDiscrete([3 speed, 16 heading sector, 1 altitude, 2 fire])
+    Observation: Box(50/52) — first (dim-22) obs, last 22 mask.
     """
 
     def __init__(self, obs_space, action_space, num_outputs, model_config, name):
         TorchModelV2.__init__(self, obs_space, action_space, num_outputs, model_config, name)
         nn.Module.__init__(self)
 
-        self._action_dims = [3, 5, 1, 2]  # speed, heading, altitude, fire
-        self._total_actions = sum(self._action_dims)  # 11
+        self._action_dims = [3, 16, 1, 2]  # speed, heading sector, altitude, fire
+        self._total_actions = sum(self._action_dims)  # 22
 
         # Derive obs dim from the action-mask tail: flat = obs + mask.
         obs_shape = getattr(obs_space, "shape", None)

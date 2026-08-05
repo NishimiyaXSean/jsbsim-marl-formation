@@ -786,8 +786,8 @@ Integrated at **60 Hz** inside BaseEnv's 12-step physics loop. No JSBSim depende
 | Component | Specification |
 |-----------|--------------|
 | N/M | 1 pursuer, 1 target |
-| Action | `MultiDiscrete([3 speed_delta, 5 hdg_delta, 1 alt_delta (frozen), 2 fire])` |
-| Observation | `Box(41)` — self(14) + target(10) + missile(6) + mask(11) |
+| Action | `MultiDiscrete([3 speed_delta, 16 heading_sector, 1 alt_delta (frozen), 2 fire])` |
+| Observation | `Box(52)` — self(14) + target(10) + missile(6) + mask(22) |
 | Agent IDs | `["p0"]` |
 | Decision rate | 5 Hz (0.2s, 12 sub-steps at 60 Hz) |
 
@@ -799,7 +799,7 @@ Pursuer behind target (opposite-of-heading displacement), JSBSim lat/lon synced 
 ###  Combat Mechanics
 
 **WEZ (Weapons Engagement Zone) Mask:**
-Fire action (index 10) is only unmasked when ALL conditions are met:
+Fire action (index 21) is only unmasked when ALL conditions are met:
 - Target alive + missiles remaining
 - Distance 1.5–8 km
 - ATA (Antenna Train Angle) < 15° — nose precisely on target
@@ -875,7 +875,7 @@ Max range depends on Aspect Angle:
 **Training script:** `scripts/_train_shoot_1v1.py`
 - RLlib PPO with MLP default model (FCN [256,256]); v10.2 `ShootMaskModel` gates the fire head by WEZ/DLZ/ammo
 - LR=1e-3, entropy=0.03, train_batch=1024
-- Flat Box(41) observation (no Dict spaces — avoids Ray serialization issues)
+- Flat Box(52) observation (no Dict spaces — avoids Ray serialization issues)
 - Now logs every iteration (not every 10) for fine-grained per-episode analysis
 - TensorBoard: `tensorboard --logdir=~/ray_results/ --port=6006`
 

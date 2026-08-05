@@ -1,7 +1,7 @@
 """SingleCombatShootTask — 1v1 missile combat for BaseEnv + RLlib PPO.
 
 The RL agent (p0) controls:
-  - Flight:   MultiDiscrete([speed_delta(3), heading_delta(5), altitude_delta(1)])
+  - Flight:   MultiDiscrete([speed_delta(3), heading_sector(16), altitude_delta(1)])
   - Fire:     fire/no-fire as an extra action dimension (WEZ/DLZ-masked)
 
 The target (t0) is rule-based — S-turn evasion scaled by difficulty, with
@@ -70,15 +70,20 @@ GLOBAL_DIM = (N_PURSUERS + N_TARGETS) * GLOBAL_PER_AIRCRAFT  # 16
 
 # ── Action space ─────────────────────────────────────────────────────────────
 N_SPEED_DELTA = 3
-N_HEADING_DELTA = 5
+# Absolute heading sectors (22.5 deg each) — retry with GPU+batch+curriculum.
+# The heading-hold controller flies to the selected sector; max residual
+# 11.25 deg < 15 deg ATA gate so a fireable alignment is always reachable.
+# Previous cold-start attempt failed on CPU/1024-batch; the steering obs
+# (ref_hdg, cmd_hdg_err) and the approach rewards are now in place.
+N_HEADING_SECTORS = 16
 N_ALT_DELTA = 1     # frozen altitude — missile phase, not rate-fight
 N_FIRE = 2
-N_ACTIONS = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA + N_FIRE  # 11
+N_ACTIONS = N_SPEED_DELTA + N_HEADING_SECTORS + N_ALT_DELTA + N_FIRE  # 22
 
-OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 39 legacy; 41 with closure
+OBS_DIM = SELF_DIM + TARGET_DIM + MISSILE_DIM + N_ACTIONS  # 50 legacy; 52 with closure
 
 DELTA_SPEEDS    = [-20.0,   0.0,  20.0]       # m/s
-DELTA_HEADINGS  = [-10.0, -5.0, 0.0, 5.0, 10.0]  # degrees — gentler BFM
+HEADING_SECTORS = [i * (360.0 / N_HEADING_SECTORS) for i in range(N_HEADING_SECTORS)]
 DELTA_ALTITUDES = [0.0]                            # frozen — missile phase, not rate-fight
 
 # ── Missile launch parameters (WEZ: Weapons Engagement Zone) ──────────────────
@@ -135,7 +140,7 @@ class SingleCombatShootTask(BaseTask):
         self._obs_dim = SELF_DIM + target_dim + MISSILE_DIM + N_ACTIONS
         single_obs = gym.spaces.Box(-1.0, 1.0, (self._obs_dim,), dtype=np.float32)
         single_act = gym.spaces.MultiDiscrete(
-            [N_SPEED_DELTA, N_HEADING_DELTA, N_ALT_DELTA, N_FIRE])
+            [N_SPEED_DELTA, N_HEADING_SECTORS, N_ALT_DELTA, N_FIRE])
 
         self._observation_space = gym.spaces.Dict({aid: single_obs for aid in AGENT_IDS})
         self._action_space = gym.spaces.Dict({aid: single_act for aid in AGENT_IDS})
@@ -285,11 +290,8 @@ class SingleCombatShootTask(BaseTask):
             speed_idx, hdg_idx, alt_idx, fire = (
                 int(action[0]), int(action[1]), int(action[2]), int(action[3]))
 
-            # ── Flight: incremental deltas on current reference ─────────────
-            # Steering quality comes from the CmdHeading shaping + the
-            # ref_hdg / cmd_hdg_err observation features (v17/v18 additions).
-            ps.ref_hdg = float(
-                (ps.ref_hdg + DELTA_HEADINGS[hdg_idx]) % 360.0)
+            # ── Flight: absolute heading sector (heading-hold controller) ──
+            ps.ref_hdg = float(HEADING_SECTORS[hdg_idx])
             # Clamp altitude to target ± 2000m engagement cylinder
             t_alt = float(env.targets[0].aircraft.state["alt_m"]) if env.M > 0 else 3000.0
             ps.ref_alt_m = float(np.clip(
@@ -693,8 +695,8 @@ class SingleCombatShootTask(BaseTask):
     def get_action_mask(self, env, agent_id: str) -> np.ndarray:
         """Action mask with WEZ + Dynamic Launch Zone (DLZ) gating.
 
-        Flat mask layout: [speed(3), heading(5), altitude(1), fire(2)]
-        Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL
+        Flat mask layout: [speed(3), heading(16), altitude(1), fire(2)]
+        Fire = index 21 (0-based in the 22-dim mask), only unmasked when ALL
         conditions met (P1: includes closure > 0 — no firing at separating targets).
 
         Dynamic DLZ: max range depends on Aspect Angle (AA)
@@ -703,7 +705,7 @@ class SingleCombatShootTask(BaseTask):
           - Linear interpolation between
         """
         mask = np.ones(N_ACTIONS, dtype=np.float32)
-        fire_start = N_SPEED_DELTA + N_HEADING_DELTA + N_ALT_DELTA  # 3+5+1=9
+        fire_start = N_SPEED_DELTA + N_HEADING_SECTORS + N_ALT_DELTA  # 3+16+1=20
 
         if env.M == 0:
             mask[fire_start + 1] = 0.0
