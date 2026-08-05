@@ -122,3 +122,39 @@ loss = cross_entropy(masked_logits, expert_action)
 - 发射/局 >= 0.48, 击杀 >= 10%, lost_target <= 32%;
 - BC/PPO 后训练与评测(固定套件)不出现方向性背离;
 - 发射质量保持 premium/good 为主。
+
+## 门禁执行记录 (2026-08-06)
+
+### 门禁 1: 离散化规则闭环验证 — ✅ 通过
+
+- 关键发现: signed-ATA 标签导致 ref 过度旋转(lost 97%);改为 **ref 误差单步前瞻 + 死区** 后修复。
+- 训练几何(偏置 30-60°): lost 0%, WEZ 到达 100%, 首次WEZ中位15.1s, 发射2.57/局, 击杀24%。
+- 宽几何(偏置 0-120°): lost 0%, WEZ 100%, 发射2.78/局, 击杀31%。
+- 结论: 离散专家稳健, BC 上限(lost 0%, 击杀24-31%)远高于 v19(lost 32%, 击杀10%)。
+
+### 门禁 2: 专家标签无状态化 — ✅ 通过
+
+- 航向标签 = f(ref误差 obs[21]) 单步前瞻 + 死区;
+- 速度标签 = f(空速, ATA, 参考速度);
+- 发射判定 = f(当前 ATA, closure, DLZ深度) — 去掉掩码连续帧/长时间等待/上一动作等历史依赖;
+- 冷却移入环境侧开火掩码(策略只见静态许可窗口);
+- 连续 target_hdg 仍保存(供软标签/后续分析), 但不用于标签。
+
+### 门禁 3: fire head 损失定义(BC 训练时执行)
+
+- 仅在 fire_allowed=true 的窗口样本上做 B/C 分类平衡(1:1~3:1), 不计 A 类(掩码关闭)样本;
+- fire loss 权重从 2 起, 观察 precision/recall;
+- 软标签用 masked log-softmax soft-CE/KL。
+
+### 门禁 4: PPO 前 critic warm-up(微调时执行)
+
+- A0: 冻结 policy, 用 BC policy 收集轨迹只训 value head;
+- A1: 解冻, 低 LR + 锚定(PPO loss + λ·CE(BC action, current), 或 forward KL(BC || current));
+- A2: 锚定衰减; B: 奖励逐项引入。
+
+### 数据量/评测(修订)
+
+- 数据: 300 局宽几何(约35万 transition), 按整局划分 train/val/永久test;
+- 开发评测 100-200 局同 seed; 最终 500-1000 配对 seed + 95% bootstrap CI;
+- 成功标准(最低): 发射/局≥v19, 击杀≥v19, premium不退化, lost_target显著低于32%;
+  目标: lost≤20-25%, 发射≥0.50/局, 击杀≥15%, bad≈0。
