@@ -94,6 +94,7 @@ REWARD_HIT_BONUS = 1000.0       # scaled by accuracy: 0m→+1000, 300m→+0
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
 REWARD_MISS_PENALTY = -50.0     # P1: wasted missile (4 ammo / 4 HP budget)
+REWARD_UNUSED_AMMO = -75.0      # per missile still loaded at episode end (not killed)
 REWARD_SHOOT_PENALTY = -1.0     # fire blocked by WEZ/cooldown (mask should prevent most)
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
@@ -475,7 +476,7 @@ class SingleCombatShootTask(BaseTask):
             in_wez = self._is_valid_launch_envelope(ps, target)
             r_wez_entry = 0.0
             if in_wez and not getattr(ps, '_wez_entered', False):
-                r_wez_entry = 20.0
+                r_wez_entry = 40.0  # v20: stronger incentive to reach the zone
                 ps._wez_entered = True
 
             # (4) WEZ dwell bonus — reward sustained WEZ presence (>3s = 15 steps)
@@ -757,6 +758,18 @@ class SingleCombatShootTask(BaseTask):
                 np.cos(yaw_r),
             ])
         return np.array(features, dtype=np.float32)
+
+    def get_terminal_reward(self, env) -> Dict[str, float]:
+        """Unused-ammo penalty: with the 4-ammo / 4-HP budget, ending an episode
+        without killing the target wastes every missile still loaded.  This makes
+        the ammo_exhausted reset condition meaningful for the policy."""
+        target = env.targets[0] if env.M > 0 else None
+        if target is not None and target.is_alive is False:
+            return {aid: 0.0 for aid in AGENT_IDS}
+        if self._last_termination_reason == "target_killed":
+            return {aid: 0.0 for aid in AGENT_IDS}
+        return {aid: REWARD_UNUSED_AMMO * self.remaining_missiles.get(aid, 0)
+                for aid in AGENT_IDS}
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Internal: missile launch

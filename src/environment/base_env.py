@@ -440,6 +440,12 @@ class BaseEnv(MultiAgentEnv):
         for aid in self._agent_ids:
             rewards[aid] += task_rewards.get(aid, 0.0)
 
+        # Terminal reward (e.g. unused-ammo penalty) applied on the last step.
+        if terminateds.get("__all__") or truncateds.get("__all__"):
+            term_rewards = self.task.get_terminal_reward(self)
+            for aid in self._agent_ids:
+                rewards[aid] += term_rewards.get(aid, 0.0)
+
         return obs, rewards, terminateds, truncateds, infos
 
     def close(self):
