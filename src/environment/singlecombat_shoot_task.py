@@ -12,7 +12,7 @@ KEY DESIGN DECISIONS:
   2. Reward chain: dense range shaping → WEZ entry/dwell → launch success →
      closure bonus (Phase 2-A) → quality launch → per-missile hit accuracy
   3. Real action masking (ShootMaskModel): fire masked by ATA < 15°, Dynamic DLZ
-     (1.5 km min, 3–8 km by aspect), closure > 0 (P1), ammo, and cooldown
+     (1.5 km min, 3–8 km by aspect), closure < 0 (closing, P1), ammo, and cooldown
   4. Two-stage proximity fuze (arm 300m → CPA<200m → pull-away trigger);
      multi-hit HP (4) — missiles do not auto-kill
 """
@@ -534,7 +534,7 @@ class SingleCombatShootTask(BaseTask):
                 cos_ata = float(np.dot(p_fwd, los_dir))
                 ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
                 closure = float(np.dot(target.aircraft.velocity_ned - ps.aircraft.velocity_ned, los_dir))
-                if closure > 0 and ata_deg < 10.0 and 2000 < dist < 4000:
+                if closure < 0 and ata_deg < 10.0 and 2000 < dist < 4000:
                     r_quality = 40.0  # P1: premium window worth waiting for
             r += r_quality
 
@@ -693,7 +693,7 @@ class SingleCombatShootTask(BaseTask):
 
         Flat mask layout: [speed(3), heading(5), altitude(1), fire(2)]
         Fire = index 10 (0-based in the 11-dim mask), only unmasked when ALL
-        conditions met (P1: includes closure > 0 — no firing at separating targets).
+        conditions met (P1: includes closure < 0 — closing on the target).
 
         Dynamic DLZ: max range depends on Aspect Angle (AA)
           - Head-on  (AA≈180°): missile+target closing fast → 8km
@@ -744,12 +744,14 @@ class SingleCombatShootTask(BaseTask):
             if dist < MIN_ATTACK_DISTANCE or dist > dynamic_max_dist:
                 can_fire = False
 
-        # Condition 5 (P1): closure > 0 — never fire at a separating target.
-        # v14 showed 99% of launches had negative closure (fire-anyway behavior).
+        # Condition 5 (P1): closure < 0 — fire only while CLOSING on the target.
+        # closure = d(range)/dt = dot(t_vel - p_vel, los_dir); negative = closing.
+        # NOTE (2026-08-06): the sign convention was inverted here — the old
+        # "closure > 0" gate allowed firing only at SEPARATING targets.
         if can_fire:
             rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
             closure = float(np.dot(rel_vel, los_dir))
-            if closure <= 0.0:
+            if closure >= 0.0:
                 can_fire = False
 
         if not can_fire:
@@ -837,10 +839,10 @@ class SingleCombatShootTask(BaseTask):
         self._launch_stats["closure_vals"].append(closure)
         self._launch_stats["ata_vals"].append(ata_deg if 'ata_deg' in dir() else 0)
         self._launch_stats["range_vals"].append(m.launch_dist)
-        if closure > 0 and 'ata_deg' in dir() and ata_deg < 10 and 2000 < m.launch_dist < 4000:
+        if closure < 0 and 'ata_deg' in dir() and ata_deg < 10 and 2000 < m.launch_dist < 4000:
             self._launch_stats["premium"].append(m.launch_dist)
             tag = "PREMIUM"
-        elif closure > 0:
+        elif closure < 0:
             self._launch_stats["good"].append(closure)
             tag = "GOOD"
         else:
@@ -966,7 +968,8 @@ class SingleCombatShootTask(BaseTask):
         cos_ata = float(np.dot(p_fwd, los_dir))
         rel_vel = target.aircraft.velocity_ned - ps.aircraft.velocity_ned
         closure = float(np.dot(rel_vel, los_dir))
-        close_gate = float(np.clip(closure / 50.0, 0.0, 1.0))
+        # closure < 0 = closing; gate ATA by closing speed (inverted sign fix)
+        close_gate = float(np.clip(-closure / 50.0, 0.0, 1.0))
         # Range guard: only reward ATA if within reasonable engagement range (<6km)
         range_gate = 1.0 if dist < 6000.0 else 0.1
         return float(ATA_WEIGHT * cos_ata * close_gate *

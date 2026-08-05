@@ -78,10 +78,13 @@ def launch_geometry(env):
 
 
 def classify_launch(g):
-    """Same window classes as the task's QualityBonus (v10.3+)."""
-    if g["closure_mps"] > 0 and g["ata_deg"] < 10.0 and 2000.0 < g["range_m"] < 4000.0:
+    """Same window classes as the task's QualityBonus (v10.3+).
+
+    closure = d(range)/dt; NEGATIVE = closing (good window).
+    """
+    if g["closure_mps"] < 0 and g["ata_deg"] < 10.0 and 2000.0 < g["range_m"] < 4000.0:
         return "premium"
-    if g["closure_mps"] > 0:
+    if g["closure_mps"] < 0:
         return "good"
     return "bad"
 
