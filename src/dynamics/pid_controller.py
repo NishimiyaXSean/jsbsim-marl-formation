@@ -25,8 +25,12 @@ from .controller_base import BaseController, ControlSurfaces, FlightTarget
 class PIDFlightController(BaseController):
     """PID-based flight controller wrapping FlightController + BFMAutopilot."""
 
-    def __init__(self):
-        self._fc = FlightController()
+    def __init__(self, bank_ff_gain: float = 0.25, kd_q: float = 2.0,
+                 max_bank_deg: float = 75.0,
+                 roll_per_deg_heading: float = 2.5):
+        self._fc = FlightController(bank_ff_gain=bank_ff_gain, kd_q=kd_q,
+                                    max_bank_deg=max_bank_deg,
+                                    roll_per_deg_heading=roll_per_deg_heading)
         self._ap = BFMAutopilot(
             BFMAutopilotConfig(), trim=TrimSchedule(), scheduler=GainScheduler())
 

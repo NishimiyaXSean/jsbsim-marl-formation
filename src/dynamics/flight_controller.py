@@ -122,9 +122,12 @@ class HeadingStabilizer:
     # F-16 at 200 m/s, 70° bank: max turn rate ≈ 7.7°/s (physics limit).
     # The agent learns energy management — slowing to 130 m/s gives 11.9°/s.
     ROLL_PER_DEG_HEADING = 2.5      # deg bank per deg heading error
-    MAX_BANK_DEG = 55.0  # gentler BFM — avoid energy bleed in missile phase
+    MAX_BANK_DEG = 75.0  # tuned 2026-08-05: 55° too slow, 75° best sweep
 
-    def __init__(self) -> None:
+    def __init__(self, max_bank_deg: float = 75.0,
+                 roll_per_deg_heading: float = 2.5) -> None:
+        self.MAX_BANK_DEG = float(max_bank_deg)
+        self.ROLL_PER_DEG_HEADING = float(roll_per_deg_heading)
         # Roll PID with BFM-ported smooth gains + moderate output range.
         # P-only outer heading loop — steady-state error provides natural
         # exploration that helps RL escape local optima.
@@ -198,10 +201,15 @@ class FlightController:
             aircraft.set_controls(thr, elev, ail, rud)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, bank_ff_gain: float = 0.25, kd_q: float = 2.0,
+                 max_bank_deg: float = 75.0,
+                 roll_per_deg_heading: float = 2.5) -> None:
         self.alt = AltitudeStabilizer()
         self.spd = SpeedStabilizer()
-        self.hdg = HeadingStabilizer()
+        self.hdg = HeadingStabilizer(max_bank_deg=max_bank_deg,
+                                     roll_per_deg_heading=roll_per_deg_heading)
+        self._bank_ff_gain = float(bank_ff_gain)
+        self._kd_q = float(kd_q)
 
     def reset(self) -> None:
         self.alt.reset()
@@ -243,8 +251,7 @@ class FlightController:
         # NOTE (2026-08-05): sign fixed — positive bank MUST pull (negative
         # elevator in this model) to hold altitude; the old +bank_ff pushed
         # the nose down and made the aircraft dive during turns.
-        K_bank_ff = 0.30
-        bank_ff = -K_bank_ff * (bank_factor - 1.0)  # negative = pull up in turn
+        bank_ff = -self._bank_ff_gain * (bank_factor - 1.0)  # negative = pull up
         # PID correction amplified for the reduced lift component
         d_elev = d_elev * bank_factor + bank_ff
 
@@ -255,8 +262,9 @@ class FlightController:
         # When nose pitches UP (q > 0), add positive elevator to push
         # nose back down, extracting energy from the phugoid mode.
         q_rps = float(state.get("q_rps", 0.0))  # body-frame pitch rate (rad/s)
-        Kd_q = 0.8
-        elevator += Kd_q * q_rps  # +q → +elev → nose DOWN → damping ✅
+        # kd_q tuned 2026-08-05: 0.8 left a growing phugoid limit-cycle
+        # (alt oscillated ±1km, elev saturated); 2.0 is critically damped.
+        elevator += self._kd_q * q_rps  # +q → +elev → nose DOWN → damping ✅
 
         elevator = np.clip(elevator, -1.0, 1.0)
 

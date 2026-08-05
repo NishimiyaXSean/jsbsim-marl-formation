@@ -101,6 +101,16 @@ class Aircraft:
         if trim:
             fdm["simulation/do_simple_trim"] = 1
 
+        # NOTE (2026-08-05): run_ic() alone does NOT clear the FDM's internal
+        # state (engine spool, FCS integrators, surface positions) from the
+        # previous episode/warmup, which caused run-to-run divergence in
+        # identical scenarios.  reset_to_initial_conditions(1) fully re-arms
+        # the FDM from the freshly-set IC properties.
+        try:
+            fdm.reset_to_initial_conditions(1)
+        except BaseException:
+            pass
+
         try:
             fdm.run_ic()
         except BaseException:

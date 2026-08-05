@@ -24,8 +24,10 @@ import numpy as np
 from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 from src.environment.formation_task import PHYSICS_DT, DECISION_STEPS
-from src.dynamics.flight_controller import FlightControlTargets
+from src.dynamics.flight_controller import FlightController, FlightControlTargets
 from src.dynamics.controller_base import FlightTarget
+from src.dynamics.pid_controller import PIDFlightController
+from src.dynamics.safety_interceptor import SafetyInterceptor
 from src.utils.units import kts_to_mps
 
 MAX_STEPS = 1500
@@ -39,13 +41,80 @@ def bearing_deg(p_pos, t_pos):
     return float((math.degrees(math.atan2(dx, dy)) + 360.0) % 360.0)
 
 
-def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False):
+def chase_rule(p0, t0, cmd_speed, turn_speed=200.0):
+    """Lead-pursuit rule with speed management.
+
+    Aims at the target's predicted position (lead_time based on range) and
+    slows down when a large heading correction is needed (slower = faster
+    turn rate at fixed bank).
+    """
+    p_pos = p0.aircraft.position_ned
+    t_pos = t0.aircraft.position_ned
+    t_vel = t0.aircraft.velocity_ned
+    dist = float(np.linalg.norm(p_pos - t_pos))
+    lead_time = float(np.clip(dist / 1000.0, 1.0, 5.0))
+    aim = t_pos + t_vel * lead_time
+    hdg = bearing_deg(p_pos, aim)
+    s = p0.aircraft.state
+    hdg_err = abs((hdg - s["yaw_deg"] + 180.0) % 360.0 - 180.0)
+    speed = cmd_speed if hdg_err < 15.0 else max(turn_speed, cmd_speed - 60.0)
+    return hdg, speed
+
+
+def set_geometry(env, p0, t0, chase_dist, heading_bias, t_spd, p_spd):
+    """Deterministic tail-chase geometry + 1s warmup (reproducible sweeps)."""
+    t_hdg, t_alt = 0.0, 3000.0
+    t0.aircraft.reset(lat_deg=30.02, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+                      heading_deg=t_hdg, speed_kts=int(t_spd / 0.5144), trim=False)
+    t0.aircraft.position_ned = np.array([2224.0, 0.0, t_alt])
+    t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
+
+    p_hdg = (t_hdg + heading_bias) % 360.0
+    p_ned_north = 2224.0 - chase_dist
+    p_lat = 30.0 + p_ned_north / 111320.0
+    p0.aircraft.reset(lat_deg=p_lat, lon_deg=120.0, alt_ft=int(t_alt * 3.28084),
+                      heading_deg=p_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
+    p0.aircraft.position_ned = np.array([p_ned_north, 0.0, t_alt])
+    p0.ref_hdg, p0.ref_alt_m = p_hdg, t_alt
+    p0._cmd_speed = p_spd
+
+    for _ in range(60):  # 1s warmup through the RL-used controller chain
+        s = p0.aircraft.state
+        target = FlightTarget(heading_deg=p_hdg, altitude_m=t_alt, speed_mps=p_spd)
+        surfaces = p0.controller.predict(s, target, PHYSICS_DT)
+        p0.aircraft.set_controls(
+            throttle=float(np.clip(surfaces.throttle, 0.0, 1.0)),
+            elevator=float(np.clip(surfaces.elevator, -1.0, 1.0)),
+            aileron=float(np.clip(surfaces.aileron, -1.0, 1.0)),
+            rudder=float(np.clip(surfaces.rudder, -1.0, 1.0)))
+        ts = t0.aircraft.state
+        tgt = FlightControlTargets(heading_deg=t_hdg, altitude_m=t_alt,
+                                   speed_mps=t_spd)
+        thr, elev, ail, rud = t0.fc.compute(ts, tgt, PHYSICS_DT)
+        t0.aircraft.set_controls(thr, elev, ail, rud)
+        p0.aircraft.run()
+        p0.aircraft.position_ned[0:2] += p0.aircraft.velocity_ned[0:2] * PHYSICS_DT
+        p0.aircraft.position_ned[2] = p0.aircraft.state["alt_m"]
+        t0.aircraft.run()
+        t0.aircraft.position_ned[0:2] += t0.aircraft.velocity_ned[0:2] * PHYSICS_DT
+        t0.aircraft.position_ned[2] = t0.aircraft.state["alt_m"]
+
+
+def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False,
+                bank_ff=0.30, max_bank=55.0, kd_q=0.8, roll_per_deg=2.5,
+                turn_speed=200.0, chase_dist=4000.0, heading_bias=30.0,
+                trace=False):
     env = BaseEnv(task=SingleCombatShootTask({"difficulty_level": 0.0}))
     obs, _ = env.reset(seed=seed)
     p0, t0 = env.pursuers[0], env.targets[0]
+    # Swap in a controller with the sweep parameters (RL path untouched).
+    p0.controller = SafetyInterceptor(PIDFlightController(
+        bank_ff_gain=bank_ff, kd_q=kd_q,
+        max_bank_deg=max_bank, roll_per_deg_heading=roll_per_deg))
     if fbw:
         # Bypass the F-16 FCS (its yaw damper blocks turns); drive surfaces directly.
         p0.aircraft.fdm["fcs/fbw-override"] = 1
+    set_geometry(env, p0, t0, chase_dist, heading_bias, 200.0, cmd_speed)
 
     dt = PHYSICS_DT
     min_dist = float("inf")
@@ -65,10 +134,11 @@ def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False):
             break
 
         target_alt = float(t0.aircraft.state["alt_m"])
+        hdg_cmd, spd_cmd = chase_rule(p0, t0, cmd_speed, turn_speed=turn_speed)
         target = FlightTarget(
-            heading_deg=bearing_deg(p_pos, t_pos),
+            heading_deg=hdg_cmd,
             altitude_m=target_alt,
-            speed_mps=cmd_speed,
+            speed_mps=spd_cmd,
         )
 
         # 12 substeps — identical loop to BaseEnv.step
@@ -98,6 +168,12 @@ def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False):
         alt_errs.append(abs(s["alt_m"] - target_alt))
         spd_errs.append(s["airspeed_mps"] - cmd_speed)
         banks.append(abs(s["roll_deg"]))
+        if trace and step % 25 == 0:
+            print(f"    TRACE t={step*0.2:5.1f}s dist={dist:6.0f}m "
+                  f"alt_err={abs(s['alt_m']-target_alt):5.0f}m "
+                  f"hdg_err={hdg_errs[-1]:+6.1f}° bank={s['roll_deg']:+5.1f}° "
+                  f"pitch={s['pitch_deg']:+5.1f}° nz={s['n_z_g']:+5.2f}g "
+                  f"elev_cmd={surfaces.elevator:+5.2f}")
 
         if s["alt_m"] < 1000.0:
             reason = "low_altitude"
@@ -132,13 +208,39 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fbw", action="store_true",
                         help="set fcs/fbw-override=1 on the pursuer (bypass FCS yaw damper)")
+    parser.add_argument("--bank-ff", type=float, default=0.25,
+                        help="bank-turn elevator feedforward gain (pull-up magnitude)")
+    parser.add_argument("--max-bank", type=float, default=75.0,
+                        help="maximum bank angle for the heading loop (deg)")
+    parser.add_argument("--kd-q", type=float, default=2.0,
+                        help="pitch-rate damping gain on elevator")
+    parser.add_argument("--roll-per-deg", type=float, default=2.5,
+                        help="deg bank per deg heading error")
+    parser.add_argument("--turn-speed", type=float, default=200.0,
+                        help="speed used while correcting a large heading error")
+    parser.add_argument("--chase-dist", type=float, default=4000.0,
+                        help="initial tail-chase distance (m)")
+    parser.add_argument("--heading-bias", type=float, default=30.0,
+                        help="initial pursuer heading offset from target (deg)")
+    parser.add_argument("--trace", action="store_true",
+                        help="print per-step metrics for the first episode")
     args = parser.parse_args()
 
     speeds = [float(x) for x in args.speeds.split(",") if x.strip()]
     tag = "fbw" if args.fbw else "fcs"
     for spd in speeds:
-        rows = [run_episode(args.seed + i, cmd_speed=spd, fbw=args.fbw) for i in range(args.episodes)]
-        print(f"\n===== [{tag}] commanded speed = {spd:.0f} m/s ({args.episodes} episodes) =====")
+        rows = [run_episode(args.seed + i, cmd_speed=spd, fbw=args.fbw,
+                            bank_ff=args.bank_ff, max_bank=args.max_bank,
+                            kd_q=args.kd_q, roll_per_deg=args.roll_per_deg,
+                            turn_speed=args.turn_speed,
+                            chase_dist=args.chase_dist,
+                            heading_bias=args.heading_bias,
+                            trace=args.trace and i == 0)
+                for i in range(args.episodes)]
+        print(f"\n===== [{tag}] speed={spd:.0f} bank_ff={args.bank_ff:.2f} "
+              f"max_bank={args.max_bank:.0f} kd_q={args.kd_q:.2f} "
+              f"roll_per_deg={args.roll_per_deg:.1f} turn_speed={args.turn_speed:.0f} "
+              f"({args.episodes} eps) =====")
         for r in rows:
             print(f"  ep{rows.index(r):>2d} seed={r['seed']:<4d} {r['reason']:<8s} "
                   f"steps={r['steps']:>4d} start={r['start_dist']:>6.0f}m "
