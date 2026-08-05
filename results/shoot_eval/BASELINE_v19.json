@@ -1,0 +1,41 @@
+{
+  "name": "v19 (GPU+batch, baseline)",
+  "checkpoint": "/home/sean/jsbsim-marl-formation/marl_runs/shoot_v19_gpu_s42/checkpoints/best",
+  "note": "????????????? (2026-08-05)",
+  "results": {
+    "0.0": {
+      "episodes": 100,
+      "mean_reward": -4975.365586819064,
+      "launches_per_ep": 0.48,
+      "hit_rate": 1.0,
+      "kills": 10,
+      "kill_rate": 0.1,
+      "lost_target_pct": 32.0,
+      "timeout_pct": 57.99999999999999,
+      "launch_quality": {
+        "bad": 0,
+        "good": 17,
+        "premium": 31
+      },
+      "launch_closure_mps": 20.97146192878287,
+      "wez_to_fire_mean_steps": 31.692307692307693
+    },
+    "0.3": {
+      "episodes": 100,
+      "mean_reward": -4148.116994978985,
+      "launches_per_ep": 0.42,
+      "hit_rate": 1.0,
+      "kills": 7,
+      "kill_rate": 0.07,
+      "lost_target_pct": 34.0,
+      "timeout_pct": 59.0,
+      "launch_quality": {
+        "bad": 0,
+        "good": 16,
+        "premium": 26
+      },
+      "launch_closure_mps": 19.937940122116167,
+      "wez_to_fire_mean_steps": 67.0
+    }
+  }
+}

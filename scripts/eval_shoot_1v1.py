@@ -235,7 +235,57 @@ def evaluate_checkpoint(ckpt_path, difficulties, episodes, seed, outdir):
                    "results": all_summaries},
                   f, indent=2, ensure_ascii=False)
     print(f"\n[json] {out_path}")
+    compare_to_baseline(out_path)
     ray.shutdown()
+
+
+def compare_to_baseline(out_path, baseline_path="results/shoot_eval/BASELINE_v19.json"):
+    """Print a delta table of this run vs the v19 baseline (if available)."""
+    if not os.path.exists(baseline_path):
+        print("\n[baseline] no baseline file at %s — skipped" % baseline_path)
+        return
+    if not os.path.exists(out_path):
+        return
+    cur = json.load(open(out_path, encoding="utf-8")).get("results", {})
+    base = json.load(open(baseline_path, encoding="utf-8")).get("results", {})
+
+    def _lp(res):
+        return res.get("launches_per_episode", res.get("launches_per_ep", 0.0))
+
+    def _lost(res):
+        n = res.get("episodes", 100)
+        reasons = res.get("termination_reasons", {})
+        if reasons:
+            return reasons.get("lost_target", 0) / max(n, 1)
+        pct = res.get("lost_target_pct")
+        if pct is not None:
+            return pct / 100.0
+        return 0.0
+
+    def _mean(res):
+        return res.get("mean_reward", 0.0)
+
+    print("\n===== vs v19 baseline =====")
+    for diff in sorted(set(list(cur.keys()) + list(base.keys()))):
+        c, b = cur.get(diff), base.get(diff)
+        if not c or not b:
+            continue
+        print(f"  difficulty={diff}")
+        rows = [
+            ("launches/ep", _lp(c), _lp(b), 2),
+            ("hit rate", c.get("hit_rate", 0.0), b.get("hit_rate", 0.0), 1),
+            ("kill rate", c.get("kill_rate", 0.0), b.get("kill_rate", 0.0), 1),
+            ("lost_target %", _lost(c), _lost(b), 1),
+            ("mean reward", _mean(c), _mean(b), 0),
+        ]
+        for label, cv, bv, kind in rows:
+            d = cv - bv
+            if kind == 0:
+                print(f"    {label:<14s} {cv:+9.0f}  vs base {bv:+9.0f}  (delta {d:+8.0f})")
+            elif kind == 1:
+                print(f"    {label:<14s} {cv*100:5.1f}%  vs base {bv*100:5.1f}%  (delta {d*100:+5.1f}pp)")
+            else:
+                print(f"    {label:<14s} {cv:5.2f}  vs base {bv:5.2f}  (delta {d:+.2f})")
 
 
 def main():
