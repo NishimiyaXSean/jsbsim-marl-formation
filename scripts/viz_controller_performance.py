@@ -239,8 +239,10 @@ def reward_curves(smooth=3):
     """
     logs = [
         ('v14 (controller fix)', 'marl_runs/shoot_v14_fullctrl_s42/train.log'),
-        ('v18 (steering aids)', 'marl_runs/shoot_v18_steer_s42/train.log'),
         ('v19 (GPU+batch)', 'marl_runs/shoot_v19_gpu_s42/train.log'),
+        ('v21b (approach shaping)', 'marl_runs/shoot_v21b_approach_s42/train.log'),
+        ('v22 (rebalance)', 'marl_runs/shoot_v22_rebal_s42/train.log'),
+        ('v23 (closure-gated ATA)', 'marl_runs/shoot_v23_clogate_s42/train.log'),
     ]
     fig, ax = plt.subplots(figsize=(12, 6))
     for label, path in logs:
