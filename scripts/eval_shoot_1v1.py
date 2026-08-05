@@ -36,7 +36,7 @@ from src.utils.geometry import compute_forward_vector
 
 ENV_NAME = "jsbsim_shoot_1v1"
 ENV_ALIASES = ["jsbsim_shoot_v101", "jsbsim_shoot_1v1_v1"]
-ACTION_DIMS = [3, 16, 1, 2]  # speed, heading, altitude, fire
+ACTION_DIMS = [3, 5, 1, 2]  # speed, heading, altitude, fire
 MAX_STEPS = 1500
 
 

@@ -27,7 +27,7 @@ from src.dynamics.controller_base import FlightTarget
 from src.dynamics.pid_controller import PIDFlightController
 from src.dynamics.safety_interceptor import SafetyInterceptor
 
-DIMS = [3, 16, 1, 2]
+DIMS = [3, 5, 1, 2]
 
 
 def decode(raw):

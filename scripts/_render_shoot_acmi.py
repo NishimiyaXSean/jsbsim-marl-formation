@@ -14,7 +14,7 @@ from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 
 ENV = "jsbsim_shoot_1v1"
 OUTDIR = "results/shoot_training"
-ACTION_DIMS = [3, 16, 1, 2]  # speed, heading, altitude, fire
+ACTION_DIMS = [3, 5, 1, 2]  # speed, heading, altitude, fire
 
 
 def _decode_action(raw):
