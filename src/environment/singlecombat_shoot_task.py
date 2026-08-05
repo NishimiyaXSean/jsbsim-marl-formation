@@ -717,6 +717,14 @@ class SingleCombatShootTask(BaseTask):
         if self.remaining_missiles.get(agent_id, 0) <= 0:
             can_fire = False
 
+        # Condition 1b (2026-08-06): launch cooldown is a task-history gate,
+        # moved INTO the mask so the policy sees a stateless fire window (the
+        # obs cannot encode "when was the last shot").
+        if can_fire:
+            if env._step_counter - self._last_shoot_step.get(
+                    agent_id, -MIN_ATTACK_INTERVAL) < MIN_ATTACK_INTERVAL:
+                can_fire = False
+
         # Condition 2: target alive
         if not target.is_alive:
             can_fire = False

@@ -1,25 +1,27 @@
-"""Generate rule-expert data for the 1v1 shoot task (BC pretraining, v1).
+"""Generate rule-expert data for the 1v1 shoot task (BC pretraining, v2 stateless).
 
-The rule = open-loop lead-pursuit chaser (validated 30/30 catch) + two-layer fire:
+Gate-2 compliance: every label is a PURE FUNCTION of the current 41-dim obs.
+No history (mask streak, last-fire time, previous action) is used for labels —
+history-dependent gates (launch cooldown) live in the env-side fire mask.
 
-    fire_allowed = env fire mask (ATA<15, DLZ, closure<0 i.e. closing, ammo)
-    fire_desired = quality judgment (mask streak, stricter ATA, closure, DLZ depth,
-                   premium zone, fallback after long wait)
-    fire         = allowed AND desired (plus cooldown, matching task mechanics)
+  fire_allowed = env fire mask (ATA<15, DLZ, closure<0 i.e. closing, cooldown, ammo)
+  fire_desired = current-state quality judgment:
+      ATA < 10 deg, closure < -5 m/s (closing), DLZ depth in [0.25, 0.75]
+  fire         = allowed AND desired
 
-Discrete labels use the REFERENCE command (ref_hdg / _cmd_speed) with wrap-around,
-deadband, and a one-step lookahead over candidate deltas (minimize next error +
-command-change penalty).  Every transition also saves flags for downstream tuning:
-fire_allowed, fire_desired, premium_window, launch_quality_score,
-continuous_target_hdg, continuous_target_spd, phase, episode_id.
+Heading label = signed ATA thresholds (pure pursuit alignment; deadband).
+Speed label   = delta toward cruise speed, or turn speed when |ATA| large.
+
+--validate: run the discretized rule closed-loop and report Gate-1 metrics
+(lost_target, WEZ reach, fire rate, launches, hits, ATA p90) WITHOUT saving data.
 
 Usage:
   python scripts/generate_shoot_rule_expert.py --episodes 200 --out data/expert/shoot_rule_expert.npz
+  python scripts/generate_shoot_rule_expert.py --validate --episodes 100
 """
 import os, sys, math, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['JSBSIM_DEBUG'] = '0'
-warnings.filterwarnings('ignore') if False else None
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -35,94 +37,83 @@ from src.dynamics.safety_interceptor import SafetyInterceptor
 
 DELTA_HDG = [-10.0, -5.0, 0.0, 5.0, 10.0]
 DELTA_SPD = [-20.0, 0.0, 20.0]
-FIRE_IDX = 10          # flat fire index in the 11-dim mask
-HDG_DEADBAND = 2.0     # deg — avoid -5/0/5 jitter
-SPD_DEADBAND = 10.0    # m/s
-COOLDOWN = 30          # decision steps (matches MIN_ATTACK_INTERVAL)
-MASK_STREAK_REQ = 2    # consecutive open-mask frames before fire_desired
-ATA_STRICT = 10.0      # stricter than the mask's 15 deg
-CLOSURE_MIN = 5.0      # m/s
-PREMIUM_LO = 2000.0
-PREMIUM_HI = 4000.0
-FALLBACK_WAIT = 75     # steps without a premium window -> use normal window
+FIRE_IDX = 10
+HDG_DEADBAND = 2.5
+SPD_DEADBAND = 10.0
+ATA_TURN = 15.0
+ATA_STRICT = 10.0
+CLOSURE_MIN = 5.0
+DLZ_LO, DLZ_HI = 0.25, 0.75
 
 
 def wrap180(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
-def bearing_deg(p, t):
-    return float((math.degrees(math.atan2(t[1] - p[1], t[0] - p[0])) + 360.0) % 360.0)
+def signed_ata(obs):
+    """Signed ATA (deg) from the obs: ATA * side.  Positive = target right."""
+    ata = float(obs[17]) * 180.0
+    side = float(obs[20])
+    return ata * side
 
 
-def chase_heading(p0, t0):
-    p_pos = p0.aircraft.position_ned
-    t_pos = t0.aircraft.position_ned
-    t_vel = t0.aircraft.velocity_ned
-    dist = float(np.linalg.norm(p_pos - t_pos))
-    if dist > 6000.0:
-        # far: lead pursuit to close in fast
-        lead = float(np.clip(dist / 1000.0 - 0.5, 0.0, 5.0))
-        aim = t_pos + t_vel * lead
-    else:
-        # inside the engagement band: PURE pursuit (aim at the target) so the
-        # pursuer settles BEHIND the target with positive closure — the
-        # lead-pursuit aim-ahead geometry put it abeam/ahead; with the corrected
-        # closure sign (closing = negative) pure pursuit opens the fire mask.
-        aim = t_pos
-    return bearing_deg(p_pos, aim)
+def dlz_depth(obs):
+    """Normalized position inside the dynamic DLZ (0 at min, 1 at max)."""
+    dist = float(obs[19]) * 15000.0
+    aa = float(obs[18]) * 180.0
+    rmax = 3000.0 + 5000.0 * (aa / 180.0)
+    return (dist - 1500.0) / max(rmax - 1500.0, 1.0)
 
 
-def chase_speed(p0, t0, cmd_speed):
-    s = p0.aircraft.state
-    hdg = chase_heading(p0, t0)
-    err = abs(wrap180(hdg - s['yaw_deg']))
-    return cmd_speed if err < 15.0 else max(200.0, cmd_speed - 60.0)
+def hdg_label(obs):
+    """Stateless heading delta — one-step lookahead on the REFERENCE command.
 
-
-def hdg_label(err_deg, last_hdg_label):
-    """Discrete heading delta from the AIRCRAFT's actual heading error.
-
-    err_deg = wrapped(cmd_hdg - aircraft_yaw).  Thresholds + hysteresis so the
-    reference is commanded to reduce the REAL misalignment (the aircraft lags
-    the reference; a ref-based label left it 60+ deg behind).
+    cmd_hdg_err = wrapped(bearing - ref_hdg) is in the obs (index 21).
+    Drive ref_hdg TO the bearing and HOLD (deadband), letting the aircraft
+    catch up.  Using the aircraft-error (signed ATA) over-rotated the
+    reference and oscillated (Gate-1 lost 97%).
     """
-    if abs(err_deg) < 2.5:
-        return 2  # 0 deg
-    if err_deg > 7.5:
-        want = 4  # +10
-    elif err_deg > 2.5:
-        want = 3  # +5
-    elif err_deg < -7.5:
-        want = 0  # -10
-    else:
-        want = 1  # -5
-    # hysteresis: hold the current small-magnitude turn until the error grows
-    if last_hdg_label in (1, 3) and want in (1, 3) and want != last_hdg_label:
-        if abs(err_deg) < 5.0:
-            return last_hdg_label
-    return want
+    err = wrap180(float(obs[21]) * 180.0)
+    if abs(err) < HDG_DEADBAND:
+        return 2  # 0 deg (hold)
+    best_i, best_c = 2, float('inf')
+    for i, d in enumerate(DELTA_HDG):
+        next_err = abs(wrap180(float(obs[21]) * 180.0 - d))
+        cost = next_err + 0.05 * abs(d)
+        if cost < best_c:
+            best_c, best_i = cost, i
+    return best_i
 
 
-def spd_label(airspeed, target_speed):
-    diff = target_speed - airspeed
+def spd_label(obs, cmd_speed):
+    ata = abs(float(obs[17]) * 180.0)
+    airspeed = float(obs[8]) * 400.0  # airspeed/MAX_VEL
+    target = cmd_speed if ata < ATA_TURN else max(200.0, cmd_speed - 60.0)
+    diff = target - airspeed
     if abs(diff) < SPD_DEADBAND:
-        return 1  # 0
-    if diff > 0:
-        return 2  # +20
-    return 0      # -20
+        return 1
+    return 2 if diff > 0 else 0
 
 
-def quality_score(dist, ata_deg, closure, r_rps):
-    dlz = np.clip(1.0 - abs(dist - 4750.0) / 3250.0, 0.0, 1.0)
-    cl = np.clip(closure / 100.0, 0.0, 1.0)
-    ata = np.clip(ata_deg / 15.0, 0.0, 1.0)
-    hr = np.clip(abs(r_rps) / 0.2, 0.0, 1.0)
-    return float(1.0 * dlz + 1.0 * cl - 0.6 * ata - 0.4 * hr)
+def fire_desired(obs):
+    ata = float(obs[17]) * 180.0
+    closure = float(obs[22]) * 300.0  # closure/300; negative = closing
+    d = dlz_depth(obs)
+    return bool(ata < ATA_STRICT and closure < -CLOSURE_MIN and DLZ_LO <= d <= DLZ_HI)
 
 
-def classify_phase(dist, ata_deg, closure, prev_closure, fire_allowed, fire_desired,
-                   prev_phase, dist_history):
+def quality_score(obs):
+    ata = float(obs[17]) * 180.0 / 15.0
+    closure = float(obs[22]) * 300.0
+    cl = float(np.clip(-closure / 100.0, 0.0, 1.0))
+    d = float(np.clip(dlz_depth(obs), 0.0, 1.0))
+    return float(1.0 * d + 1.0 * cl - 0.6 * np.clip(ata, 0.0, 1.0))
+
+
+def classify_phase(obs, fire_allowed, fire_desired, prev_closure, prev_phase, dist_history):
+    dist = float(obs[19]) * 15000.0
+    ata = float(obs[17]) * 180.0
+    closure = float(obs[22]) * 300.0
     if fire_desired:
         return 'launch_window'
     if dist <= 1500.0:
@@ -131,17 +122,16 @@ def classify_phase(dist, ata_deg, closure, prev_closure, fire_allowed, fire_desi
         return 'far_approach'
     if prev_closure is not None and closure < 0 <= prev_closure:
         return 'closure_turn'
-    if fire_allowed and ata_deg < 15.0:
+    if fire_allowed and ata < 15.0:
         return 'wez_hold'
     if len(dist_history) >= 20 and dist > dist_history[-20] and dist > 6000.0:
         return 'pre_lost'
-    if prev_phase == 'pre_lost' and dist < dist_history[-20] if len(dist_history) >= 20 else False:
+    if prev_phase == 'pre_lost' and len(dist_history) >= 20 and dist < dist_history[-20]:
         return 'recovery'
-    return 'wez_approach' if ata_deg < 25.0 else 'far_approach'
+    return 'wez_approach' if ata < 25.0 else 'far_approach'
 
 
-def set_geometry(env, p0, t0, rng, cmd_speed, difficulty):
-    """Randomized tail-chase geometry with wide coverage."""
+def set_geometry(env, p0, t0, rng, cmd_speed):
     bias = rng.uniform(0.0, 90.0)
     if rng.random() < 0.2:
         bias = rng.uniform(90.0, 120.0)
@@ -190,12 +180,73 @@ def set_geometry(env, p0, t0, rng, cmd_speed, difficulty):
         t0.aircraft.position_ned[2] = t0.aircraft.state["alt_m"]
 
 
+def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
+    """Run the discretized rule for one episode; optionally record data."""
+    obs, _ = env.reset()
+    prev_closure = None
+    prev_phase = 'far_approach'
+    dist_history = []
+    fired = 0
+    wez_first = None
+    ata_hist = []
+    reason = 'timeout'
+    for step in range(1500):
+        mask = env.task.get_action_mask(env, 'p0')
+        fire_allowed = mask[FIRE_IDX] == 1.0
+        desired = fire_desired(obs['p0'])
+        fire = 1 if (fire_allowed and desired) else 0
+        if fire:
+            fired += 1
+
+        hdg_i = hdg_label(obs['p0'])
+        spd_i = spd_label(obs['p0'], cmd_speed)
+        act = np.array([spd_i, hdg_i, 0, fire], dtype=np.int64)
+
+        dist = float(obs['p0'][19]) * 15000.0
+        ata = float(obs['p0'][17]) * 180.0
+        closure = float(obs['p0'][22]) * 300.0
+        ata_hist.append(abs(ata))
+        dist_history.append(dist)
+        if len(dist_history) > 30:
+            dist_history.pop(0)
+        if fire_allowed and wez_first is None:
+            wez_first = step
+
+        phase = classify_phase(obs['p0'], fire_allowed, desired, prev_closure,
+                               prev_phase, dist_history)
+        prev_closure = closure
+        prev_phase = phase
+
+        if record is not None:
+            record['obs'].append(obs['p0'].astype(np.float32))
+            record['action'].append(act)
+            record['fire_allowed'].append(float(fire_allowed))
+            record['fire_desired'].append(float(desired))
+            record['premium_window'].append(float(desired))
+            record['launch_quality'].append(quality_score(obs['p0']))
+            record['target_hdg'].append(
+                float((p0.ref_hdg + wrap180(float(obs['p0'][21]) * 180.0)) % 360.0))
+            record['target_spd'].append(float(cmd_speed if ata < ATA_TURN else max(200.0, cmd_speed - 60.0)))
+            record['phase'].append(phase)
+            record['episode_id'].append(episode_id)
+            record['mask'].append(mask.astype(np.float32))
+
+        obs, rews, terms, truncs, info = env.step({'p0': act})
+        if terms.get('__all__') or truncs.get('__all__'):
+            reason = info.get('p0', {}).get('termination_reason', 'unknown')
+            break
+    return {'reason': reason, 'fired': fired, 'wez_first': wez_first,
+            'ata_p90': float(np.percentile(ata_hist, 90)) if ata_hist else 0.0}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--episodes', type=int, default=200)
     parser.add_argument('--difficulty', type=float, default=0.0)
     parser.add_argument('--cmd-speed', type=float, default=280.0)
     parser.add_argument('--out', type=str, default='data/expert/shoot_rule_expert.npz')
+    parser.add_argument('--validate', action='store_true',
+                        help='run the discretized rule closed-loop and report Gate-1 metrics')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -205,91 +256,45 @@ def main():
     p0.controller = SafetyInterceptor(PIDFlightController())
     rng = np.random.default_rng(args.seed)
 
+    if args.validate:
+        reasons = {}
+        wez_reach = 0
+        fired_total = 0
+        ata_p90s = []
+        wez_firsts = []
+        n_ep = 0
+        for ep in range(args.episodes):
+            set_geometry(env, p0, t0, rng, args.cmd_speed)
+            r = run_one(env, p0, t0, args.cmd_speed)
+            reasons[r['reason']] = reasons.get(r['reason'], 0) + 1
+            if r['wez_first'] is not None:
+                wez_reach += 1
+                wez_firsts.append(r['wez_first'])
+            fired_total += r['fired']
+            ata_p90s.append(r['ata_p90'])
+            n_ep += 1
+        lost = reasons.get('lost_target', 0)
+        print(f'=== Gate-1 validate: discretized rule, {n_ep} episodes ===')
+        print(f'  lost_target: {lost}/{n_ep} ({lost/n_ep*100:.1f}%)')
+        print(f'  reasons: {reasons}')
+        print(f'  WEZ reach: {wez_reach}/{n_ep} ({wez_reach/n_ep*100:.1f}%)')
+        if wez_firsts:
+            print(f'  first WEZ time: median={np.median(wez_firsts)*0.2:.1f}s')
+        print(f'  launches: {fired_total} ({fired_total/n_ep:.2f}/ep)')
+        print(f'  ATA p90: median across eps = {np.median(ata_p90s):.1f} deg')
+        env.close()
+        return
+
     rec = {k: [] for k in ['obs', 'action', 'fire_allowed', 'fire_desired',
                            'premium_window', 'launch_quality', 'target_hdg',
                            'target_spd', 'phase', 'episode_id', 'mask']}
     episode = 0
-    total_steps = 0
     for ep in range(args.episodes):
         episode += 1
-        set_geometry(env, p0, t0, rng, args.cmd_speed, args.difficulty)
-        obs, _ = env.reset()
-        last_hdg_label = 2
-        last_fire_step = -COOLDOWN
-        mask_streak = 0
-        prev_closure = None
-        prev_phase = 'far_approach'
-        dist_history = []
-        fired = 0
-        for step in range(1500):
-            s = p0.aircraft.state
-            p_pos = p0.aircraft.position_ned
-            t_pos = t0.aircraft.position_ned
-            dist = float(np.linalg.norm(p_pos - t_pos))
-            los = t_pos - p_pos
-            los_dir = los / max(dist, 1e-6)
-            p_fwd = np.array([np.cos(np.radians(s['yaw_deg'])),
-                              np.sin(np.radians(s['yaw_deg'])), 0.0])
-            cos_ata = float(np.dot(p_fwd, los_dir))
-            ata_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_ata))))
-            closure = float(np.dot(t0.aircraft.velocity_ned - p0.aircraft.velocity_ned, los_dir))
-            r_rps = float(s.get('r_rps', 0.0))
-            dist_history.append(dist)
-            if len(dist_history) > 30:
-                dist_history.pop(0)
-
-            mask = env.task.get_action_mask(env, 'p0')
-            fire_allowed = mask[FIRE_IDX] == 1.0
-            cooldown_ok = (step - last_fire_step) >= COOLDOWN
-            allowed = fire_allowed and cooldown_ok
-            mask_streak = mask_streak + 1 if fire_allowed else 0
-
-            # fire_desired: quality judgment (independent of the mask)
-            in_premium = (closure < -CLOSURE_MIN and ata_deg < ATA_STRICT
-                          and PREMIUM_LO < dist < PREMIUM_HI)
-            in_normal = (closure < -CLOSURE_MIN and ata_deg < ATA_STRICT
-                         and 2000.0 < dist < 5000.0)
-            long_wait = (step - last_fire_step) > FALLBACK_WAIT
-            fire_desired = (mask_streak >= MASK_STREAK_REQ and
-                            (in_premium or (in_normal and long_wait)))
-            fire = 1 if (allowed and fire_desired) else 0
-            if fire:
-                last_fire_step = step
-                fired += 1
-
-            cmd_hdg = chase_heading(p0, t0)
-            target_spd = chase_speed(p0, t0, args.cmd_speed)
-            yaw_err = wrap180(cmd_hdg - s['yaw_deg'])
-            hdg_i = hdg_label(yaw_err, last_hdg_label)
-            spd_i = spd_label(s['airspeed_mps'], target_spd)
-            act = np.array([spd_i, hdg_i, 0, fire], dtype=np.int64)
-            last_hdg_label = hdg_i
-
-            phase = classify_phase(dist, ata_deg, closure, prev_closure,
-                                   fire_allowed, fire_desired, prev_phase, dist_history)
-            prev_closure = closure
-            prev_phase = phase
-
-            rec['obs'].append(obs['p0'].astype(np.float32))
-            rec['action'].append(act)
-            rec['fire_allowed'].append(float(allowed))
-            rec['fire_desired'].append(float(fire_desired))
-            rec['premium_window'].append(float(in_premium))
-            rec['launch_quality'].append(quality_score(dist, ata_deg, closure, r_rps))
-            rec['target_hdg'].append(cmd_hdg)
-            rec['target_spd'].append(target_spd)
-            rec['phase'].append(phase)
-            rec['episode_id'].append(episode)
-            rec['mask'].append(mask.astype(np.float32))
-
-            obs, rews, terms, truncs, info = env.step({'p0': act})
-            total_steps += 1
-            if terms.get('__all__') or truncs.get('__all__'):
-                break
-
+        set_geometry(env, p0, t0, rng, args.cmd_speed)
+        run_one(env, p0, t0, args.cmd_speed, record=rec, episode_id=episode)
         if (ep + 1) % 25 == 0:
-            print(f'  ep {ep+1}: steps={step+1} fired={fired}')
-
+            print(f'  ep {ep+1} done')
     env.close()
     out = {k: np.array(v) for k, v in rec.items()}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -297,9 +302,10 @@ def main():
     n = len(out['obs'])
     print(f'\nsaved {args.out}: {n} transitions, {episode} episodes')
     print(f'  obs shape {out["obs"].shape}, action shape {out["action"].shape}')
-    print(f'  fire rate: {out["action"][:,3].mean()*100:.2f}% '
-          f'(allowed {out["fire_allowed"].mean()*100:.1f}%, '
-          f'desired {out["fire_desired"].mean()*100:.1f}%)')
+    allowed = out['fire_allowed'].mean() * 100
+    desired = out['fire_desired'].mean() * 100
+    fired = (out['action'][:, 3] == 1).mean() * 100
+    print(f'  fire: allowed {allowed:.2f}% desired {desired:.2f}% fired {fired:.2f}%')
     ph, cnt = np.unique(out['phase'], return_counts=True)
     print('  phases:', dict(zip(ph.tolist(), cnt.tolist())))
 
