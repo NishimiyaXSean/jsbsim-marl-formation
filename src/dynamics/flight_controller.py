@@ -57,10 +57,11 @@ class AltitudeStabilizer:
     Gains tuned for F-16 at 3000 m / 176–206 m/s.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, kp: float = 0.008, ki: float = 0.0005,
+                 kd: float = 0.04) -> None:
         # Negative kp: positive alt error → need climb → negative elevator (pull)
         self._pid = PIDController(
-            kp=0.008, ki=0.0005, kd=0.002,
+            kp=kp, ki=ki, kd=kd,
             output_min=-0.30, output_max=0.30,
             integral_min=-0.15, integral_max=0.15,
         )
@@ -81,15 +82,20 @@ class AltitudeStabilizer:
 class SpeedStabilizer:
     """Hold airspeed target via throttle.
 
-    Gains tuned for F-16 at 3000 m.  Equilibrium speed with thr=0.8 is
-    ≈ 176 m/s, so the target should be in the 140–190 m/s range.
+    Measured level-flight equilibrium (2026-08-05, 3000 m):
+        thr 0.8 -> ~270 m/s, 0.6 -> ~250, 0.5 -> ~238,
+        0.3 -> ~174, 0.15 -> ~152.
+    The old throttle floor of 0.5 (output_min=-0.30) meant the aircraft
+    could not slow below ~238 m/s — the "slow" speed actions were
+    unreachable and the rule-based target never slowed to its commanded
+    159 m/s.  Floor lowered to 0.15 (output_min=-0.65).
     """
 
     def __init__(self) -> None:
         self._pid = PIDController(
             kp=0.015, ki=0.010, kd=0.0,
-            output_min=-0.30, output_max=0.20,
-            integral_min=-0.15, integral_max=0.20,
+            output_min=-0.65, output_max=0.20,
+            integral_min=-0.50, integral_max=0.20,
         )
 
     def reset(self) -> None:
@@ -203,8 +209,10 @@ class FlightController:
 
     def __init__(self, bank_ff_gain: float = 0.25, kd_q: float = 2.0,
                  max_bank_deg: float = 75.0,
-                 roll_per_deg_heading: float = 2.5) -> None:
-        self.alt = AltitudeStabilizer()
+                 roll_per_deg_heading: float = 2.5,
+                 alt_kp: float = 0.008, alt_ki: float = 0.0005,
+                 alt_kd: float = 0.04) -> None:
+        self.alt = AltitudeStabilizer(kp=alt_kp, ki=alt_ki, kd=alt_kd)
         self.spd = SpeedStabilizer()
         self.hdg = HeadingStabilizer(max_bank_deg=max_bank_deg,
                                      roll_per_deg_heading=roll_per_deg_heading)

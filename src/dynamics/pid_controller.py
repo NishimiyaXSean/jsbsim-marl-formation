@@ -27,10 +27,13 @@ class PIDFlightController(BaseController):
 
     def __init__(self, bank_ff_gain: float = 0.25, kd_q: float = 2.0,
                  max_bank_deg: float = 75.0,
-                 roll_per_deg_heading: float = 2.5):
+                 roll_per_deg_heading: float = 2.5,
+                 alt_kp: float = 0.008, alt_ki: float = 0.0005,
+                 alt_kd: float = 0.04):
         self._fc = FlightController(bank_ff_gain=bank_ff_gain, kd_q=kd_q,
                                     max_bank_deg=max_bank_deg,
-                                    roll_per_deg_heading=roll_per_deg_heading)
+                                    roll_per_deg_heading=roll_per_deg_heading,
+                                    alt_kp=alt_kp, alt_ki=alt_ki, alt_kd=alt_kd)
         self._ap = BFMAutopilot(
             BFMAutopilotConfig(), trim=TrimSchedule(), scheduler=GainScheduler())
 

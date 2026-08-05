@@ -52,7 +52,9 @@ def chase_rule(p0, t0, cmd_speed, turn_speed=200.0):
     t_pos = t0.aircraft.position_ned
     t_vel = t0.aircraft.velocity_ned
     dist = float(np.linalg.norm(p_pos - t_pos))
-    lead_time = float(np.clip(dist / 1000.0, 1.0, 5.0))
+    # Lead shrinks smoothly to pure pursuit near the target — a fixed 1s lead
+    # creates a stable side-by-side orbit at ~700m (closing ~11 m/s only).
+    lead_time = float(np.clip(dist / 1000.0 - 0.5, 0.0, 5.0))
     aim = t_pos + t_vel * lead_time
     hdg = bearing_deg(p_pos, aim)
     s = p0.aircraft.state
@@ -103,14 +105,15 @@ def set_geometry(env, p0, t0, chase_dist, heading_bias, t_spd, p_spd):
 def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False,
                 bank_ff=0.30, max_bank=55.0, kd_q=0.8, roll_per_deg=2.5,
                 turn_speed=200.0, chase_dist=4000.0, heading_bias=30.0,
-                trace=False):
+                trace=False, alt_kd=0.002, alt_kp=0.008):
     env = BaseEnv(task=SingleCombatShootTask({"difficulty_level": 0.0}))
     obs, _ = env.reset(seed=seed)
     p0, t0 = env.pursuers[0], env.targets[0]
     # Swap in a controller with the sweep parameters (RL path untouched).
     p0.controller = SafetyInterceptor(PIDFlightController(
         bank_ff_gain=bank_ff, kd_q=kd_q,
-        max_bank_deg=max_bank, roll_per_deg_heading=roll_per_deg))
+        max_bank_deg=max_bank, roll_per_deg_heading=roll_per_deg,
+        alt_kd=alt_kd, alt_kp=alt_kp))
     if fbw:
         # Bypass the F-16 FCS (its yaw damper blocks turns); drive surfaces directly.
         p0.aircraft.fdm["fcs/fbw-override"] = 1
@@ -172,6 +175,8 @@ def run_episode(seed, cmd_speed=250.0, max_steps=MAX_STEPS, fbw=False,
             print(f"    TRACE t={step*0.2:5.1f}s dist={dist:6.0f}m "
                   f"alt_err={abs(s['alt_m']-target_alt):5.0f}m "
                   f"hdg_err={hdg_errs[-1]:+6.1f}° bank={s['roll_deg']:+5.1f}° "
+                  f"p_spd={s['airspeed_mps']:5.0f} "
+                  f"t_spd={t0.aircraft.state['airspeed_mps']:5.0f} "
                   f"pitch={s['pitch_deg']:+5.1f}° nz={s['n_z_g']:+5.2f}g "
                   f"elev_cmd={surfaces.elevator:+5.2f}")
 
@@ -220,6 +225,10 @@ def main():
                         help="speed used while correcting a large heading error")
     parser.add_argument("--chase-dist", type=float, default=4000.0,
                         help="initial tail-chase distance (m)")
+    parser.add_argument("--alt-kd", type=float, default=0.04,
+                        help="altitude PID derivative gain (vertical-speed damping)")
+    parser.add_argument("--alt-kp", type=float, default=0.008,
+                        help="altitude PID proportional gain")
     parser.add_argument("--heading-bias", type=float, default=30.0,
                         help="initial pursuer heading offset from target (deg)")
     parser.add_argument("--trace", action="store_true",
@@ -235,7 +244,8 @@ def main():
                             turn_speed=args.turn_speed,
                             chase_dist=args.chase_dist,
                             heading_bias=args.heading_bias,
-                            trace=args.trace and i == 0)
+                            trace=args.trace and i == 0,
+                            alt_kd=args.alt_kd, alt_kp=args.alt_kp)
                 for i in range(args.episodes)]
         print(f"\n===== [{tag}] speed={spd:.0f} bank_ff={args.bank_ff:.2f} "
               f"max_bank={args.max_bank:.0f} kd_q={args.kd_q:.2f} "
