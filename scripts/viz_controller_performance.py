@@ -231,46 +231,52 @@ def chase_plots(runs):
 
 
 # ========================== Part C: training curves ============================
-def reward_curves():
+def reward_curves(smooth=3):
+    """Raw per-iteration rewards with minimal smoothing (default window 3).
+
+    The raw points are the primary curve (faithful to the collected data);
+    a light moving average is overlaid only to help read the trend.
+    """
     logs = [
         ('v14 (controller fix)', 'marl_runs/shoot_v14_fullctrl_s42/train.log'),
         ('v18 (steering aids)', 'marl_runs/shoot_v18_steer_s42/train.log'),
         ('v19 (GPU+batch)', 'marl_runs/shoot_v19_gpu_s42/train.log'),
     ]
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=(12, 6))
     for label, path in logs:
         if not os.path.exists(path):
             continue
-        iters, rews = [], []
+        rews = []
         for line in open(path, encoding='utf-8', errors='replace'):
             if 'iter' in line and 'rew=' in line:
                 parts = line.split('rew=')
                 if len(parts) > 1:
                     try:
-                        iters.append(len(iters))
                         rews.append(float(parts[1].split()[0]))
                     except ValueError:
                         pass
-        if rews:
-            x = np.arange(len(rews))
-            y = np.array(rews)
-            # moving average over 10 iters
-            k = min(10, len(y))
-            if k > 1:
-                kernel = np.ones(k) / k
-                ysm = np.convolve(y, kernel, mode='same')
-            else:
-                ysm = y
-            ax.plot(x, y, alpha=0.15, color=None)
-            ax.plot(x, ysm, lw=2, label=f'{label} (smooth-{k})')
+        if not rews:
+            continue
+        x = np.arange(len(rews))
+        y = np.array(rews)
+        # RAW data points — the primary, faithful curve.
+        ax.plot(x, y, lw=0.8, alpha=0.55,
+                label=f'{label} (raw {len(rews)} pts)')
+        # Light smoothing overlay only when requested (default window 3).
+        k = max(1, min(smooth, len(y)))
+        if k > 1:
+            kernel = np.ones(k) / k
+            ysm = np.convolve(y, kernel, mode='same')
+            ax.plot(x, ysm, lw=1.8, alpha=0.9,
+                    label=f'{label} (smooth-{k})')
     ax.set_xlabel('Iteration'); ax.set_ylabel('Episode reward mean')
-    ax.set_title('Part C - Training reward curves (bottom-level optimization)')
-    ax.legend(fontsize=8); ax.grid(alpha=0.3)
+    ax.set_title('Part C - Training reward curves (raw per-iteration data)')
+    ax.legend(fontsize=7, ncol=2); ax.grid(alpha=0.3)
     fig.tight_layout()
     p = os.path.join(OUT, 'training_rewards.png')
     fig.savefig(p, dpi=150, facecolor='white')
     plt.close(fig)
-    print('[Part C] training curves saved')
+    print(f'[Part C] training curves saved (raw + smooth-{smooth})')
     return p
 
 
@@ -303,11 +309,13 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval-json', type=str, default=None)
+    parser.add_argument('--smooth', type=int, default=3,
+                        help='moving-average window for the training curve overlay (1 = raw only)')
     args = parser.parse_args()
     a = turn_performance()
     runs = [run_chase(s) for s in [250, 280]]
     b = chase_plots(runs)
-    c = reward_curves()
+    c = reward_curves(smooth=args.smooth)
     d = reward_hist(args.eval_json)
     print(f'\nSaved to {OUT}:')
     for f in [a, b, c, d]:
