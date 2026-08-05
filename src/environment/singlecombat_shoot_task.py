@@ -91,15 +91,18 @@ NUM_MISSILES = 4                # per aircraft — limited, force precision
 # ── Reward weights ───────────────────────────────────────────────────────────
 REWARD_HIT_BASE = 1000.0        # guaranteed for any hit within lethal radius
 REWARD_HIT_BONUS = 1000.0       # scaled by accuracy: 0m→+1000, 300m→+0
+REWARD_KILL = 8000.0            # v22: completing the kill dominates any shaping
 REWARD_SHOTDOWN = -2000.0       # hit by enemy missile
 REWARD_CRASH = -2000.0          # low altitude / overstress
 REWARD_MISS_PENALTY = -50.0     # P1: wasted missile (4 ammo / 4 HP budget)
-REWARD_UNUSED_AMMO = -75.0      # per missile still loaded at episode end (not killed)
 REWARD_SHOOT_PENALTY = -1.0     # fire blocked by WEZ/cooldown (mask should prevent most)
 
 # ── Shaping weight overrides ─────────────────────────────────────────────────
-PROGRESS_WEIGHT = 0.2           # reduced — hit reward dominates
-ATA_WEIGHT = 4.0                # v11.3: sweet spot between too-weak(3) and angle-hack(5)
+PROGRESS_WEIGHT = 0.3           # v22: modest approach shaping
+ATA_WEIGHT = 1.2                # v22: alignment reinforcement only — the cmd_hdg
+                                # reward does the primary steering.  ATA=4.0 let the
+                                # policy collect +24k/ep just by pointing at the
+                                # target from a standoff (the v21b hover exploit).
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -177,6 +180,7 @@ class SingleCombatShootTask(BaseTask):
         self._last_shoot_step = {aid: -MIN_ATTACK_INTERVAL for aid in AGENT_IDS}
 
         # ── Reward tracking ─────────────────────────────────────────────────
+        self._kill_bonus_awarded = False
         self._prev_alive = {aid: True for aid in AGENT_IDS}
         self._prev_missile_count = {aid: NUM_MISSILES for aid in AGENT_IDS}
         self._has_launched_this_step: Dict[str, bool] = {aid: False for aid in AGENT_IDS}
@@ -229,8 +233,13 @@ class SingleCombatShootTask(BaseTask):
         t0.aircraft.position_ned = np.array([t_north_m, t_east_m, t_alt])
         t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
 
-        # Initial heading offset: force agent to MANEUVER into WEZ first
-        heading_bias = float(rng.uniform(30, 60) * rng.choice([-1, 1]))
+        # Initial heading offset: force agent to MANEUVER into WEZ first.
+        # Curriculum (v21): max_heading_bias_deg scales the offset so training
+        # can start nearly-aligned (small bias) and grow the turn requirement.
+        max_bias = float(self.config.get("max_heading_bias_deg", 60.0))
+        bias_lo = max(5.0, 0.5 * max_bias)
+        bias_hi = max(bias_lo, max_bias)
+        heading_bias = float(rng.uniform(bias_lo, bias_hi) * rng.choice([-1, 1]))
         p0_hdg = float((t_hdg + heading_bias) % 360.0)
 
         p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt * 3.28084),
@@ -460,6 +469,13 @@ class SingleCombatShootTask(BaseTask):
             r_ata = self._ata_reward(ps, target)
             r_alt = self._alt_reward(ps, target)
 
+            # (2c) Engagement proximity dwell (v21b): being inside the outer
+            # engagement range is valuable — breaks the 3km standoff local
+            # optimum where the policy hovers aligned but never closes.
+            cur_dist_all = float(np.linalg.norm(
+                ps.aircraft.position_ned - target.aircraft.position_ned))
+            r_prox = 0.5 if cur_dist_all < 6000.0 else 0.0
+
             # (2b) Command-heading shaping (absolute-sector interface):
             # immediate feedback on the sector CHOICE — graded by the wrapped
             # angle from the commanded sector to the target bearing, before the
@@ -470,7 +486,7 @@ class SingleCombatShootTask(BaseTask):
                 target.aircraft.position_ned[0] - ps.aircraft.position_ned[0]))
                 + 360.0) % 360.0)
             cmd_hdg_err = (bearing_deg - ps.ref_hdg + 180.0) % 360.0 - 180.0
-            r_cmd_hdg = -1.0 * (abs(cmd_hdg_err) / 180.0) * DECISION_STEPS
+            r_cmd_hdg = -0.5 * (abs(cmd_hdg_err) / 180.0) * DECISION_STEPS
 
             # (3) WEZ first-entry bonus — one-shot per episode
             in_wez = self._is_valid_launch_envelope(ps, target)
@@ -488,13 +504,19 @@ class SingleCombatShootTask(BaseTask):
             else:
                 ps._wez_steps = 0
 
-            r += r_progress + r_ata + r_alt + r_cmd_hdg + r_dense_range + r_wez_entry + r_wez_dwell
+            r += r_progress + r_ata + r_alt + r_cmd_hdg + r_dense_range + r_prox + r_wez_entry + r_wez_dwell
 
             # (5) Fire success reward — modest, encourages legal launch
             r_launch = 0.0
             if self._has_launched_this_step.get(aid, False):
                 r_launch = 10.0
             r += r_launch
+
+            # (5c) Anti-loiter (v22): hanging inside engagement range without
+            # firing for >300 steps wastes the 4-ammo budget — small pressure.
+            if (cur_dist_all < 8000.0 and self.remaining_missiles.get(aid, 0) > 0
+                    and self._step_count - self._last_shoot_step.get(aid, -300) > 300):
+                r += -1.0
 
             # (5b) closure bonus removed (P1): closure>0 is now structurally
             # guaranteed by the fire mask, so this reward is redundant.
@@ -533,6 +555,12 @@ class SingleCombatShootTask(BaseTask):
                     missile_reward = (REWARD_HIT_BASE + REWARD_HIT_BONUS * accuracy_score) * range_mult
                     r_event += missile_reward
 
+            # Kill bonus (v22): completing the guidance task.
+            if (target is not None and target.hits_taken >= target.max_hits
+                    and not self._kill_bonus_awarded):
+                self._kill_bonus_awarded = True
+                r_event += REWARD_KILL
+
             # Miss penalty (P1): a wasted missile is costly with 4 ammo / 4 HP.
             for m in list(ps.launch_missiles):
                 if m.is_done and not m.is_success and not getattr(m, '_miss_penalty_rewarded', False):
@@ -554,6 +582,7 @@ class SingleCombatShootTask(BaseTask):
                 "ProgressReward": {"p0": r_progress},
                 "ATAAlignmentReward": {"p0": r_ata},
                 "CmdHeading": {"p0": r_cmd_hdg},
+                "ProximityDwell": {"p0": r_prox},
                 "AltitudeDeviationPenalty": {"p0": r_alt},
                 "DenseRange": {"p0": r_dense_range},
                 "WEZ_Entry": {"p0": r_wez_entry},
@@ -562,6 +591,7 @@ class SingleCombatShootTask(BaseTask):
                 "FireSpam": {"p0": r_spam},
                 "QualityBonus": {"p0": r_quality},
                 "EventReward": {"p0": r_event},
+                "KillBonus": {"p0": REWARD_KILL if self._kill_bonus_awarded else 0.0},
             }
 
             # Update tracking
@@ -759,18 +789,6 @@ class SingleCombatShootTask(BaseTask):
             ])
         return np.array(features, dtype=np.float32)
 
-    def get_terminal_reward(self, env) -> Dict[str, float]:
-        """Unused-ammo penalty: with the 4-ammo / 4-HP budget, ending an episode
-        without killing the target wastes every missile still loaded.  This makes
-        the ammo_exhausted reset condition meaningful for the policy."""
-        target = env.targets[0] if env.M > 0 else None
-        if target is not None and target.is_alive is False:
-            return {aid: 0.0 for aid in AGENT_IDS}
-        if self._last_termination_reason == "target_killed":
-            return {aid: 0.0 for aid in AGENT_IDS}
-        return {aid: REWARD_UNUSED_AMMO * self.remaining_missiles.get(aid, 0)
-                for aid in AGENT_IDS}
-
     # ══════════════════════════════════════════════════════════════════════════
     #  Internal: missile launch
     # ══════════════════════════════════════════════════════════════════════════
@@ -913,27 +931,44 @@ class SingleCombatShootTask(BaseTask):
     # ══════════════════════════════════════════════════════════════════════════
 
     def _progress_reward(self, ps, target) -> float:
-        """2D progress toward target (positive = closing, negative = separating)."""
+        """2D progress toward target — band-gated approach (v21b).
+
+        Closing is strongly rewarded while approaching the 1.5-8km WEZ band,
+        mild inside it, and PENALIZED below 1.5km (closing further would
+        overshoot the fireable range).  This teaches the pursuer to enter and
+        hold the launch band instead of hovering at standoff or ramming.
+        """
         cur_dist_2d = float(np.linalg.norm(
             ps.aircraft.position_ned[:2] - target.aircraft.position_ned[:2]))
         prev_dist_2d = getattr(ps, 'prev_dist', cur_dist_2d)
         delta = float(np.clip(prev_dist_2d - cur_dist_2d, -100.0, 100.0))  # positive = closing
-        dist_factor = 1.0 + max(0.0, (500.0 - cur_dist_2d) / 250.0)
-        reward = PROGRESS_WEIGHT * delta * 0.5 * DECISION_STEPS * dist_factor
+        if cur_dist_2d > 3000.0:
+            gate = 1.0
+        elif cur_dist_2d > 1500.0:
+            gate = 0.5
+        else:
+            gate = -1.0
+        reward = PROGRESS_WEIGHT * delta * 0.5 * DECISION_STEPS * gate
         ps.prev_dist = cur_dist_2d
         return float(reward)
 
     def _ata_reward(self, ps, target) -> float:
-        """Nose-on-target reward."""
+        """Nose-on-target reward — scaled by proximity (v21b).
+
+        Aligning is worth more when close: at 500m the reward is ~1.44x,
+        at 3km ~1.1x, at 6km ~0.75x.  This breaks the standoff local optimum
+        where the policy hovers at 3km collecting flat ATA reward.
+        """
         p_fwd = compute_forward_vector(ps.aircraft.rpy_rad)
         los_vec = target.aircraft.position_ned - ps.aircraft.position_ned
         dist = float(np.linalg.norm(los_vec))
         los_dir = los_vec / max(dist, 1e-6)
         cos_ata = float(np.dot(p_fwd, los_dir))
-        dist_factor = np.clip(1.0 - dist / MAX_DIST, 0.1, 1.0)
+        proximity_scale = float(np.clip(1.5 - dist / 8000.0, 0.5, 1.5))
         # Range guard: only reward ATA if within reasonable engagement range (<6km)
         range_gate = 1.0 if dist < 6000.0 else 0.1
-        return float(ATA_WEIGHT * cos_ata * dist_factor * DECISION_STEPS * range_gate)
+        return float(ATA_WEIGHT * cos_ata * proximity_scale *
+                     DECISION_STEPS * range_gate)
 
     def _alt_reward(self, ps, target) -> float:
         """Penalty for altitude deviation + low-altitude soft warning.

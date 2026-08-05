@@ -58,6 +58,9 @@ def main():
     parser.add_argument("--num-envs", type=int, default=2,
                         help="parallel envs per rollout worker")
     parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument("--heading-bias-max", type=float, default=60.0,
+                        help="max initial pursuer heading offset (deg).  Curriculum: "
+                             "train small (e.g. 15) first, then resume with 60.")
     args = parser.parse_args()
 
     register_env(ENV_NAME, lambda c: env_creator(c))
@@ -80,7 +83,8 @@ def main():
     # Always persist obs_include_closure in the checkpoint's env_config so
     # PPO.from_checkpoint rebuilds the identical obs dim (38 new / 36 legacy).
     env_config = {"difficulty_level": args.difficulty,
-                  "obs_include_closure": not args.legacy_obs}
+                  "obs_include_closure": not args.legacy_obs,
+                  "max_heading_bias_deg": args.heading_bias_max}
 
     # Use custom model with real action mask support
     config = (
