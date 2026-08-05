@@ -191,6 +191,7 @@ def evaluate_checkpoint(ckpt_path, difficulties, episodes, seed, outdir):
         summary = {
             "difficulty": diff,
             "episodes": n_ep,
+            "episode_rewards": [float(r) for r in ep_rewards],
             "mean_reward": float(np.mean(ep_rewards)) if ep_rewards else 0.0,
             "mean_steps": float(np.mean(ep_steps)) if ep_steps else 0.0,
             "termination_reasons": term_reasons,
