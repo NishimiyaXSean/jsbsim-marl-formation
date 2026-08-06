@@ -40,3 +40,7 @@ results/neural_tracking/
 # Generated visualization / eval artifacts (regenerable via scripts/)
 results/ctrl_viz/
 results/shoot_eval/eval_*.json
+# Regenerable rule-expert dataset (scripts/generate_shoot_rule_expert.py --seed 42)
+data/expert/shoot_rule_expert*.npz
+# Generated audit / training logs
+logs/

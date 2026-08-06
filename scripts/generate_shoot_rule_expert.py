@@ -160,6 +160,7 @@ def set_geometry(env, p0, t0, rng, cmd_speed):
     p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
     p0.ref_hdg, p0.ref_alt_m = p_hdg, t_alt
     p0._cmd_speed = p_spd
+    return bias, float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
     for _ in range(60):
         s = p0.aircraft.state
         target = FlightTarget(heading_deg=p_hdg, altitude_m=t_alt, speed_mps=p_spd)
@@ -187,6 +188,8 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
     prev_phase = 'far_approach'
     dist_history = []
     fired = 0
+    hits = 0
+    first_fire = None
     wez_first = None
     ata_hist = []
     reason = 'timeout'
@@ -197,6 +200,8 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
         fire = 1 if (fire_allowed and desired) else 0
         if fire:
             fired += 1
+            if first_fire is None:
+                first_fire = step
 
         hdg_i = hdg_label(obs['p0'])
         spd_i = spd_label(obs['p0'], cmd_speed)
@@ -232,10 +237,12 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
             record['mask'].append(mask.astype(np.float32))
 
         obs, rews, terms, truncs, info = env.step({'p0': act})
+        hits += env.task._hit_this_step.get('p0', 0)
         if terms.get('__all__') or truncs.get('__all__'):
             reason = info.get('p0', {}).get('termination_reason', 'unknown')
             break
     return {'reason': reason, 'fired': fired, 'wez_first': wez_first,
+            'hits': hits, 'first_fire': first_fire,
             'ata_p90': float(np.percentile(ata_hist, 90)) if ata_hist else 0.0}
 
 

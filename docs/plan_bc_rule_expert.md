@@ -158,3 +158,24 @@ loss = cross_entropy(masked_logits, expert_action)
 - 开发评测 100-200 局同 seed; 最终 500-1000 配对 seed + 95% bootstrap CI;
 - 成功标准(最低): 发射/局≥v19, 击杀≥v19, premium不退化, lost_target显著低于32%;
   目标: lost≤20-25%, 发射≥0.50/局, 击杀≥15%, bad≈0。
+
+### 补充审计与几何勘误 (2026-08-06)
+
+#### 补充审计 1: 无状态标签确定性 — PASS
+
+- 方法: 从 403,544 条 transition 中随机抽 30,000 行, 用纯函数标签器复算两次, stored / run1 / run2 三方一致。
+- 修复: spd 复算需从保存的 target_spd 反推生成时的 cmd_speed (ata>=15° 时 target_spd+60), 不能直接用 target_spd 作为 spd_label 参数。
+- 结果: 30,000 行全部一致; hdg/fire/fire_allowed/fire_desired/launch_quality 也全部一致。
+
+#### 补充审计 2: split 内 C 分布与几何覆盖 — PASS
+
+- 按整局 80/10/10 (rng=0) 划分: train C=673 (>=600), val C=80 (>=60), test C=85 (>=60), 全部 PASS。
+- C 覆盖: 非空角度桶/DLZ/closure/ATA 桶均有 C; top-5 局 C 集中度 2.4% (838 C 分散在 296/300 局)。
+
+#### 几何勘误 (重要)
+
+- 发现: generate_shoot_rule_expert.set_geometry 实际被 env.reset() -> SingleCombatShootTask.reset 覆盖, 未生效。
+- 真实初始几何: 尾追 2-5km、横向 ±500m、初始偏置角 30-60° (max_heading_bias_deg=60 默认), 目标 180-240 m/s, 追击机 240-300 m/s, 1s 暖机。
+- 因此: 门禁 1 记录中的"宽几何(0-120°) 击杀31%"与"训练几何 24%"实为同一几何下不同随机种子; 数据集中不存在 90-120° 初始偏置。
+- 对计划的影响: 首轮 BC 学习 30-60° 尾追接近; 宽几何覆盖留到 DAgger 或定向补数据阶段处理。
+- 离散专家在真实几何下 (100 局): lost 0%, WEZ 100%, 发射 2.68/局, 命中 100%, 击杀 23%, 仍是强基线。
