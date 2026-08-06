@@ -1,4 +1,4 @@
-"""ID/OOD scenario matrix: discrete-expert acceptance + BC zero-shot.
+﻿"""ID/OOD scenario matrix: discrete-expert acceptance + BC zero-shot.
 
 Each cell varies one geometry/behavior dimension from the ID baseline
 (bias 30-60 deg, dist 2-5 km, random lateral, alt 0, closing, straight
@@ -52,9 +52,16 @@ CELLS = [
 ]
 
 
+KEY_CELLS = {"dist2_3k", "alt_diff300", "target_evasive"}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--eps-per-cell", type=int, default=12)
+    parser.add_argument("--eps-key", type=int, default=100,
+                        help="episodes per key cell (dist2_3k/alt_diff300/target_evasive)")
+    parser.add_argument("--eps-other", type=int, default=50,
+                        help="episodes per other cell")
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--weights", default="data/expert/shoot_bc_round1_baseline.pth")
     parser.add_argument("--out", default="results/shoot_eval/scenario_matrix_round1.json")
@@ -71,7 +78,8 @@ def main():
     results = {}
     for label, cfg in CELLS:
         records = []
-        for s in range(args.start_seed, args.start_seed + args.eps_per_cell):
+        eps_n = args.eps_key if label in KEY_CELLS else args.eps_other
+        for s in range(args.start_seed, args.start_seed + eps_n):
             records.append(run_one_episode("expert", None, device, s, **cfg))
             records.append(run_one_episode("bc", model, device, s, **cfg))
         exp = aggregate([r for r in records if r["policy"] == "expert"])
@@ -106,3 +114,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
