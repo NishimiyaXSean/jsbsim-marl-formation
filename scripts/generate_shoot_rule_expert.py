@@ -131,59 +131,10 @@ def classify_phase(obs, fire_allowed, fire_desired, prev_closure, prev_phase, di
     return 'wez_approach' if ata < 25.0 else 'far_approach'
 
 
-def set_geometry(env, p0, t0, rng, cmd_speed):
-    bias = rng.uniform(0.0, 90.0)
-    if rng.random() < 0.2:
-        bias = rng.uniform(90.0, 120.0)
-    bias *= rng.choice([-1.0, 1.0])
-    chase_dist = rng.uniform(2000.0, 5000.0)
-    t_alt = 3000.0
-    t_hdg = float(rng.uniform(0, 360))
-    t_spd = float(rng.uniform(180.0, 240.0))
-    t_hdg_rad = np.radians(t_hdg)
-    t_north = 2224.0 + rng.uniform(-200, 200)
-    t_east = rng.uniform(-200, 200)
-    t_lat = 30.0 + t_north / 111132.0
-    t_lon = 120.0 + t_east / 96420.0
-    p_north = t_north - chase_dist * np.cos(t_hdg_rad)
-    p_east = t_east - chase_dist * np.sin(t_hdg_rad)
-    p_lat = 30.0 + p_north / 111132.0
-    p_lon = 120.0 + p_east / 96420.0
-    p_spd = float(rng.uniform(cmd_speed - 30.0, cmd_speed + 30.0))
-    t0.aircraft.reset(lat_deg=t_lat, lon_deg=t_lon, alt_ft=int(t_alt * 3.28084),
-                      heading_deg=t_hdg, speed_kts=int(t_spd / 0.5144), trim=False)
-    t0.aircraft.position_ned = np.array([t_north, t_east, t_alt])
-    t0.ref_hdg, t0.ref_alt_m = t_hdg, t_alt
-    p_hdg = float((t_hdg + bias) % 360.0)
-    p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt * 3.28084),
-                      heading_deg=p_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
-    p0.aircraft.position_ned = np.array([p_north, p_east, t_alt])
-    p0.ref_hdg, p0.ref_alt_m = p_hdg, t_alt
-    p0._cmd_speed = p_spd
-    return bias, float(np.linalg.norm(p0.aircraft.position_ned - t0.aircraft.position_ned))
-    for _ in range(60):
-        s = p0.aircraft.state
-        target = FlightTarget(heading_deg=p_hdg, altitude_m=t_alt, speed_mps=p_spd)
-        surf = p0.controller.predict(s, target, PHYSICS_DT)
-        p0.aircraft.set_controls(float(np.clip(surf.throttle, 0, 1)),
-                                 float(np.clip(surf.elevator, -1, 1)),
-                                 float(np.clip(surf.aileron, -1, 1)),
-                                 float(np.clip(surf.rudder, -1, 1)))
-        ts = t0.aircraft.state
-        tgt = FlightControlTargets(heading_deg=t_hdg, altitude_m=t_alt, speed_mps=t_spd)
-        thr, elev, ail, rud = t0.fc.compute(ts, tgt, PHYSICS_DT)
-        t0.aircraft.set_controls(thr, elev, ail, rud)
-        p0.aircraft.run()
-        p0.aircraft.position_ned[0:2] += p0.aircraft.velocity_ned[0:2] * PHYSICS_DT
-        p0.aircraft.position_ned[2] = p0.aircraft.state["alt_m"]
-        t0.aircraft.run()
-        t0.aircraft.position_ned[0:2] += t0.aircraft.velocity_ned[0:2] * PHYSICS_DT
-        t0.aircraft.position_ned[2] = t0.aircraft.state["alt_m"]
-
-
 def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
     """Run the discretized rule for one episode; optionally record data."""
     obs, _ = env.reset()
+    bias_est = abs(float(obs['p0'][21]) * 180.0)
     prev_closure = None
     prev_phase = 'far_approach'
     dist_history = []
@@ -242,7 +193,7 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
             reason = info.get('p0', {}).get('termination_reason', 'unknown')
             break
     return {'reason': reason, 'fired': fired, 'wez_first': wez_first,
-            'hits': hits, 'first_fire': first_fire,
+            'hits': hits, 'first_fire': first_fire, 'bias_est': bias_est,
             'ata_p90': float(np.percentile(ata_hist, 90)) if ata_hist else 0.0}
 
 
@@ -261,7 +212,6 @@ def main():
                                                'obs_include_closure': True}))
     p0, t0 = env.pursuers[0], env.targets[0]
     p0.controller = SafetyInterceptor(PIDFlightController())
-    rng = np.random.default_rng(args.seed)
 
     if args.validate:
         reasons = {}
@@ -271,7 +221,6 @@ def main():
         wez_firsts = []
         n_ep = 0
         for ep in range(args.episodes):
-            set_geometry(env, p0, t0, rng, args.cmd_speed)
             r = run_one(env, p0, t0, args.cmd_speed)
             reasons[r['reason']] = reasons.get(r['reason'], 0) + 1
             if r['wez_first'] is not None:
@@ -298,7 +247,6 @@ def main():
     episode = 0
     for ep in range(args.episodes):
         episode += 1
-        set_geometry(env, p0, t0, rng, args.cmd_speed)
         run_one(env, p0, t0, args.cmd_speed, record=rec, episode_id=episode)
         if (ep + 1) % 25 == 0:
             print(f'  ep {ep+1} done')

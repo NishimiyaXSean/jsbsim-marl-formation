@@ -1,4 +1,4 @@
-# BC 模仿规则专家 — 修订实施计划 (2026-08-06)
+﻿# BC 模仿规则专家 — 修订实施计划 (2026-08-06)
 
 ## 背景
 
@@ -211,6 +211,28 @@ loss = cross_entropy(masked_logits, expert_action)
 
 #### 结论
 
-- 首轮 BC 闭环 lost 0% 且击杀率 40%, 已超过离散专家(23%), 接近行为瓶颈已解决;
+- 首轮 BC 闭环 lost 0%、击杀率 40%, 接近行为瓶颈已解决; 是否真正"超过"离散专家(23%)需 500 配对 seed 验证(2026-08-06 进行中);
 - fire B/C 判别健康 (recall 0.8-0.9, precision 0.7+), 发射质量 100% 合格, 无需定向补数据;
 - 下一步: 1-2 轮 DAgger(专家接管生成偏差-恢复状态) → 冻结 policy 的 critic warm-up → 低 LR + BC 锚定的 PPO 微调。
+
+
+
+### 几何修复、基线归档与配对评测 (2026-08-06)
+
+#### 基线归档
+
+- 冻结 BC 首轮权重: data/expert/shoot_bc_round1_baseline.pth (sha256=07119a0571a46843edfecad68e746e61be8cd05fe08c5a934d53d9d4bc92aba0), 不可覆盖;
+- 对应 100 局评测 JSON: results/shoot_eval/eval_bc_round1_100ep_baseline.json。
+
+#### 几何修复 (可 seed 复现 + 场景参数化)
+
+- BaseEnv.reset 保存 _reset_seed; SingleCombatShootTask.reset 改用 env seed 的 rng 生成几何 — 同一 seed 可精确复现同一初始状态(配对评测前提);
+- 场景配置键: max_heading_bias_deg, chase_dist_min/max, lateral_max_m, lateral_sign, alt_diff_m, p_speed_range, t_speed_range, difficulty_level(目标行为);
+- 移除生成脚本中无效的 set_geometry(其设置一直被 task.reset 覆盖); run_one 新增返回 bias_est(首帧估计), 审计 E 部分改用它分桶;
+- 单元测试 10/10 通过 (tests/test_environment/test_geometry_seeding.py): 同 seed 复现(同 env/新 env)、不同 seed 差异、偏置 30/60/120、距离 5-8km、高度差 300、分离/接近 closure。
+
+#### 配对评测 (进行中)
+
+- scripts/eval_paired_bc_vs_expert.py: 500 个配对 seed, 专家与 BC 共用同一初始状态;
+- 新增指标: 第一发命中率、第一发命中后击杀率、每杀导弹数、每发伤害、首发时间、WEZ→首发延迟、逐 seed BC−专家差值(kill/lost/launches);
+- scripts/eval_scenario_matrix.py: 13 格 ID/OOD 矩阵(偏置 0-30/30-60/60-90/90-120、距离 2-3/5-8km、横向左/右/中心、高度差、closure 中性/分离、目标规避), 每格固定 seed 配对跑专家验收 + BC 零样本, 输出 expert-fail(不用于训练)/bc-fail(DAgger 目标)/ok。

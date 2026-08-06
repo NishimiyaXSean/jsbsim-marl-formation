@@ -200,14 +200,24 @@ class SingleCombatShootTask(BaseTask):
 
         # ── Combat geometry: tail-chase at 2-5km range ──────────────────────
         # KEY: set JSBSim lat/lon directly for ACMI consistency
-        rng = np.random.default_rng()
+        # NOTE (2026-08-06): rng seeded from env._reset_seed so
+        # reset(seed=s) reproduces the same initial geometry (paired
+        # evals / ID-OOD scenario matrix). The generator's set_geometry()
+        # was removed because this reset() always overrode it.
+        rng = np.random.default_rng(getattr(env, '_reset_seed', None))
+        cfg = self.config
         p0 = env.pursuers[0]; t0 = env.targets[0]
 
         t_alt = 3000.0
         t_hdg = float(rng.uniform(0, 360))
-        t_spd = float(rng.uniform(180, 240))
-        chase_dist = float(rng.uniform(2000, 5000))
-        lateral = float(rng.uniform(-500, 500))
+        t_spd = float(rng.uniform(*cfg.get('t_speed_range', (180.0, 240.0))))
+        chase_dist = float(rng.uniform(cfg.get('chase_dist_min', 2000.0),
+                                       cfg.get('chase_dist_max', 5000.0)))
+        lat_max = float(cfg.get('lateral_max_m', 500.0))
+        lat_sign = float(cfg.get('lateral_sign', 0.0))
+        lateral = (float(rng.uniform(0.0, lat_max)) * lat_sign
+                   if lat_sign != 0.0
+                   else float(rng.uniform(-lat_max, lat_max)))
         t_hdg_rad = np.radians(t_hdg)
 
         # WGS84 conversion constants at ~30°N
@@ -225,7 +235,9 @@ class SingleCombatShootTask(BaseTask):
         p_east_m = t_east_m - chase_dist * np.sin(t_hdg_rad) - lateral * np.cos(t_hdg_rad)
         p_lat = 30.0 + p_north_m / M_PER_DEG_LAT
         p_lon = 120.0 + p_east_m / M_PER_DEG_LON
-        p_spd = float(rng.uniform(240, 300))
+        p_spd = float(rng.uniform(*cfg.get('p_speed_range', (240.0, 300.0))))
+        alt_diff = float(cfg.get('alt_diff_m', 0.0))
+        p_alt = t_alt + (rng.choice([-1.0, 1.0]) * alt_diff if alt_diff > 0 else 0.0)
 
         # Reset JSBSim at CORRECT coordinates (ACMI will show these)
         t0.aircraft.reset(lat_deg=t_lat, lon_deg=t_lon, alt_ft=int(t_alt * 3.28084),
@@ -242,10 +254,10 @@ class SingleCombatShootTask(BaseTask):
         heading_bias = float(rng.uniform(bias_lo, bias_hi) * rng.choice([-1, 1]))
         p0_hdg = float((t_hdg + heading_bias) % 360.0)
 
-        p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(t_alt * 3.28084),
+        p0.aircraft.reset(lat_deg=p_lat, lon_deg=p_lon, alt_ft=int(p_alt * 3.28084),
                           heading_deg=p0_hdg, speed_kts=int(p_spd / 0.5144), trim=False)
-        p0.aircraft.position_ned = np.array([p_north_m, p_east_m, t_alt])
-        p0.ref_hdg, p0.ref_alt_m = p0_hdg, t_alt
+        p0.aircraft.position_ned = np.array([p_north_m, p_east_m, p_alt])
+        p0.ref_hdg, p0.ref_alt_m = p0_hdg, p_alt
         p0._cmd_speed = p_spd
 
         # Warmup JSBSim — P0 flies at its OWN offset heading, T0 at its heading

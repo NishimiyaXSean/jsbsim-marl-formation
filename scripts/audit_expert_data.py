@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore')
 import numpy as np
 
 from scripts.generate_shoot_rule_expert import (
-    run_one, set_geometry, BaseEnv, SingleCombatShootTask, PIDFlightController,
+    run_one, BaseEnv, SingleCombatShootTask, PIDFlightController,
     SafetyInterceptor, hdg_label, spd_label, fire_desired, quality_score,
     dlz_depth, FIRE_IDX, ATA_TURN)
 
@@ -288,13 +288,13 @@ def main():
         env = BE(task=SCT({'difficulty_level': 0.0, 'obs_include_closure': True}))
         p0, t0 = env.pursuers[0], env.targets[0]
         p0.controller = SafetyInterceptor(PIDFlightController())
-        rng = np.random.default_rng(args.seed)
         buckets = {'0-30': [], '30-60': [], '60-90': [], '90-120': []}
         all_r = []
+        log('  NOTE: geometry comes from SingleCombatShootTask.reset; '
+            f'buckets by first-obs bias estimate (see Gate 3 note).')
         for ep in range(args.val_episodes):
-            bias, _ = set_geometry(env, p0, t0, rng, 280.0)
             r = run_one(env, p0, t0, 280.0)
-            r['bias'] = abs(bias)
+            bias = r['bias_est']
             all_r.append(r)
             key = '0-30' if bias < 30 else '30-60' if bias < 60 else '60-90' if bias < 90 else '90-120'
             buckets[key].append(r)

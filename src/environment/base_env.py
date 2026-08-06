@@ -217,6 +217,7 @@ class BaseEnv(MultiAgentEnv):
     def reset(self, *, seed=None, options=None):
         """Reset all aircraft and delegate to task.reset()."""
         rng = np.random.default_rng(seed)
+        self._reset_seed = seed  # consumed by task.reset for deterministic geometry
         d = self._difficulty
 
         cluster = np.array([rng.uniform(-200, 200),
