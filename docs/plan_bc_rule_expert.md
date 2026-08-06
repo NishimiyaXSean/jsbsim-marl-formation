@@ -179,3 +179,38 @@ loss = cross_entropy(masked_logits, expert_action)
 - 因此: 门禁 1 记录中的"宽几何(0-120°) 击杀31%"与"训练几何 24%"实为同一几何下不同随机种子; 数据集中不存在 90-120° 初始偏置。
 - 对计划的影响: 首轮 BC 学习 30-60° 尾追接近; 宽几何覆盖留到 DAgger 或定向补数据阶段处理。
 - 离散专家在真实几何下 (100 局): lost 0%, WEZ 100%, 发射 2.68/局, 命中 100%, 击杀 23%, 仍是强基线。
+
+
+### BC 首轮训练与闭环评测 (2026-08-06)
+
+#### 训练配置
+
+- 40 epochs, batch 512, Adam lr=1e-3 cosine, grad clip 1.0;
+- minibatch: 20% fire窗口(B:C=2:1) + 80% 航向平衡(heading-0 约55%, 非零均匀);
+- fire loss 权重 2.0; speed 用温和类别权重; alt head(dim=1)不参与 CE;
+- 模型: 与 ShootMaskModel 同构(encoder 256-256-128 + 4 action heads [3,5,1,2]), 108k 参数, GPU 训练约 3 分钟。
+
+#### 离线指标 (val / test, best epoch=26)
+
+- heading: acc 99.0%, macro-F1 0.979, 转向方向 99%, 五类 recall [0.997,0.975,0.99,0.992,0.994] — 无类别坍缩;
+- speed acc 98.2%;
+- fire (仅 fire_allowed 窗口): val precision 0.71 / recall 0.89 / F1 0.789; test precision 0.73 / recall 0.80;
+- RLlib 兼容: BC 与 ShootMaskModel logits 逐 head max diff = 0 (只加载 policy trunk + action heads)。
+
+#### 闭环评测 (100 局, difficulty=0, 确定性 argmax)
+
+| 指标 | BC 首轮 | v19 基线 | 离散专家 |
+| --- | --- | --- | --- |
+| lost_target | 0% | 32% | 0% |
+| WEZ 到达 | 100% | - | 100% |
+| 发射/局 | 2.90 | 0.48 | 2.68 |
+| 命中率 | 99.7% | 100% | 100% |
+| 击杀率 | 40% | 10% | 23% |
+| premium+good | 100% (203+87, bad=0) | - | - |
+| time_to_WEZ | 13.7s | - | ~15s |
+
+#### 结论
+
+- 首轮 BC 闭环 lost 0% 且击杀率 40%, 已超过离散专家(23%), 接近行为瓶颈已解决;
+- fire B/C 判别健康 (recall 0.8-0.9, precision 0.7+), 发射质量 100% 合格, 无需定向补数据;
+- 下一步: 1-2 轮 DAgger(专家接管生成偏差-恢复状态) → 冻结 policy 的 critic warm-up → 低 LR + BC 锚定的 PPO 微调。
