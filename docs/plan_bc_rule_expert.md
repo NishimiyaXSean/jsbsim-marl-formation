@@ -371,3 +371,14 @@ loss = cross_entropy(masked_logits, expert_action)
 - 瓶颈是 BC fire 策略过于保守: 只打 2.07/3.68 个合法窗口(大量窗口 DLZ 深度 <0.25 被 fire_desired 判为不值得发), 而近距交战窗口极短(约 1 步), 等待 premium 窗口=错过;
 - delay/DLZ 选择性策略全部更差 → 近距离最优策略就是"合法即发";
 - **PPO 设计确认**: fire-only 优化即可解锁 dist2_3k (目标行为≈asap), 无需解冻 heading/speed; fire 锚定应弱(λ_fire 0.05-0.1 按置信度缩放), 奖励课程用伤害增量+击杀即可把 fire 头推向早发。
+
+
+### P0: RLlib 加载一致性门禁 (2026-08-06, 500 seeds) — PASS
+
+- BC 权重装入真实 RLlib PPO policy(ShootMaskModel), 零梯度更新;
+- 逐 head logits vs 独立 BC 模型: max diff < 1e-4 PASS;
+- 500 seeds 闭环(explore=False): kills 43.2% / lost 0% / 3.01 发每局 / 命中 99.9%, 与归档基线配对评测完全一致;
+- 逐 seed 匹配率: kill 100% / lost 100% / launches 100% — RLlib 加载路径无预处理/优化器/探索配置引入的隐性变化;
+- RLlib checkpoint 已存档: marl_runs/shoot_bc_gate_s42/checkpoints/best (供 P1/P2 直接续训)。
+
+下一步: P1 独立 critic warm-up(不向 BC encoder 回传梯度) → P2 fire-only PPO(冻结 encoder/heading/speed, entropy=0, 伤害增量+小击杀奖励, lr 1e-5-3e-5, clip 0.05, 每2-5轮快速回归)。
