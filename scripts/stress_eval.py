@@ -126,7 +126,8 @@ def in_win(dc, step):
 
 def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
                      inject_lo=0.10, inject_hi=0.35, max_steps=MAX_STEPS,
-                     task_cfg=None, inject_mode="frac", inject_offset=10):
+                     task_cfg=None, inject_mode="frac", inject_offset=10,
+                     fire_mode="policy"):
     cfg = {"difficulty_level": difficulty, "obs_include_closure": True}
     if task_cfg:
         cfg.update(task_cfg)
@@ -176,6 +177,9 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
         else:
             new_act = policy_action(model, obs_in, device)
         act = new_act.copy()
+        if fire_mode == "asap":
+            mask = env.task.get_action_mask(env, "p0")
+            act[3] = 1 if mask[FIRE_IDX] == 1.0 else 0
         perturbed = False
         if in_win(dist_cfg, step):
             typ = dist_cfg["type"]
@@ -426,6 +430,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
