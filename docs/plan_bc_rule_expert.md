@@ -382,3 +382,36 @@ loss = cross_entropy(masked_logits, expert_action)
 - RLlib checkpoint 已存档: marl_runs/shoot_bc_gate_s42/checkpoints/best (供 P1/P2 直接续训)。
 
 下一步: P1 独立 critic warm-up(不向 BC encoder 回传梯度) → P2 fire-only PPO(冻结 encoder/heading/speed, entropy=0, 伤害增量+小击杀奖励, lr 1e-5-3e-5, clip 0.05, 每2-5轮快速回归)。
+
+
+### P1: 独立 critic warm-up — PASS (2026-08-06)
+
+- 实现: ShootFireOnlyModel(冻结BC actor + 独立 critic encoder/value); actor 全部 requires_grad_(False) 且不在 critic optimizer 中;
+- rollout 混合场景: ID 65% / dist2_3k 20% / 其他OOD 15%, 400 局, 奖励=P2 阶段1(伤害+250/HP, kill+1000, bad-100, premium无加成, 发射成本0);
+- 停止条件 6 项全部通过:
+  1) val loss 平台(早停, 最优 9.53e3);
+  2) explained variance 0.736(稳定为正);
+  3) 价值排序 kill(85.3) > nokill(30.4);
+  4) actor state-dict sha256 完全一致;
+  5) 固定 obs 集 actor logits max diff = 0.00e+00;
+  6) 100 固定 seeds 逐动作序列 + 击杀/lost/发射数完全一致;
+- critic 存档: data/expert/shoot_critic_p1.pth (critic_encoder.* / critic_value.*, P2 直接加载)。
+
+### ASAP fire 对照组 (2026-08-06) — 全局上限参考
+
+heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
+
+| 场景 | BC 击杀 | ASAP 击杀 | ASAP 发射/局 | bad |
+| --- | --- | --- | --- | --- |
+| ID 500 seeds | 43.2% | **90.6%** | 3.89 | 0 |
+| dist2_3k | 6.7% | **74.0%** | 3.68 | 0 |
+| dist5_8k | 84% | **100%** | 4.00 | 0 |
+| bias90_120 | 38% | **100%** | 4.00 | 0 |
+| alt_diff300 | 35% | **76%** | 3.68 | 0 |
+| target_evasive | 33% | **84%** | 3.84 | 0 |
+| 其余 8 格 | 22-74% | **80-98%** | 3.76-3.98 | 0 |
+| 压力 L1-L4 | 30-38% | **81.7-85%** | 3.82-3.83 | 0 |
+
+- 全部场景 lost=0%、bad=0%、命中≈100%; ASAP 击杀率普遍比 BC 高 40-60pp;
+- 结论: fire 策略是全局瓶颈, PPO 目标=逼近 ASAP("合法即发"); ASAP 作为 P2 规则基线(上限参考);
+- P2 成功判据(与用户设定一致): dist2_3k 发射/局 2.07→3.5+, 达4发率 6.7%→上升, 击杀向 73-74% 靠近, 同时 ID/OOD/stress lost 保持 0, ID 击杀不显著低于 43.2%。
