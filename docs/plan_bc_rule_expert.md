@@ -280,3 +280,24 @@ loss = cross_entropy(masked_logits, expert_action)
 - BC 在大多数格击杀率不低于专家, 在 dist5_8k / alt_diff300 / target_evasive / 横向格更高;
 - dist2_3k 是最弱格(近距离开局留给转向-发射的窗口小), 但两者均未丢失目标;
 - 样本量 12 局/格, 击杀率波动约 ±15pp — 仅作分诊; 最弱格(dist2_3k/alt_diff300/target_evasive)后续用更多 seed 复核并作为 stress-DAgger 重点。
+
+
+### 场景矩阵扩展评测 (2026-08-06, 关键格100 seed / 其余50 seed, 与专家同seed配对)
+
+| 格子 | 专家 lost/kill/WEZ | BC lost/kill/WEZ |
+| --- | --- | --- |
+| id_bias30_60 | 0% / 26% / 100% | 0% / 36% / 100% |
+| bias0_30 | 0% / 22% / 100% | 0% / 26% / 100% |
+| bias60_90 | 0% / 34% / 100% | 0% / 38% / 100% |
+| bias90_120 | 0% / 26% / 100% | 0% / 38% / 100% |
+| dist2_3k | 0% / 1% / 100% | 0% / 4% / 100% |
+| dist5_8k | 0% / 58% / 100% | 0% / 84% / 100% |
+| alt_diff300 | 0% / 16% / 100% | 0% / 35% / 99% |
+| closure_neutral | 0% / 42% / 100% | 0% / 42% / 100% |
+| closure_separating | 0% / 56% / 100% | 0% / 74% / 100% |
+| target_evasive | 0% / 25% / 100% | 0% / 33% / 100% |
+| lateral_left/right/center | 0% / 24-28% / 100% | 0% / 38-42% / 100% |
+
+- 13/13 格 ok: 大样本下 BC lost 全为 0% (alt_diff300 有 1 局未达 WEZ 但未 lost), 无 OOD 退化;
+- BC 击杀率在大多数格 ≥ 专家, 显著更高: dist5_8k(84 vs 58)、alt_diff300(35 vs 16)、closure_separating(74 vs 56)、bias90_120(38 vs 26)、lateral_left(42 vs 28);
+- dist2_3k 确认属于交战窗口问题而非接近失败: WEZ 100% 但击杀仅 1-4%, 交由 fire 策略/PPO 分析, 不作为 recovery DAgger 目标。
