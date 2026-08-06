@@ -415,3 +415,22 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - 全部场景 lost=0%、bad=0%、命中≈100%; ASAP 击杀率普遍比 BC 高 40-60pp;
 - 结论: fire 策略是全局瓶颈, PPO 目标=逼近 ASAP("合法即发"); ASAP 作为 P2 规则基线(上限参考);
 - P2 成功判据(与用户设定一致): dist2_3k 发射/局 2.07→3.5+, 达4发率 6.7%→上升, 击杀向 73-74% 靠近, 同时 ID/OOD/stress lost 保持 0, ID 击杀不显著低于 43.2%。
+
+
+### P2A: fire-only ASAP 蒸馏 — PASS (2026-08-07)
+
+实现: 冻结 BC encoder/heading/speed/alt, 仅训练 fire head; 训练样本=冻结BC轨迹中的 allowed 窗口(target fire=1), 推理时 mask 强制 disallowed=0; lr 1e-2(经验依据: BC fire head 的 no-fire logit 约 -10, 正样本 CE 在 1e-4 下每 epoch 仅移动 ~0.1 logit; mask 保证推理正确, 蒸馏目标=翻转为"全发"=ASAP)。
+
+内置对比 (60 seeds, ID + dist2_3k):
+
+| 策略 | ID 击杀 | ID 窗口利用率 | dist2_3k 击杀 | dist2_3k 窗口利用率 | bad |
+| --- | --- | --- | --- | --- | --- |
+| 冻结 BC | 33.3% | 7% | 6.7% | 6% | 0 |
+| rule (ASAP) | 85.0% | 100% | 73.3% | 100% | 0 |
+| **distilled** | **85.0%** | **100%** | **73.3%** | **100%** | 0 |
+
+门禁全部通过: hdg/spd logits max diff=0.00e+00; 共享前缀动作序列一致; fire-agreement=True (窗口利用率 100%); lost=0; bad=0 → VERDICT PASS。
+
+- 蒸馏模型已精确复现 ASAP 规则(ID/dist2_3k 击杀与 rule 完全一致), 存档 data/expert/shoot_bc_asap_distilled.pth;
+- 完整回归(ID 500 / 13格 / L0-L4)进行中;
+- 若蒸馏通过完整回归, 即完成当前阶段主要目标, 无需 PPO (PPO 仅在未来出现发射成本/窗口取舍/轨迹改变需求时启用)。
