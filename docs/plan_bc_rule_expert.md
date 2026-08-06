@@ -434,3 +434,19 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - 蒸馏模型已精确复现 ASAP 规则(ID/dist2_3k 击杀与 rule 完全一致), 存档 data/expert/shoot_bc_asap_distilled.pth;
 - 完整回归(ID 500 / 13格 / L0-L4)进行中;
 - 若蒸馏通过完整回归, 即完成当前阶段主要目标, 无需 PPO (PPO 仅在未来出现发射成本/窗口取舍/轨迹改变需求时启用)。
+
+
+### P2A 蒸馏完整回归 (2026-08-07) — PASS
+
+蒸馏模型 data/expert/shoot_bc_asap_distilled.pth 全套件结果:
+
+| 套件 | lost | 击杀率 | 发射/局 | 备注 |
+| --- | --- | --- | --- | --- |
+| ID 500 seeds | 0% | **91.2%** | 3.90 | 命中 99.9%, bad=0, premium+good 100% (rule 90.6%, BC 43.2%) |
+| 13 格 OOD (key 100/other 50) | 0% | **77-100%** | 3.71-4.00 | dist2_3k 77%, bias90_120/dist5_8k/separating 100% |
+| 压力 L0-L4 | 0% | **81.7-91%** | — | L4 hdg_k20 危险 5% 全部自行恢复; BC 基线仅 30-38% |
+
+- 蒸馏模型在所有套件 lost=0%、bad=0%, 击杀率与 ASAP 规则基本一致(ID 91.2% vs 90.6%, dist2_3k 77% vs 74-77%), 全面显著高于冻结 BC;
+- **P2A 目标达成: 蒸馏模型稳定复现 ASAP 规则, 当前阶段无需 PPO**;
+- 归档双基线: BC + rule fire override (results/shoot_eval/asap_baseline.json) 与 BC + distilled ASAP head (data/expert/shoot_bc_asap_distilled.pth), 已做同 seed 对比;
+- P2B(PPO)仅在未来出现发射成本/弹药稀缺/窗口取舍/轨迹改变需求时启用, 届时从蒸馏权重初始化 + P1b critic 刷新。
