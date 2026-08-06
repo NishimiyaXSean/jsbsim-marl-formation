@@ -62,12 +62,19 @@ DISTURBANCES = {
     "target_turn45": {"type": "target_turn", "k": 25, "deg": 45.0},
     "combo_l3": {"type": "combo", "k": 3, "std": 0.040, "turn_deg": 40.0,
                  "turn_k": 20, "noise_k": 40},
+    "hdg_k10": {"type": "hdg", "k": 10},
+    "hdg_k20": {"type": "hdg", "k": 20},
+    "delay_k10": {"type": "delay", "k": 10},
+    "target_turn90": {"type": "target_turn", "k": 40, "deg": 45.0},
+    "combo_l4": {"type": "combo", "k": 10, "std": 0.050,
+                  "turn_deg": 45.0, "turn_k": 30, "noise_k": 50},
 }
 LEVELS = {
     "L0": ["none"],
     "L1": ["hdg_k1", "delay_k1", "noise_small", "spd_k1"],
     "L2": ["hdg_k3", "delay_k3", "noise_med", "target_turn30"],
     "L3": ["combo_l3", "delay_k6", "target_turn45"],  # holdout
+    "L4": ["hdg_k10", "hdg_k20", "delay_k10", "target_turn90", "combo_l4"],
 }
 
 
@@ -112,32 +119,34 @@ def expert_action(env, obs):
                     dtype=np.int64)
 
 
+def in_win(dc, step):
+    return dc is not None and dc.get("_t0") is not None \
+        and dc["_t0"] <= step < dc["_t1"]
+
+
 def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
-                     inject_lo=0.10, inject_hi=0.35, max_steps=MAX_STEPS):
-    env = BaseEnv(task=SingleCombatShootTask(
-        {"difficulty_level": difficulty, "obs_include_closure": True}))
+                     inject_lo=0.10, inject_hi=0.35, max_steps=MAX_STEPS,
+                     task_cfg=None, inject_mode="frac", inject_offset=10):
+    cfg = {"difficulty_level": difficulty, "obs_include_closure": True}
+    if task_cfg:
+        cfg.update(task_cfg)
+    env = BaseEnv(task=SingleCombatShootTask(cfg))
     obs, _ = env.reset(seed=seed)
     rng = np.random.default_rng(seed)
     base_hdg = float(env.task._target_base_hdg)
 
     dist_cfg = None
     if dist is not None:
-        t_inject = int(rng.integers(int(max_steps * inject_lo),
-                                    int(max_steps * inject_hi)))
         dist_cfg = dict(dist)
-        if dist["type"] in ("hdg", "spd", "delay"):
-            dist_cfg["_t0"] = t_inject
-            dist_cfg["_t1"] = t_inject + dist["k"]
-        elif dist["type"] == "obs_noise":
-            dist_cfg["_t0"] = t_inject
-            dist_cfg["_t1"] = t_inject + dist["k"]
-        elif dist["type"] == "target_turn":
-            dist_cfg["_t0"] = t_inject
-            dist_cfg["_t1"] = t_inject + dist["k"]
-        elif dist["type"] == "combo":
-            dist_cfg["_t0"] = t_inject
-            dist_cfg["_t1"] = t_inject + dist["k"]
         dist_cfg["_exec_hist"] = []
+        if inject_mode == "wez":
+            dist_cfg["_t0"] = None
+            dist_cfg["_t1"] = None
+        else:
+            t_inject = int(rng.integers(int(max_steps * inject_lo),
+                                        int(max_steps * inject_hi)))
+            dist_cfg["_t0"] = t_inject
+            dist_cfg["_t1"] = t_inject + dist["k"]
 
     reason = "timeout"
     wez_first = fire_first = None
@@ -158,7 +167,7 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
         raw_obs = obs["p0"]
         obs_in = raw_obs
         if dist_cfg is not None and dist_cfg["type"] in ("obs_noise", "combo") \
-                and dist_cfg["_t0"] <= step < dist_cfg["_t1"]:
+                and in_win(dist_cfg, step):
             obs_in = raw_obs.copy()
             obs_in[:30] += rng.normal(0.0, dist_cfg["std"], 30)
 
@@ -168,7 +177,7 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
             new_act = policy_action(model, obs_in, device)
         act = new_act.copy()
         perturbed = False
-        if dist_cfg is not None and dist_cfg["_t0"] <= step < dist_cfg["_t1"]:
+        if in_win(dist_cfg, step):
             typ = dist_cfg["type"]
             if typ in ("hdg", "combo"):
                 act[1] = 4 - act[1]
@@ -186,9 +195,10 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
         hdg_seq.append(int(act[1]))
 
         if dist_cfg is not None and dist_cfg["type"] == "target_turn" \
-                and dist_cfg["_t0"] <= step < dist_cfg["_t1"]:
+                and in_win(dist_cfg, step):
             env.task._target_base_hdg = (base_hdg + dist_cfg["deg"]) % 360.0
         elif dist_cfg is not None and dist_cfg["type"] == "combo" \
+                and dist_cfg["_t0"] is not None \
                 and dist_cfg["_t0"] <= step < dist_cfg["_t0"] + dist_cfg["turn_k"]:
             env.task._target_base_hdg = (base_hdg + dist_cfg["turn_deg"]) % 360.0
         else:
@@ -203,6 +213,10 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
         if wez_first is None and env.task._is_valid_launch_envelope(
                 env.pursuers[0], env.targets[0]):
             wez_first = step
+            if dist_cfg is not None and inject_mode == "wez" \
+                    and dist_cfg["_t0"] is None:
+                dist_cfg["_t0"] = step + inject_offset
+                dist_cfg["_t1"] = dist_cfg["_t0"] + dist["k"]
         if env.task._has_launched_this_step.get("p0", False):
             if fire_first is None:
                 fire_first = step
@@ -214,7 +228,8 @@ def run_one_stressed(policy, model, device, seed, dist, difficulty=0.0,
         # dist > 12km sustained 3 steps. Recovery = back below 10km for 10
         # consecutive steps. Normal approach/overshoot cycles stay well below
         # 12km, so an unstressed baseline has danger ~0.
-        post_inject = dist_cfg is None or step >= dist_cfg["_t0"]
+        post_inject = dist_cfg is None or (dist_cfg["_t0"] is not None
+                                           and step >= dist_cfg["_t0"])
         in_danger = post_inject and g["range_m"] > 12000.0
         danger_streak = danger_streak + 1 if in_danger else 0
         if danger_streak >= 3:
@@ -346,6 +361,12 @@ def main():
     parser.add_argument("--seeds", type=int, default=100)
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--difficulty", type=float, default=0.0)
+    parser.add_argument("--inject-mode", choices=["frac", "wez"], default="frac",
+                        help="frac: random step in [10-35%] of episode; "
+                             "wez: inject_offset steps after first WEZ entry")
+    parser.add_argument("--inject-offset", type=int, default=10)
+    parser.add_argument("--cell", default=None,
+                        help="scenario-matrix cell config to overlay (e.g. dist2_3k)")
     parser.add_argument("--weights", default="data/expert/shoot_bc_round1_baseline.pth")
     parser.add_argument("--out", default="results/shoot_eval/stress_l1.json")
     parser.add_argument("--device", default="auto")
@@ -361,6 +382,13 @@ def main():
     model.load_state_dict(ck["state_dict"])
     model.eval()
 
+    task_cfg = None
+    if args.cell:
+        from scripts.eval_scenario_matrix import CELLS
+        matches = [cfg for lbl, cfg in CELLS if lbl == args.cell]
+        assert matches, f"unknown cell {args.cell}"
+        task_cfg = matches[0]
+
     results = {}
     for name in names:
         dist = None if name == "none" else dict(DISTURBANCES[name])
@@ -368,10 +396,14 @@ def main():
             dist["name"] = name
         exp_recs, bc_recs = [], []
         for s in range(args.start_seed, args.start_seed + args.seeds):
-            exp_recs.append(run_one_stressed("expert", None, device, s, dist,
-                                             difficulty=args.difficulty))
-            bc_recs.append(run_one_stressed("bc", model, device, s, dist,
-                                            difficulty=args.difficulty))
+            exp_recs.append(run_one_stressed(
+                "expert", None, device, s, dist, difficulty=args.difficulty,
+                task_cfg=task_cfg, inject_mode=args.inject_mode,
+                inject_offset=args.inject_offset))
+            bc_recs.append(run_one_stressed(
+                "bc", model, device, s, dist, difficulty=args.difficulty,
+                task_cfg=task_cfg, inject_mode=args.inject_mode,
+                inject_offset=args.inject_offset))
         exp_a = aggregate(exp_recs)
         bc_a = aggregate(bc_recs)
         results[name] = {
