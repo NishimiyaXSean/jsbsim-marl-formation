@@ -102,7 +102,9 @@ def run_episode(model, device, seed, scene_cfg):
         obs, rews, terms, truncs, info = env.step({"p0": act})
         if env.task._has_launched_this_step.get("p0", False):
             launches.append(step)
-            last_fire = step
+            # mask cooldown uses env._step_counter (post-increment of the
+            # launch step), so mirror that exactly
+            last_fire = env._step_counter
         if env.task._hit_this_step.get("p0", 0) > 0:
             hits.append(step)
             hit_steps.append(step)
@@ -190,7 +192,8 @@ def summarize(records):
     nk = len(nonkill)
     hits_hist = {h: sum(1 for r in nonkill if r["hits"] == h) for h in range(4)}
     attrs = [attribute_missing_window(r) for r in nonkill]
-    attr_hist = {k: attrs.count(k) for k in sorted(set(attrs))}
+    attr_hist = {k: attrs.count(k)
+                 for k in sorted({a for a in attrs if a is not None})}
     gaps = [r["gap_last_hit"] for r in nonkill if r["gap_last_hit"] is not None]
     nw = [r["n_windows"] for r in nonkill]
     four = sum(1 for r in nonkill if r["n_windows"] >= 4)
@@ -280,6 +283,9 @@ def main():
     with open(os.path.join(args.outdir, "fail_attribution.json"), "w",
               encoding="utf-8") as f:
         json.dump(out, f, indent=2)
+    with open(os.path.join(args.outdir, "fail_attribution_records.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"id": id_recs, "dist2_3k": d2_recs}, f, indent=1)
     plot(agg_id, agg_d2, args.vizdir)
 
     for name, agg in (("ID", agg_id), ("dist2_3k", agg_d2)):
@@ -297,6 +303,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

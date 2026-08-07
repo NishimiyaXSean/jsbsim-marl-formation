@@ -450,3 +450,27 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - **P2A 目标达成: 蒸馏模型稳定复现 ASAP 规则, 当前阶段无需 PPO**;
 - 归档双基线: BC + rule fire override (results/shoot_eval/asap_baseline.json) 与 BC + distilled ASAP head (data/expert/shoot_bc_asap_distilled.pth), 已做同 seed 对比;
 - P2B(PPO)仅在未来出现发射成本/弹药稀缺/窗口取舍/轨迹改变需求时启用, 届时从蒸馏权重初始化 + P1b critic 刷新。
+
+
+### 失败局归因 (2026-08-07) — 假设确认: 3-hit timeout + 缺第四窗口
+
+方法: 蒸馏模型 ID 500 seeds + dist2_3k 200 seeds, 逐局记录命中数/窗口/阻断条件; 修复冷却 off-by-one(发射步计数为 env._step_counter 自增后值)后归因完全一致。
+
+| 指标 | ID (500) | dist2_3k (200) |
+| --- | --- | --- |
+| 击杀率 | 90.6% | 79.0% |
+| 非击杀局 | 47 (9.4%) | 42 (21%) |
+| 非击杀命中分布 | 3hit=40(85%), 2hit=6, 1hit=1 | 3hit=33(79%), 2hit=7, 1hit=2 |
+| 末次命中→结束间隔 | 中位 672 步 (134s) | 中位 678 步 (136s) |
+| 第四合法窗口出现率 | 4.3% (2/47) | 0% (0/42) |
+| 窗口数分布 | 3窗=38, 2窗=6, 1窗=1 | 3窗=34, 2窗=7, 1窗=1 |
+| 缺窗口阻断 | cooldown_timing 45/47 (96%) | cooldown_timing 42/42 (100%) |
+
+冷却结束(≥30步)后的主导几何阻断(逐步计数):
+- ID: ATA 17,708 / range_far 17,406 / closure 17,031 / range_close 8,455 — 主导 ATA, 但三者常同时失效; static_ok 后冷却 = 0
+- dist2_3k: range_far 16,539 / ATA 16,158 / closure 15,754 — 主导 range_far; static_ok 后冷却 = 0
+
+结论:
+- 假设成立: 失败局几乎全部是 3-hit timeout, 第四合法窗口从未出现(或仅在冷却内短暂满足后消失);
+- 根因不是 fire(ASAP 已 100% 利用窗口), 而是第三发之后追击机无法重新建立"ATA<15 & closure<0 & DLZ内"的交战几何 — 航向/速度/接近保持问题, 目标在交战后脱离交战几何且不再回到可发状态;
+- **下一步: 不优化 fire; 针对 3-hit 失败局研究 range/ATA 保持策略, 更快产生第四窗口** — 这决定是否值得解冻 speed/heading(P2B 路线)。产物: results/shoot_eval/fail_attribution.json(+records), results/ctrl_viz/fail_attribution_*.png。
