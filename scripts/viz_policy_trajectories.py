@@ -1,4 +1,4 @@
-"""Render trained-policy episodes as 3D trajectories with launch/hit/WEZ markers.
+﻿"""Render trained-policy episodes as 3D trajectories with launch/hit/WEZ markers.
 
 Usage:
   python scripts/viz_policy_trajectories.py \
@@ -66,11 +66,13 @@ def run_episode(env, policy, include_closure):
         act = decode(policy.compute_single_action(obs['p0'], explore=False)[0])
         obs, rews, terms, truncs, info = env.step({'p0': act})
         if env.task._has_launched_this_step.get('p0', False):
-            p_pos = p0.aircraft.position_ned.copy()
+            # pin to the step-start trajectory sample so the marker sits ON
+            # the drawn line (launch is executed during this env.step)
+            p_pos = p_traj[-1]
             launches.append((step, p_pos[0], p_pos[1], p_pos[2]))
         if env.task._hit_this_step.get('p0', 0) > 0:
-            hits.append((step, p0.aircraft.position_ned[0], p0.aircraft.position_ned[1],
-                         p0.aircraft.position_ned[2]))
+            p_pos = p_traj[-1]
+            hits.append((step, p_pos[0], p_pos[1], p_pos[2]))
         if terms.get('__all__') or truncs.get('__all__'):
             reason = info.get('p0', {}).get('termination_reason', 'unknown')
             break
@@ -107,10 +109,14 @@ def plot_episode(ep, r, outdir):
         if len(m):
             ax.scatter([m[0, 1]], [m[0, 0]], [m[0, 2]], color='#ff7f0e', marker='D', s=50)
             ax.scatter([m[-1, 1]], [m[-1, 0]], [m[-1, 2]], color='#ff7f0e', marker='X', s=60)
-    for (st, n, e, z) in r['launches']:
-        ax.scatter([e], [n], [z], color='black', marker='^', s=90, zorder=6)
-    for (st, n, e, z) in r['hits']:
-        ax.scatter([e], [n], [z], color='gold', marker='*', s=180, edgecolors='black', zorder=7)
+    if r['launches']:
+        ln = np.array([[e, n, z] for (_st, n, e, z) in r['launches']])
+        ax.scatter(ln[:, 0], ln[:, 1], ln[:, 2], color='black', marker='^',
+                   s=90, zorder=6, label='missile launch')
+    if r['hits']:
+        ht = np.array([[e, n, z] for (_st, n, e, z) in r['hits']])
+        ax.scatter(ht[:, 0], ht[:, 1], ht[:, 2], color='gold', marker='*',
+                   s=180, edgecolors='black', zorder=7, label='missile hit')
     if r['wez_first'] is not None:
         wf = min(r['wez_first'], len(p) - 1)
         ax.scatter([p[wf, 1]], [p[wf, 0]], [p[wf, 2]], color='green', marker='o', s=120,
