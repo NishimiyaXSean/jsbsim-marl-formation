@@ -110,11 +110,14 @@ def plot_episode(ep, r, outdir):
             ax.scatter([m[0, 1]], [m[0, 0]], [m[0, 2]], color='#ff7f0e', marker='D', s=50)
             ax.scatter([m[-1, 1]], [m[-1, 0]], [m[-1, 2]], color='#ff7f0e', marker='X', s=60)
     if r['launches']:
-        ln = np.array([[e, n, z] for (_st, n, e, z) in r['launches']])
+        # trajectory lines are drawn RELATIVE to origin; markers must be too
+        ln = np.array([[e - origin[1], n - origin[0], z - origin[2]]
+                       for (_st, n, e, z) in r['launches']])
         ax.scatter(ln[:, 0], ln[:, 1], ln[:, 2], color='black', marker='^',
                    s=90, zorder=6, label='missile launch')
     if r['hits']:
-        ht = np.array([[e, n, z] for (_st, n, e, z) in r['hits']])
+        ht = np.array([[e - origin[1], n - origin[0], z - origin[2]]
+                       for (_st, n, e, z) in r['hits']])
         ax.scatter(ht[:, 0], ht[:, 1], ht[:, 2], color='gold', marker='*',
                    s=180, edgecolors='black', zorder=7, label='missile hit')
     if r['wez_first'] is not None:
@@ -177,3 +180,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
