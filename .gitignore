@@ -44,4 +44,6 @@ results/shoot_eval/*.json
 data/expert/shoot_rule_expert*.npz
 # Generated audit / training logs
 logs/
+# Regenerable speed-teacher dataset (S3)
+data/expert/speed_teacher_data*.npz
 
