@@ -122,6 +122,14 @@ def run_episode(model, device, seed, cell_cfg, rule, variant="latch"):
             elif wide:
                 mode_steps += 1
                 act[0] = 1
+        elif variant == "memoryless_decel":
+            # stateless approx of the latch: keep decelerating in the wide
+            # zone while the pursuer is still fast (speed > 245)
+            wide = (f["range"] < 1.2 * R and f["delta_speed"] > 0.7 * DV
+                    and f["closure"] < -0.7 * C and f["ata"] < 1.5 * A)
+            if strict or (wide and f["p_spd"] > 245.0):
+                mode_steps += 1
+                act[0] = 0 if f["p_spd"] > 240.0 else 1
         act[3] = 1 if mask[10] == 1.0 else 0
         if fire3_t is not None and step >= fire3_t:
             fire3_win_steps += 1
@@ -186,7 +194,8 @@ def main():
     parser.add_argument("--rule", type=str, required=True,
                         help='comma "R,DV,C,A"')
     parser.add_argument("--variant", choices=["latch", "trigger_only",
-                                              "memoryless"], default="latch")
+                                              "memoryless",
+                                              "memoryless_decel"], default="latch")
     parser.add_argument("--fail-seeds", default="",
                         help="comma list of 3-hit timeout seeds")
     parser.add_argument("--success-seeds", default="",
@@ -239,5 +248,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

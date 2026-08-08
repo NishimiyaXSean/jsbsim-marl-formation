@@ -551,3 +551,20 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - duty 12-18%为中等触发率(不是重写策略); r1更局部(4%)但救回仅75%;
 - **决策: 停止规则搜索, 进入 speed-head 蒸馏**(监督目标=r2式减速; 冻结encoder/heading/fire, 仅speed head, 10-20% anti-overshoot样本, lr 1e-4-5e-4);
 - 不需要heading解冻, 不需要PPO。
+
+
+### Gate S0: 迟滞必要性对照 (2026-08-08) — latch 是必要的, 无状态变体失效
+
+盲 ID 500 + dist2_3k 200, r2 规则三变体:
+
+| 变体 | 盲ID击杀 | 盲d2击杀 | 3-hit(ID/d2) | lost/bad | duty |
+| --- | --- | --- | --- | --- | --- |
+| A latch(迟滞) | **97.0%** | **91.0%** | 9/8 | 0/0 | 16.1%/12.0% |
+| B memoryless(宽区保持) | 91.0% | 77.5% | 31/35 | 0/0 | 39.7%/21.0% |
+| C trigger_only | 90.2% | 75.0% | 38/40 | 0/0 | 10.5%/6.5% |
+
+结论:
+- 无记忆变体完全丢失 r2 改善(ID 回到基线91%, d2 75-78%), 且 B 的 duty 高达 40% 却无收益 — 同一当前几何在 mode 内/外需要不同动作(刚进入->-20, 已减到位->0, 越过触发仍应减速);
+- **41 维 obs 不含 mode → 无状态 speed head 从 latch teacher 蒸馏有表达能力风险**;
+- 附加变体 memoryless_decel(宽区+速度>245 时继续减速)运行中, 验证"减速直到<=245"能否用纯当前状态近似;
+- 若 memoryless_decel 也失效 → 按优先级: ① 直接训练看连续几何能否隐式区分(闭环为准) ② 加最小 mode/phase 观测 ③ recurrent policy; 不先用 PPO。
