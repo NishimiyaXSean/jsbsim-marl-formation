@@ -74,7 +74,7 @@ def state_features(env):
             "closure": closure, "p_spd": p_spd}
 
 
-def run_episode(model, device, seed, cell_cfg, rule):
+def run_episode(model, device, seed, cell_cfg, rule, variant="latch"):
     cfg = {"difficulty_level": 0.0, "obs_include_closure": True}
     cfg.update(cell_cfg)
     env = BaseEnv(task=SingleCombatShootTask(cfg))
@@ -98,15 +98,30 @@ def run_episode(model, device, seed, cell_cfg, rule):
         act = base.copy()
         strict = (f["range"] < R and f["delta_speed"] > DV
                   and f["closure"] < -C and f["ata"] < A)
-        if not in_mode and strict:
-            in_mode = True
-        if in_mode:
-            mode_steps += 1
-            if (f["p_spd"] <= 245.0 or f["range"] >= 1.5 * R
-                    or f["closure"] >= -max(10.0, 0.5 * C)):
-                in_mode = False
-            else:
+        if variant == "latch":
+            if not in_mode and strict:
+                in_mode = True
+            if in_mode:
+                mode_steps += 1
+                if (f["p_spd"] <= 245.0 or f["range"] >= 1.5 * R
+                        or f["closure"] >= -max(10.0, 0.5 * C)):
+                    in_mode = False
+                else:
+                    act[0] = 0 if f["p_spd"] > 240.0 else 1
+        elif variant == "trigger_only":
+            if strict:
+                mode_steps += 1
                 act[0] = 0 if f["p_spd"] > 240.0 else 1
+        elif variant == "memoryless":
+            # stateless wide-zone: strict -> decel; near-zone -> hold
+            wide = (f["range"] < 1.2 * R and f["delta_speed"] > 0.7 * DV
+                    and f["closure"] < -0.7 * C and f["ata"] < 1.5 * A)
+            if strict:
+                mode_steps += 1
+                act[0] = 0 if f["p_spd"] > 240.0 else 1
+            elif wide:
+                mode_steps += 1
+                act[0] = 1
         act[3] = 1 if mask[10] == 1.0 else 0
         if fire3_t is not None and step >= fire3_t:
             fire3_win_steps += 1
@@ -170,6 +185,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rule", type=str, required=True,
                         help='comma "R,DV,C,A"')
+    parser.add_argument("--variant", choices=["latch", "trigger_only",
+                                              "memoryless"], default="latch")
     parser.add_argument("--fail-seeds", default="",
                         help="comma list of 3-hit timeout seeds")
     parser.add_argument("--success-seeds", default="",
@@ -201,11 +218,12 @@ def main():
                                      args.base_seed + 1000 + args.blind_d2_seeds)),
                           {"chase_dist_min": 2000.0, "chase_dist_max": 3000.0})
 
-    out = {"rule": rule}
-    print(f"[rule-override] rule R={rule[0]:.0f} DV={rule[1]:.0f} "
-          f"C={rule[2]:.0f} A={rule[3]:.0f}")
+    out = {"rule": rule, "variant": args.variant}
+    print(f"[rule-override] variant={args.variant} rule R={rule[0]:.0f} "
+          f"DV={rule[1]:.0f} C={rule[2]:.0f} A={rule[3]:.0f}")
     for name, (seeds, cfg) in groups.items():
-        recs = [run_episode(model, device, s, cfg, rule) for s in seeds]
+        recs = [run_episode(model, device, s, cfg, rule, args.variant)
+                for s in seeds]
         agg = aggregate(recs)
         out[name] = agg
         print(f"  [{name:<16s}] n={agg['n']:3d} kill={agg['kill_rate']*100:5.1f}% "
@@ -221,4 +239,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
