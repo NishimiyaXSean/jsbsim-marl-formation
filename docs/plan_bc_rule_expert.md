@@ -595,3 +595,19 @@ v1: 65%replay(未滤B2区) + 25%teacher + 10%hard, 训练仅speed head(lr 1e-4, 
 - 根因: replay 样本落在 B2 区仍带"原速度不减"标签, 与 teacher 减速标签冲突 → student 学成约50%中间行为。
 
 v2 修正 (运行中): S3 replay 池只保留非B2区状态(B2区标签完全由teacher决定), S4 KL=0.1、-20权重1.2; 目标 agreement B2>95%/非B2>98%, 再重新验收。
+
+
+### S4 v2 验收 (2026-08-09) — student 闭环等于 teacher, 接受为当前最优
+
+新 seeds (ID 400 / d2 200 / 13格×15):
+
+| 组 | student | teacher | 说明 |
+| --- | --- | --- | --- |
+| ID 400 | 99.2% | 99.2% | lost/bad 0, 3hit 1, 4th 99%, min_range3 1643m, ttk_p50 50.6s |
+| d2 200 | 98.0% | 97.5% | lost/bad 0, 3hit 0, min_range3 1777m |
+| 13格新seed | 11/13=100% (lateral 93%) | — | |
+
+- student 闭环击杀与 teacher 完全一致(ID 相等, d2 略优), 全安全指标 0, 过冲消除(min range 1.6-1.8km, 原7-36m);
+- runtime speed agreement: B2区 67-72% / 非B2区 80-84% — 单线性head在冻结特征上的表达折中, 但闭环outcome等价, 按闭环接受; 若后续要收紧, 可解冻encoder最后一层(lr 3e-6-1e-5, P3式);
+- **决策: 接受 shoot_bc_speed_distilled_v2.pth 为当前最优统一神经策略**(rule-free接口, 内含anti-overshoot);
+- 待办: 最终全量holdout(新ID 1000 / d2 300-500 / 13格 / L0-L4全新seeds) + 与rule override同seed逐局对比报告。
