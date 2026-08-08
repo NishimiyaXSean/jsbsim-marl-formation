@@ -584,3 +584,14 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - **无状态 speed head 蒸馏可行, 不需要 mode/phase 观测, 不需要 recurrent**;
 - 冻结 teacher = memoryless_decel 规则(41维 obs 全部可观测: range/delta_speed/closure/ATA/p_spd);
 - 下一步 S2-S10: 生成 teacher rollout(60-70%原replay + 20-30% teacher + hard negatives) → 仅训练 speed head(lr 1e-4, 冻结其余) → 闭环选 checkpoint → 全回归 → 与 rule override 同seed对比。
+
+
+### S3/S4 蒸馏与验收 v1 (2026-08-09)
+
+v1: 65%replay(未滤B2区) + 25%teacher + 10%hard, 训练仅speed head(lr 1e-4, KL 0.05)。
+- 开发闭环 best epoch 4: lost/bad 0, ID 100%, d2 100%, 3hit 0;
+- 新 seed 验收 (ID 400 / d2 200): student 99.5%/99.5% vs teacher 100%/100%, lost/bad/3hit 全 0, 第四窗口 100%, min_range3 ~1464m(过冲消除), 13格新seed 12/13=100%;
+- **但 teacher/student speed agreement 未达标**: B2区 47-54%(目标>95%), 非B2区 76-80%(目标>98-99%);
+- 根因: replay 样本落在 B2 区仍带"原速度不减"标签, 与 teacher 减速标签冲突 → student 学成约50%中间行为。
+
+v2 修正 (运行中): S3 replay 池只保留非B2区状态(B2区标签完全由teacher决定), S4 KL=0.1、-20权重1.2; 目标 agreement B2>95%/非B2>98%, 再重新验收。

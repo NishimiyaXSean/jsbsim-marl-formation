@@ -1,4 +1,4 @@
-"""S4: train ONLY the speed head on the B2 teacher dataset.
+﻿"""S4: train ONLY the speed head on the B2 teacher dataset.
 
 Initialized from the ASAP-distilled checkpoint. encoder / heading / fire /
 alt heads frozen; only action_heads[0] (speed [-20,0,+20]) is trainable.
@@ -114,7 +114,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--kl-lambda", type=float, default=0.05)
+    parser.add_argument("--kl-lambda", type=float, default=0.1)
     parser.add_argument("--dev-id", type=int, default=40)
     parser.add_argument("--dev-d2", type=int, default=40)
     parser.add_argument("--dev-ood", type=int, default=20)
@@ -151,7 +151,7 @@ def main():
     ys = torch.tensor(speed, device=device)
     br = torch.tensor(b2_reg, device=device, dtype=torch.float32)
     # mild weight on the -20 class (local behavior, keep natural distribution)
-    cls_w = torch.tensor([1.5, 1.0, 1.0], device=device)
+    cls_w = torch.tensor([1.2, 1.0, 1.0], device=device)
 
     best = {"score": None, "state": None, "epoch": 0, "dev": None}
     rng = np.random.default_rng(0)
@@ -224,3 +224,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

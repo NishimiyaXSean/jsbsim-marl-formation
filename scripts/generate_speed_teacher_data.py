@@ -178,7 +178,10 @@ def main():
     print(f"[s3] teacher episodes={len(teacher)}")
 
     # assemble: replay 65%, teacher-mode 25%, hard-neg 10%
-    all_replay = [x for ep in replay for x in ep]
+    # keep ONLY non-B2-region replay states: B2-region labels must come from
+    # the teacher alone, otherwise the student gets conflicting labels
+    # ("orig no-decel" vs "teacher decel") in the same region.
+    all_replay = [x for ep in replay for x in ep if x["b2_region"] == 0]
     teacher_mode = [x for ep in teacher for x in ep if x["b2_region"] == 1]
     hard = [x for ep in teacher for x in ep
             if x["hard_neg"] == 1 and x["b2_region"] == 0]
@@ -224,4 +227,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
