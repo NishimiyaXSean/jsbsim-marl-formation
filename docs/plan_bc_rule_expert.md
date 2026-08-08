@@ -498,3 +498,14 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - speed 单独恢复 60%, 剩余 40% 即使 200 m/s 仍失败 — 需进一步试更早干预(第二发后)或更慢(180)或过冲后恢复航向;
 - 按决策门禁: 以 speed-first 为下一步主线 — 优先解冻/重训 speed head(或先做"第三发后减速"规则蒸馏), heading 保持冻结; 若 40% 顽固失败在后续暴露 heading 需求再单独处理。
 - 对齐面板: results/ctrl_viz/hit3_collapse/hit3_seed*.png; 数据: results/shoot_eval/hit3_collapse.json / hit3_counterfactual*.json。
+
+
+### anti-overshoot 规则门禁与 sweep (2026-08-08)
+
+可观测性审计 (41 维 obs):
+- obs = 14 self + 10 target(含 closure/los_rate) + 6 missile-threat(本场景恒0) + 11 mask;
+- **无命中次数/目标HP/剩余弹药/已发射数** → "第三发后"不可作为无状态规则条件(会产生冲突监督);
+- 但过冲 precursor 完全可观测: distance, delta_speed(追击机-目标), ATA, closure, LOS rate → 几何触发规则可行;
+- 结论: 规则用"近距 + 速度明显高于目标 + 强烈接近 + ATA仍小"触发减速, 不用 hit_count。
+
+扩展反事实 sweep (运行中): 20 失败(3-hit timeout) + 12 成功(4-hit kill, control), 干预起点 {fire2, hit2, fire3, hit3, fire3-20/40/80} × 目标速度 {260,240,220,200,180}; 指标 P(kill|start,speed)、第四窗口恢复时间、新 lost、episode 长度; 成功组看退化(kill 保持率、time_to_kill p50/p90)。
