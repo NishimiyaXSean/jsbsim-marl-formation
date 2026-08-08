@@ -568,3 +568,19 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - **41 维 obs 不含 mode → 无状态 speed head 从 latch teacher 蒸馏有表达能力风险**;
 - 附加变体 memoryless_decel(宽区+速度>245 时继续减速)运行中, 验证"减速直到<=245"能否用纯当前状态近似;
 - 若 memoryless_decel 也失效 → 按优先级: ① 直接训练看连续几何能否隐式区分(闭环为准) ② 加最小 mode/phase 观测 ③ recurrent policy; 不先用 PPO。
+
+
+### Gate S0 补充: memoryless_decel 纯无状态规则优于 latch (2026-08-08)
+
+变体 memoryless_decel(无记忆): 减速当 (严格区: R<4000 & DV>90 & closure<-100 & ATA<10) 或 (宽区: R<4800 & DV>63 & closure<-70 & ATA<15 且 p_spd>245); 否则 BC speed。
+
+| 变体 | 盲ID500击杀 | 盲d2 200击杀 | 3-hit(ID/d2) | lost/bad | duty | ttk_p50(ID) |
+| --- | --- | --- | --- | --- | --- | --- |
+| A latch | 97.0% | 91.0% | 9/8 | 0/0 | 16.1% | 172.8s |
+| **memoryless_decel** | **98.0%** | **94.5%** | **4/3** | **0/0** | 25.9%/15.6% | **94.7s** |
+
+结论:
+- 纯当前状态规则即可捕获 latch 核心行为("宽区内仍快->继续减速"), 且优于 latch(击杀更高、3-hit更少、ID击杀更快);
+- **无状态 speed head 蒸馏可行, 不需要 mode/phase 观测, 不需要 recurrent**;
+- 冻结 teacher = memoryless_decel 规则(41维 obs 全部可观测: range/delta_speed/closure/ATA/p_spd);
+- 下一步 S2-S10: 生成 teacher rollout(60-70%原replay + 20-30% teacher + hard negatives) → 仅训练 speed head(lr 1e-4, 冻结其余) → 闭环选 checkpoint → 全回归 → 与 rule override 同seed对比。
