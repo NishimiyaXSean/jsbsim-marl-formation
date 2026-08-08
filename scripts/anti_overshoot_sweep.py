@@ -1,4 +1,4 @@
-"""Anti-overshoot counterfactual sweep (failure + matched-success control).
+﻿"""Anti-overshoot counterfactual sweep (failure + matched-success control).
 
 For each seed, replay the ORIGINAL distilled actions up to an intervention
 step, then override the SPEED toward a target (heading stays distilled, fire
@@ -135,6 +135,8 @@ def main():
     parser.add_argument("--success-seeds", type=int, default=12,
                         help="number of 4-hit kill success seeds (control)")
     parser.add_argument("--weights", default="data/expert/shoot_bc_asap_distilled.pth")
+    parser.add_argument("--starts", default=None,
+                        help="comma-separated subset of starts (default all)")
     parser.add_argument("--out", default="results/shoot_eval/anti_overshoot_sweep.json")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
@@ -161,14 +163,16 @@ def main():
     print(f"[sweep] fail_seeds={len(fail_seeds)} success_seeds={len(succ_seeds)} "
           f"(scanned {seed})")
 
-    out = {"starts": STARTS, "speeds": SPEEDS, "fail": {}, "success": {}}
+    starts = STARTS if args.starts is None else args.starts.split(",")
+    out = {"starts": starts, "speeds": SPEEDS, "fail": {}, "success": {}}
     for grp, recs in (("fail", fail_seeds), ("success", succ_seeds)):
         for r in recs:
             s = r["seed"]
             out[grp][s] = {"original": {"reason": None, "steps": r["steps"]},
                            "variants": {}}
-            for start in STARTS:
-                if start not in r["events"]:
+            for start in starts:
+                base = start.split("-")[0] if "-" in start else start
+                if base not in r["events"]:
                     continue
                 for spd in SPEEDS:
                     v = run_variant(model, device, s, r["acts"], r["events"],
@@ -184,3 +188,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
