@@ -474,3 +474,27 @@ heading/speed = 冻结 BC, fire = 环境 mask 合法即发:
 - 假设成立: 失败局几乎全部是 3-hit timeout, 第四合法窗口从未出现(或仅在冷却内短暂满足后消失);
 - 根因不是 fire(ASAP 已 100% 利用窗口), 而是第三发之后追击机无法重新建立"ATA<15 & closure<0 & DLZ内"的交战几何 — 航向/速度/接近保持问题, 目标在交战后脱离交战几何且不再回到可发状态;
 - **下一步: 不优化 fire; 针对 3-hit 失败局研究 range/ATA 保持策略, 更快产生第四窗口** — 这决定是否值得解冻 speed/heading(P2B 路线)。产物: results/shoot_eval/fail_attribution.json(+records), results/ctrl_viz/fail_attribution_*.png。
+
+
+### hit3 几何崩溃点分析 (2026-08-08) — 100% 近距过冲, speed-first
+
+方法: 收集 20 个 3-hit timeout 失败局, 对齐第三发命中时刻 t_hit3, 找 ATA/closure/range 首个持续失效顺序; 并从 t_hit3 / t_fire3(第三发发射) 做 heading/speed 反事实 oracle。
+
+分型 (20/20 局):
+- **T1_near_pass_overshoot 100%** (T2/T3/T4 = 0);
+- 第一因时序: range 条件在 t_hit3+1 步失效(近距最小 7-36m, 追击机直接穿过目标) → ATA >90° 于 +35~44 步 → closure 于 +38~44 步恶化; 与"速度过高→近距过冲→掉头重来"完全吻合。
+
+反事实 oracle (10 个 T1 seed, 从 t_fire3 干预):
+| 干预 | 恢复第四窗口并击杀 |
+| --- | --- |
+| 原策略 | 0/10 |
+| speed 降为 240/220/200 (任选) | **6/10** (seed 6,23,26,30,82,103; 其中 103 仅需 240) |
+| heading 死区减半 (tight) | 0/10 |
+| tight + speed 220/200 | 与 speed 单独相同, 无额外增益 |
+| speed_hold / 240 | 部分, 但 200 是主要恢复档 |
+
+结论与决策:
+- 失败机制 = 第三发后高速近距过冲(100% 分型 + range 先失效); 修复方向 = **speed head(降低交战末段速度)**, heading 单独无效;
+- speed 单独恢复 60%, 剩余 40% 即使 200 m/s 仍失败 — 需进一步试更早干预(第二发后)或更慢(180)或过冲后恢复航向;
+- 按决策门禁: 以 speed-first 为下一步主线 — 优先解冻/重训 speed head(或先做"第三发后减速"规则蒸馏), heading 保持冻结; 若 40% 顽固失败在后续暴露 heading 需求再单独处理。
+- 对齐面板: results/ctrl_viz/hit3_collapse/hit3_seed*.png; 数据: results/shoot_eval/hit3_collapse.json / hit3_counterfactual*.json。
