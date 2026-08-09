@@ -611,3 +611,26 @@ v2 修正 (运行中): S3 replay 池只保留非B2区状态(B2区标签完全由
 - runtime speed agreement: B2区 67-72% / 非B2区 80-84% — 单线性head在冻结特征上的表达折中, 但闭环outcome等价, 按闭环接受; 若后续要收紧, 可解冻encoder最后一层(lr 3e-6-1e-5, P3式);
 - **决策: 接受 shoot_bc_speed_distilled_v2.pth 为当前最优统一神经策略**(rule-free接口, 内含anti-overshoot);
 - 待办: 最终全量holdout(新ID 1000 / d2 300-500 / 13格 / L0-L4全新seeds) + 与rule override同seed逐局对比报告。
+
+
+### 最终封版 holdout (2026-08-09) — 实质门禁全过, 预注册T1门禁FAIL(诚实判定)
+
+冻结: student a9417686 / commit fb1ac46 / B2规则(4000,90,100,10) / 评测脚本 final_holdout.py。规模: ID 1000, d2 400, 13格(关键100/其余50), L0-L4每扰动100, student vs teacher同seed配对, 全新seed(40000+)。
+
+结果:
+| 门禁 | 结果 |
+| --- | --- |
+| lost=0 (ID上界0.3%) | PASS |
+| bad=0 | PASS |
+| stress无lost | PASS |
+| ID kill 99.9% (teacher 99.8%) | PASS (>=98%) |
+| d2 kill 98.0% (teacher 98.5%) | PASS (>=96%, 不劣2pp) |
+| paired差 kill +0.1/-0.5pp, 3hit ID0/d2 2, 4th窗口97-100% | PASS |
+| **T1 (fire3后minR<1500m <=1%)** | **FAIL (~30%, teacher同等)** |
+
+补充探针(全新seeds, hit3后窗口, 对齐原始失效定义): ID 13.3% / d2 20% 的局仍有 <100m 近距穿越(min 7m/5m), 中位 minR 1.64/1.73km。
+
+诚实结论:
+- 过冲从"100%的3-hit失败局"降至"13-20%存在但几乎无后果"(3-hit~0, 击杀98-100%, lost 0) — 后果被消除, 但近距穿越本身未被完全根除;
+- 按预注册纪律: **不从该holdout调参**; 整体判定=未完全通过(实质性能达到, T1门禁未过);
+- 若要根除残留过冲: 属新开发周期(更早/更强减速规则, 或P3解冻encoder末层), 须在**第二套全新holdout**上验证; 在此之前 v2 仍是当前最优(98-99.9% kill / 0 lost)。
