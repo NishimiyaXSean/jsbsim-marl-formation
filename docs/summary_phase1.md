@@ -1,6 +1,6 @@
-# 阶段总结：规则专家 → BC → ASAP 蒸馏（1v1 制导空战）
+﻿# Phase 1 总结：1v1 导弹制导空战（规则专家 → BC → ASAP → anti-overshoot v2）
 
-> 分支: `feature/refactor-task-based` · 更新: 2026-08-07
+> 分支: `feature/refactor-task-based` · 更新: 2026-08-19 · 状态: 已封版 (v2)
 
 ## 1. 路线回顾
 
@@ -15,6 +15,9 @@
   → fire oracle 诊断(dist2_3k瓶颈=fire过保守, 非不可达)
   → ASAP规则对照组(全场景全局上限)
   → P0加载门禁 / P1独立critic warm-up / P2A fire-only ASAP蒸馏
+  → 失败归因(3-hit timeout缺第4窗口) / hit3分型(100%高速近距过冲)
+  → anti-overshoot: 无状态几何减速规则(B2) + speed head蒸馏(v2)
+  → 最终封版holdout(预注册): 工程PASS / T1门禁FAIL(已知限制)
 ```
 
 ## 2. 版本与关键指标对比
@@ -27,7 +30,8 @@ ID 分布 = 尾追 2-5km、初始偏置 30-60°、目标直飞；所有数值均
 | 离散规则专家 | 0% | 35.8% | 1% | 2.89 | 0 | 500 配对 seed |
 | BC round1 | 0% | 43.2% | 6.7% | 3.01 | 0 | 配对差值 +7.4pp (95%CI [+3.8,+11.0]) |
 | ASAP rule override | 0% | 90.6% | 74% | 3.89 | 0 | 规则上限 |
-| **ASAP 蒸馏（最优）** | **0%** | **91.2%** | **77%** | **3.90** | **0** | 完整回归通过 |
+| **ASAP 蒸馏** | 0% | 91.2% | 77% | 3.90 | 0 | 完整回归通过 |
+| **v2 speed-蒸馏（封版）** | **0%** | **99.9%** (ID1000) | **98.0%** | ~3.9 | **0** | 预注册 holdout (ID1000 / d2 400 / OOD+stress 97-100%) |
 
 ## 3. 三套件回归（ASAP 蒸馏模型）
 
@@ -46,6 +50,9 @@ ID 分布 = 尾追 2-5km、初始偏置 30-60°、目标直飞；所有数值均
 3. **ASAP 全局上限**：fire 策略是全局瓶颈（不只是近距）；ASAP 在全场景 lost=0/bad=0，击杀普遍比 BC 高 40-60pp。
 4. **蒸馏技术要点**：BC fire head 的 no-fire logit 约 -10（深度先验），正样本 CE 在 lr 1e-4 下收敛极慢；由于推理时 action mask 强制 disallowed=0，蒸馏目标=把 fire head 翻转为"全发"，单头 lr 1e-2、10-15 epochs、早停 99.5% 即可精确复现 ASAP。
 5. **PPO 暂缓**：蒸馏模型稳定复现 ASAP 后，当前奖励/环境下不存在发射时机取舍，PPO 无增量收益且有回退风险；P2B 仅在出现发射成本、弹药稀缺、窗口选择或轨迹改变需求时启用。
+6. **失败归因**：非击杀局 84-85% 为 3-hit timeout，第 4 合法窗口缺失率 95-100%；冷却结束后几何(ATA/range/closure)从未再满足——根因是第三发后的接近/几何保持，而非 fire。
+7. **hit3 分型**：20/20 T1 近距过冲；首因时序 range 在 hit3+1 步失效(7-36m) → ATA +35-44 步翻转 → closure 随后恶化；反事实 oracle 证明 speed-first(提前 16s 减速至 240 可救回 95%)，heading 干预无效。
+8. **anti-overshoot 与 v2**：Gate S0 证明无状态规则 memoryless_decel 优于 latch(盲集 ID 98%/d2 94.5%)；precursor 几何规则闭环救回 90%、成功保留 100%；S3/S4 speed head 蒸馏闭环等价 teacher；封版 holdout ID 99.9%/d2 98%/lost 0，预注册 T1 门禁 FAIL(残留 <100m 穿越 13-20%，无任务后果，登记 known limitation)。
 
 ## 5. 统计与门禁
 
@@ -94,7 +101,11 @@ python scripts/eval_scenario_matrix.py --weights data/expert/shoot_bc_asap_disti
 python scripts/stress_eval.py --level L0..L4 --weights data/expert/shoot_bc_asap_distilled.pth
 ```
 
-## 8. 下一步
+## 8. 封版与后续
 
-- 人工检查典型案例可视化（3D 轨迹、时序面板、Tacview ACMI、reward 分布）确认飞行行为；
-- 除非引入发射成本/弹药稀缺/窗口取舍，否则维持蒸馏模型为当前最优；启用 PPO 时从蒸馏权重初始化，并用 BC+ASAP 混合 rollout 刷新 critic（P1b），λ_fire=0、fire-only 动作分布。
+- **Phase 1 已封版 (v2)**：rule-free 神经策略，heading/encoder 未解冻、无 PPO；预注册统计结论 = FAIL(T1 门禁)，工程/任务级验收 = PASS(ID 99.9% / d2 98% / lost 0 observed / bad 0 / 3-hit≈0 / 第4窗口 97-100%)；
+- 三层基线冻结：v19(历史) / BC+ASAP(诊断中间) / v2(当前最优)；今后新模型只与 v2 比较；
+- 已知限制：ID 13.3% / d2 20% 的局仍存在 <100m 近距穿越(当前动力学下无任务后果)，非 resolved；
+- Phase 2 触发条件(不自动开启)：近碰代价模型 / 高难度下 <100m 重新相关 / 新 OOD 中 3-hit 回升 / TTK 成为正式指标 / 最低 separation 要求 / 多机避碰需求；
+- 详见 [docs/phase1_freeze.md](phase1_freeze.md)（封版声明与冻结清单）。
+

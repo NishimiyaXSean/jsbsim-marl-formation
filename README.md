@@ -49,6 +49,26 @@
 
 ---
 
+##   Phase 1：1v1 导弹制导空战（封版 v2, 2026-08）
+
+任务：单机 F-16 携带 4 发导弹，完成"接近 → 进入发射区(WEZ) → 发射 → 击杀(4 命中)"闭环，对比基线为 v19(PPO)。
+
+**路线（全程未解冻 heading/encoder、未使用 PPO 微调）**：
+
+1. 规则专家 → BC 模仿（heading 平衡 + fire B/C 窗口采样 + 掩码 CE）：500 配对 seed 验证击杀 +7.4pp 显著优于专家，lost 0%；
+2. 几何修复：勘误 set_geometry 被 task.reset 覆盖，环境可 seed 复现 + 场景参数化（偏置/距离/横向/高度差/速度差/目标行为）；
+3. fire oracle / ASAP：定位"发射过保守"为全局瓶颈；ASAP（合法即发）蒸馏把击杀从 43% 提到 91%；
+4. 失败归因：3-hit timeout 占失败 84-85%，缺第 4 合法窗口；hit3 分型 100% 为高速近距过冲(T1)；
+5. anti-overshoot：无状态几何减速规则(B2/memoryless_decel)失败救回 90%、成功保留 100%；speed head 蒸馏(v2)闭环等价 teacher；
+6. 最终封版 holdout（预注册）：ID 1000 kill 99.9%、dist2_3k 400 kill 98.0%、OOD/stress 97-100%、lost 0 observed、bad 0、3-hit≈0、第 4 窗口 97-100%；预注册 T1 几何门禁 FAIL（残留近距穿越登记为 known limitation）。
+
+**结果对比**：v19（kill 10% / lost 32%）→ v2（kill 98-99.9% / lost 0 observed）。
+
+详见：
+- [docs/phase1_freeze.md](docs/phase1_freeze.md) — 封版声明与冻结清单（SHA256/commit/seed 范围/预注册判据）
+- [docs/summary_phase1.md](docs/summary_phase1.md) — 完整阶段总结
+- [docs/plan_bc_rule_expert.md](docs/plan_bc_rule_expert.md) — 逐轮执行记录与门禁
+
 ##   Key Results
 
 ### Continuous Action Space (Box(2))
@@ -927,3 +947,4 @@ marl_runs/shoot_v*/              Training checkpoint archives
 ##   License
 
 MIT — see [LICENSE](LICENSE) for details.
+
