@@ -453,7 +453,11 @@ def train(
         })
         .framework("torch")
         .resources(num_gpus=1 if torch.cuda.is_available() else 0)
-        .env_runners(num_env_runners=2)
+        # Overridable without editing this file, e.g. for a sweep:
+        #   MARL_ENV_RUNNERS=6 python scripts/train_formation_rllib.py ...
+        # Default raised 2 -> 4: the distro has 6 CPUs, and 2 env runners only
+        # reached ~108 env steps/s (~76 s per 8192-step iteration).
+        .env_runners(num_env_runners=int(os.environ.get("MARL_ENV_RUNNERS", "4")))
         .multi_agent(
             policies={
                 "shared_policy": (
