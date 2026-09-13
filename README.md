@@ -944,6 +944,56 @@ marl_runs/shoot_v*/              Training checkpoint archives
 
 ---
 
+##   Reproduction Guide
+
+> **TL;DR**: this repo has two independent work streams, **2v1 cooperative
+> pursuit (no weapons)** and **1v1 missile shoot**. There is **no "2v1 +
+> missile" combination** — 2v1 ends at commit `bf1382f`, missile work
+> starts at `3946385` and is 1v1 only.
+
+| Work stream | Headline number | Status | Reproduction path |
+|---|---|---|---|
+| **2v1 SB3 baseline** | `~94% ± 3% capture` (100-ep 95% CI) | committed (`benchmarks/sb3_2v1_97p3/model.zip`, 2.0 MB) | run `scripts/benchmark_sb3_baseline.py` inside a `git worktree add` at `1ca3e63^` (~30 s wall, 30-ep eval ~90%) |
+| **1v1 missile shoot** | `99.9% ID kill` (sealed v2, 1000-seed) | **weights are gitignored; must retrain** (~3 h on GPU) | `generate_shoot_rule_expert.py` → `train_shoot_bc.py` → `distill_fire_asap.py` → `eval_bc_1v1.py` |
+
+**Things the Quick Start does not tell you:**
+
+1. `data/jsbsim/` is gitignored — without it, every F-16 reset fails.
+   Restore it from a sibling clone or JSBSim's default search path.
+2. `scripts/setup_wsl2.sh` is stale (pre-RLlib migration, CPU-only
+   torch, venv `jsbsim_rl` not conda `marl_env`). **Do not run it.**
+   Use conda `marl_env` with the USTC pip mirror and pin torch to
+   `cu126` (see `docs/REPRODUCTION_NOTES.md` §2).
+3. `_train_shoot_1v1.py` (PPO path) is a **dead end** — it converges to
+   7% kill with 62% lost target, and `summary_phase1.md` Section 4
+   finding 5 explicitly says "PPO 暂缓". Only the BC + ASAP
+   distillation pipeline reaches the 99.9% headline.
+4. The committed `metrics_diff*.json` files are `n_episodes = 1`
+   (single-episode sanity checks). The "30 episodes, 97.3%" number
+   that the README implies does not exist in any committed metric;
+   it must be reproduced by running the benchmark with
+   `--episodes 30` or `--episodes 100`.
+5. WSL2 in China can reach GitHub via SSH but **not HTTPS**. Use
+   `git@github.com:...` (or `ssh.github.com:443` if `:22` is also
+   blocked). See `docs/REPRODUCTION_NOTES.md` §6.
+6. The README's headline "97.3%" capture rate is most plausibly the
+   upper bound of the 95% Wilson CI (97.22%) from a 100-episode run;
+   the point estimate is ~94%. Always report the CI with it.
+
+**For the full reproduction walkthrough, environment traps, the four-step
+1v1 missile pipeline, the rationale for skipping PPO, and the list of
+gitignored artifacts that must be rebuilt, see
+[`docs/REPRODUCTION_NOTES.md`](docs/REPRODUCTION_NOTES.md).**
+
+That document was written after a fresh WSL2 install on 2026-09-13
+validated the full pipeline end-to-end (rule-expert data → BC →
+ASAP-distillation → 100-ep holdout, reaching 87% kill on this machine
+with a 200-episode BC data budget; the 99.9% sealed number requires
+~10x more data + a 1000-seed holdout, see §4 of the notes for the
+gap analysis).
+
+---
+
 ##   License
 
 MIT — see [LICENSE](LICENSE) for details.
