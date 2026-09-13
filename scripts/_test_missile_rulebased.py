@@ -47,11 +47,16 @@ class RuleBasedPursuer:
         self.target_alt_m = 3000.0
 
     def compute_action(self, ps, target) -> np.ndarray:
-        """Compute MultiDiscrete action [speed(3), heading(5), altitude(3), fire(2)].
+        """Compute MultiDiscrete action [speed(3), heading(5), altitude(1), fire(2)].
 
-        Fire decision is made separately by _should_fire().
+        Altitude is FROZEN in missile phase (DELTA_ALTITUDES=[0.0] in
+        singlecombat_shoot_task.py:81-82), so the altitude branch must
+        always emit index 0. Any non-zero alt_idx raises IndexError at
+        apply_actions().
+
+        Fire decision is made separately by should_fire().
         """
-        action = np.array([1, 2, 1, 0], dtype=np.int64)  # default: hold all, no fire
+        action = np.array([1, 2, 0, 0], dtype=np.int64)  # default: hold cruise, head +5, alt=0, no fire
 
         # ── Heading: turn toward target ──────────────────────────────────
         p_pos = ps.aircraft.position_ned
@@ -63,30 +68,25 @@ class RuleBasedPursuer:
 
         if abs(hdg_err) > 5.0:
             if hdg_err > 0:
-                action[1] = 4  # turn right (+30°/s)
+                action[1] = 4  # turn right (+10°)
             else:
-                action[1] = 0  # turn left (-30°/s)
+                action[1] = 0  # turn left (-10°)
 
         # ── Speed: maintain cruise ──────────────────────────────────────
+        # DELTA_SPEEDS = [-20, 0, +20]. Index 0 = -20, Index 2 = +20.
         cur_spd = float(ps.aircraft.state["airspeed_mps"])
-        cmd_spd = getattr(ps, '_cmd_speed', self.cruise_speed)
-        if cur_spd < self.cruise_speed - 15:
-            action[0] = 0  # decelerate index? No - accelerate = index 2
-            # Wait, DELTA_SPEEDS = [-20, 0, +20]. Index 0 = -20 (decelerate),
-            # Index 2 = +20 (accelerate). Let me be explicit.
-            # accelerate: action[0] = 2, decelerate: action[0] = 0, hold: action[0] = 1
-
         if cur_spd < self.cruise_speed - 10:
             action[0] = 2  # accelerate
         elif cur_spd > self.cruise_speed + 10:
             action[0] = 0  # decelerate
 
-        # ── Altitude: maintain target altitude ──────────────────────────
-        alt_m = float(ps.aircraft.state["alt_m"])
-        if ps.ref_alt_m - alt_m > 50:
-            action[2] = 2  # climb
-        elif alt_m - ps.ref_alt_m > 50:
-            action[2] = 0  # descend
+        # ── Altitude: FROZEN, always 0 (see docstring) ──────────────────
+        # The original code had climb/descend branches here that emitted
+        # alt_idx in {0, 2}, but DELTA_ALTITUDES=[0.0] so any non-zero
+        # index crashed with IndexError. Removed 2026-09-13 by the
+        # migration team when running the rule-based smoke test on this
+        # new machine. RLlib training was unaffected (action sampling
+        # only ever returns index 0 for an n=1 dimension).
 
         return action
 
