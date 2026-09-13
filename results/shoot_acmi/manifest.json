@@ -1,0 +1,57 @@
+{
+  "weights": "data/expert/shoot_bc_asap_distilled.pth",
+  "difficulty": 0.0,
+  "episodes": [
+    {
+      "acmi": "results/shoot_acmi/shoot_bc_s42_d00.acmi",
+      "seed": 42,
+      "difficulty": 0.0,
+      "steps": 909,
+      "fires": 4,
+      "init_dist_m": 4615.067696037194,
+      "min_dist_m": 60.504934263109625,
+      "final_dist_m": 1860.0461594081949,
+      "reason": "target_killed",
+      "wez_first_step": 71,
+      "fire_first_step": 108,
+      "wez_to_fire_latency": 37,
+      "kill": true,
+      "wall_s": 14.92,
+      "acmi_kb": 143.3
+    },
+    {
+      "acmi": "results/shoot_acmi/shoot_bc_s43_d00.acmi",
+      "seed": 43,
+      "difficulty": 0.0,
+      "steps": 1500,
+      "fires": 3,
+      "init_dist_m": 2084.7406276542765,
+      "min_dist_m": 38.946792783503064,
+      "final_dist_m": 8812.558030155556,
+      "reason": "timeout",
+      "wez_first_step": 540,
+      "fire_first_step": 749,
+      "wez_to_fire_latency": 209,
+      "kill": false,
+      "wall_s": 14.34,
+      "acmi_kb": 223.5
+    },
+    {
+      "acmi": "results/shoot_acmi/shoot_bc_s44_d00.acmi",
+      "seed": 44,
+      "difficulty": 0.0,
+      "steps": 888,
+      "fires": 4,
+      "init_dist_m": 3284.500051353431,
+      "min_dist_m": 32.40067750665356,
+      "final_dist_m": 1841.0037447206007,
+      "reason": "target_killed",
+      "wez_first_step": 58,
+      "fire_first_step": 59,
+      "wez_to_fire_latency": 1,
+      "kill": true,
+      "wall_s": 8.98,
+      "acmi_kb": 137.6
+    }
+  ]
+}
