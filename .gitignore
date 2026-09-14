@@ -30,6 +30,9 @@ marl_runs/
 .agents/
 skills-lock.json
 
+# WorkBuddy project memory (workspace-local, not a build artefact)
+.workbuddy/
+
 # OS
 .DS_Store
 Thumbs.db
