@@ -249,7 +249,7 @@ class SingleCombatShootTask(BaseTask):
         # Curriculum (v21): max_heading_bias_deg scales the offset so training
         # can start nearly-aligned (small bias) and grow the turn requirement.
         max_bias = float(self.config.get("max_heading_bias_deg", 60.0))
-        bias_lo = max(5.0, 0.5 * max_bias)
+        bias_lo = 0.0                                  # allow nearly-aligned tail-chase (curriculum ease)
         bias_hi = max(bias_lo, max_bias)
         heading_bias = float(rng.uniform(bias_lo, bias_hi) * rng.choice([-1, 1]))
         p0_hdg = float((t_hdg + heading_bias) % 360.0)
