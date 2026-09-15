@@ -1,0 +1,25 @@
+{
+  "weights": "data/expert/shoot_bc_asap_geomA.pth",
+  "difficulty": 0.0,
+  "min_heading_bias_deg": 0.0,
+  "episodes": [
+    {
+      "acmi": "results/shoot_acmi_bias0to15_geomA/shoot_bc_s441_d00.acmi",
+      "seed": 441,
+      "difficulty": 0.0,
+      "min_heading_bias_deg": 0.0,
+      "steps": 813,
+      "fires": 4,
+      "init_dist_m": 3635.3323818703725,
+      "min_dist_m": 66.42627932561662,
+      "final_dist_m": 1885.2216069028093,
+      "reason": "target_killed",
+      "wez_first_step": 0,
+      "fire_first_step": 27,
+      "wez_to_fire_latency": 27,
+      "kill": true,
+      "wall_s": 11.33,
+      "acmi_kb": 127.2
+    }
+  ]
+}

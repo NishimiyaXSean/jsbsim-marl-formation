@@ -14,9 +14,12 @@
 
 同时，**不存在任何按初始角分箱的覆盖**：这 5 个就是 5 次随机抽样，没有针对角度的系统设计。
 
+> **更新（2026-09-15 23:50）**：已按老板指定补渲第一组新几何日志 —— `|bias| ∈ [0,15)`，seed 441（+0.0321°），geomA 与冻结基线各一集，配对可控。见 §6。
+> §1–§5 的审计结论指的是 2026-09-15 23:06 之前的仓库状态。
+
 ---
 
-## 1. 这 5 个文件是什么，以及它们属于哪个几何
+## 1. 审计时点（23:06）已有的这 5 个文件是什么，以及它们属于哪个几何
 
 判定方法（权威口径，非解析外推）：2×2 评估 JSON 里逐集记录了实测的 `init_heading_bias_deg`，把同一个量从 ACMI 首帧还原出来比对即可。
 
@@ -80,34 +83,85 @@
 - 唯一要显式指定的是权重：`--weights data/expert/shoot_bc_asap_geomA.pth`（脚本默认值仍是冻结基线）。
 - 实测速度 9–15 s/集，`MAX_STEPS = 1500`。
 
-**角度覆盖可以精确选定种子**，因为偏置是种子的确定函数。以下是从新几何 400 个种子里挑出的代表种子，覆盖 4 个分箱 × 2 个符号：
+**角度覆盖可以精确选定种子**，因为偏置是种子的确定函数（JSON 落盘记录与解析复现在 400 个种子上最大差 0.00005°）。下表每个种子取**该分箱内最接近中点**的一集，即箱内典型成员而非边缘：
 
-| 分箱 | 符号 | 建议 seed | 该 seed 的偏置 |
-|---|---|---|---|
-| 0–15° | + | 235 | +0.03° |
-| 0–15° | − | 187 | −14.57° |
-| 15–30° | + | 286 | +15.07° |
-| 15–30° | − | 143 | −29.86° |
-| 30–45° | + | 333 | +30.13° |
-| 30–45° | − | 93 | −44.90° |
-| 45–61° | + | 380 | +45.39° |
-| 45–61° | − | 42 | −59.83° |
+| 分箱 | 符号 | seed | 该 seed 偏置 | 正/负计数 |
+|---|---|---|---|---|
+| 0–15° | + | **54** | +7.714° | 51 / 48 |
+| 0–15° | − | 190 | −7.155° | |
+| 15–30° | + | 79 | +22.500° | 47 / 44 |
+| 15–30° | − | 120 | −22.390° | |
+| 30–45° | + | 64 | +37.523° | 47 / 50 |
+| 30–45° | − | 439 | −37.869° | |
+| 45–60° | + | 349 | +52.494° | 62 / 51 |
+| 45–60° | − | 154 | −52.533° | |
+
+> **修正记录**：本表初版把偏置**排序后**用下标反推种子（`seed = 42 + index`），种子号全部是错的（分箱计数与 min/median/max 不受影响）。已于 2026-09-15 23:45 重算修正。取种时必须把评估落盘读成 `seed → 记录` 的映射，**不要用排序后的位置反推种子**。
 
 规模参考：8 集 ≈ 2 分钟；两组权重 × 8 集 = 16 集约 3–4 分钟；若要再把 `difficulty_level ∈ {0.0, 0.3, 0.6}` 乘进来，30 集约 7 分钟。
 
-**本轮我没有生成任何新文件** —— 是否补、用哪组权重、覆盖几档难度，等老板定。
+---
+
+## 6. 补测交付：`|bias| ∈ [0,15)`，+0.03° 那一集
+
+按老板指定，渲染该分箱内 `|bias|` 最小的一集 —— **seed 441，实测 `init_heading_bias_deg = +0.0321°`**，新几何 `U(0,60)`，`difficulty_level = 0.0`，`MAX_STEPS 1500`。
+
+| 目录 | 权重 | 结果 |
+|---|---|---|
+| `results/shoot_acmi_bias0to15_geomA/` | `data/expert/shoot_bc_asap_geomA.pth` | KILL，813 步，4 发 4 中，min_dist 66.4 m |
+| `results/shoot_acmi_bias0to15_base/` | `data/expert/shoot_bc_asap_distilled.pth`（冻结基线） | KILL，798 步，4 发 4 中，min_dist 66.4 m |
+
+同一 seed、同一场景、只换权重 —— 构成一对 **matched pair**，可直接对照策略差异（这是 2×2 里唯一无法从聚合数字看到的维度）。
+
+### 与评估落盘记录的逐字段核验 —— 全部 OK
+
+| 字段 | geomA 渲染 / 评估记录 | base 渲染 / 评估记录 |
+|---|---|---|
+| reason | target_killed / target_killed | target_killed / target_killed |
+| steps | 813 / 813 | 798 / 798 |
+| launches | 4 / 4 | 4 / 4 |
+| wez_first_step | 0 / 0 | 0 / 0 |
+| fire_first_step | 27 / 27 | 27 / 27 |
+
+⇒ 渲染出来的就是那次评估的**同一个回合**，不是"看起来像"的另一个回合。
+
+首帧还原偏置读到 +0.0000 而非 +0.0321：ACMI 的 yaw 只写 1 位小数，0.0312° 被量化掉（差值远小于一个量化步长），不是矛盾。
+
+### 校验和
+
+```
+33dfdbdcd4ccc21422db6d01be61498e  shoot_acmi_bias0to15_geomA/shoot_bc_s441_d00.acmi
+618eac4cbc09c03d0e3e336549bcdced  shoot_acmi_bias0to15_base/shoot_bc_s441_d00.acmi
+e7c4bffac73cdb2ce874360d4cf05251  shoot_acmi_bias0to15_geomA/manifest.json
+18ac7dece2ec6fe52be042903d17e802  shoot_acmi_bias0to15_base/manifest.json
+```
+
+### 两点提示
+
+1. 本集 `wez_first_step = 0`：偏置几乎为 0 时追击者开局就已在发射包线内。这是 0–15° 段（尤其 0–3°）的固有特征，不是异常。真想看"搜索—接敌—进包线"的完整过程，应该看 15° 以上的分箱。
+2. `+0.03°` 是该分箱的**最边缘**成员。若要一集"箱内典型"的 0–15°，用 **seed 54（+7.714°）**，命令只需 `--seeds 54`。
+
+### 渲染器改动
+
+`scripts/_render_shoot_acmi_bc.py` 新增 `--min-heading-bias-deg`，并把该键写入 manifest（不传 = 代码默认 `0.0` = `U(0,60)`，行为不变）。此前 manifest 只有权重、没有几何，几何只能靠首帧反推 —— 本次溯源审计暴露了这个缺口，已补。
 
 ---
 
-## 附：判定脚本
+## 附：判定与渲染脚本
 
-- `/home/sean/check_acmi_geometry.py` —— 权威判定（与 2×2 落盘记录比对）
-- `/home/sean/bias_coverage.py` —— 两个几何的偏置覆盖率与代表种子挑选
-- `/home/sean/recover_acmi_bias.py` —— 同口径的解析版（已修正符号）
-- `/home/sean/list_acmi.sh` —— 全量 ACMI 清单
+| 脚本（均在 `/home/sean/`） | 用途 |
+|---|---|
+| `check_acmi_geometry.py` | 权威判定：与 2×2 落盘记录比对，确定某个 ACMI 属于哪个几何 |
+| `bias_coverage.py` | 两个几何的偏置覆盖率 |
+| `bin_seed_table.py` | 按 **seed** 索引生成 4 箱 × 2 符号的代表种子表（修正版） |
+| `pick_bin_seed.py` | 按 seed 索引挑 0–15° 正号候选，并列出各候选的评估结果 |
+| `verify_rendered.py` | 把新渲染的 episode 与评估落盘记录逐字段核验 |
+| `render_u015.sh` | 本次两条渲染命令 |
+| `recover_acmi_bias.py` | 同口径的解析版（已修正符号） |
+| `list_acmi.sh` | 全量 ACMI 清单 |
 
 运行方式（WSL Ubuntu 终端）：
 ```
-/home/sean/miniconda3/envs/marl_env/bin/python /home/sean/check_acmi_geometry.py
+/home/sean/miniconda3/envs/marl_env/bin/python /home/sean/bin_seed_table.py
 ```
 注意：系统 `python3` 没有 numpy，必须用上面的 conda 解释器绝对路径。
