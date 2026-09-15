@@ -99,6 +99,10 @@ def main():
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--difficulty", type=float, default=0.0)
+    parser.add_argument("--min-heading-bias-deg", type=float, default=None,
+                        help="Override the task's minimum initial heading bias "
+                             "(deg). None keeps the default U(0, 60); pass 30 to "
+                             "reproduce the pre-fb48155 geometry U(30, 60).")
     parser.add_argument("--out", default="results/shoot_eval/eval_bc_round1.json")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
@@ -119,15 +123,24 @@ def main():
     quality = {"bad": 0, "good": 0, "premium": 0}
     wez_firsts, fire_firsts, wez_fire_latency = [], [], []
     ata_p90s, closure_pos_ratios, ep_steps = [], [], []
+    ep_detail = []
     lost_after_wez = 0
     wez_reached = 0
 
+    task_cfg = {
+        "difficulty_level": args.difficulty,
+        "obs_include_closure": True,
+    }
+    if args.min_heading_bias_deg is not None:
+        task_cfg["min_heading_bias_deg"] = float(args.min_heading_bias_deg)
+
     for ep in range(args.episodes):
-        env = BaseEnv(task=SingleCombatShootTask({
-            "difficulty_level": args.difficulty,
-            "obs_include_closure": True,
-        }))
+        env = BaseEnv(task=SingleCombatShootTask(dict(task_cfg)))
         obs, _ = env.reset(seed=args.seed + ep)
+        # Signed initial heading offset (pursuer minus target), deg in [-180, 180).
+        # Captured right after reset, before any manoeuvring moves ref_hdg.
+        init_bias_deg = float(
+            (env.pursuers[0].ref_hdg - env.targets[0].ref_hdg + 180.0) % 360.0 - 180.0)
         reason = "timeout"
         wez_first = fire_first = None
         ep_launches = ep_hits = 0
@@ -173,6 +186,18 @@ def main():
         closure_pos_ratios.append(
             float(np.mean([c > 0 for c in closure_hist])) if closure_hist else 0.0)
         ep_steps.append(step + 1)
+        ep_detail.append({
+            "ep": ep,
+            "seed": args.seed + ep,
+            "init_heading_bias_deg": round(init_bias_deg, 4),
+            "kill": bool(reason == "target_killed"),
+            "reason": reason,
+            "launches": ep_launches,
+            "hits": ep_hits,
+            "steps": step + 1,
+            "wez_first_step": wez_first,
+            "fire_first_step": fire_first,
+        })
         n_ep += 1
         env.close()
         if (ep + 1) % 10 == 0:
@@ -200,6 +225,8 @@ def main():
         "lost_after_wez": lost_after_wez,
         "mean_steps": float(np.mean(ep_steps)),
         "seed": args.seed,
+        "min_heading_bias_deg": args.min_heading_bias_deg,
+        "episodes_detail": ep_detail,
     }
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:

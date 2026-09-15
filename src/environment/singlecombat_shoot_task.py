@@ -249,7 +249,13 @@ class SingleCombatShootTask(BaseTask):
         # Curriculum (v21): max_heading_bias_deg scales the offset so training
         # can start nearly-aligned (small bias) and grow the turn requirement.
         max_bias = float(self.config.get("max_heading_bias_deg", 60.0))
-        bias_lo = 0.0                                  # allow nearly-aligned tail-chase (curriculum ease)
+        # min_heading_bias_deg defaults to 0.0 => post-fb48155 behaviour
+        # U(0, max_bias). Pass 0.5*max_bias (= 30 when max_bias = 60) to
+        # reproduce the pre-fb48155 geometry U(30, 60) for A/B controls.
+        # The RNG draw sequence is identical either way (1 uniform + 1 choice),
+        # so a given seed still yields the same target geometry and speed.
+        bias_lo = min(max(float(self.config.get("min_heading_bias_deg", 0.0)), 0.0),
+                      max_bias)
         bias_hi = max(bias_lo, max_bias)
         heading_bias = float(rng.uniform(bias_lo, bias_hi) * rng.choice([-1, 1]))
         p0_hdg = float((t_hdg + heading_bias) % 360.0)
