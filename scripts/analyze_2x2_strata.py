@@ -7,7 +7,12 @@ Adds three things the headline report needs:
      policy effect can be read at MATCHED difficulty instead of on average.
   3. Secondary metrics at matched geometry.
 
-Usage: /home/sean/miniconda3/envs/marl_env/bin/python scripts/analyze_2x2_strata.py
+Usage:
+  /home/sean/miniconda3/envs/marl_env/bin/python scripts/analyze_2x2_strata.py
+  EPS=400 /home/sean/miniconda3/envs/marl_env/bin/python scripts/analyze_2x2_strata.py
+
+EPS / SEED mirror the naming rule of scripts/_run_geom2x2.sh: EPS=100 (default)
+reads eval_2x2_<tag>_s<SEED>.json, any other EPS expects the _n<EPS> suffix.
 """
 
 from __future__ import annotations
@@ -17,16 +22,18 @@ import os
 from math import comb
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-FILES = {
-    "base_geoOld": "eval_2x2_base_geoOld_s42.json",
-    "geomA_geoNew": "eval_2x2_geomA_geoNew_s42.json",
-    "base_geoNew": "eval_2x2_base_geoNew_s42.json",
-    "geomA_geoOld": "eval_2x2_geomA_geoOld_s42.json",
-}
+EPS = int(os.environ.get("EPS", "100"))
+SEED = int(os.environ.get("SEED", "42"))
+SFX = "" if EPS == 100 else "_n%d" % EPS
+FILES = {t: "eval_2x2_%s%s_s%d.json" % (t, SFX, SEED)
+         for t in ("base_geoOld", "geomA_geoNew", "base_geoNew", "geomA_geoOld")}
 
 
 def load(tag):
-    with open(os.path.join(ROOT, "results/shoot_eval", FILES[tag]), encoding="utf-8") as fh:
+    path = os.path.join(ROOT, "results/shoot_eval", FILES[tag])
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -48,7 +55,8 @@ def discordant(da, db):
     return b, c, len(seeds)
 
 
-D = {t: load(t) for t in FILES}
+D = {t: d for t, d in ((t, load(t)) for t in FILES) if d is not None}
+print("cells present (eps=%d seed=%d): %s" % (EPS, SEED, ", ".join(sorted(D))))
 
 print("=" * 76)
 print("E. stratified (pooled) exact McNemar")
@@ -60,11 +68,18 @@ for label, pairs in (("POLICY effect (geomA - base), both geometries pooled", PO
                      ("GEOMETRY effect (U(0,60) - U(30,60)), both policies pooled", GEOM)):
     tb = tc = tn = 0
     for a, b in pairs:
+        if a not in D or b not in D:
+            print("  stratum %-28s SKIPPED (cell not available)" % (a + " vs " + b))
+            continue
         x, y, n = discordant(D[a], D[b])
         tb += x
         tc += y
         tn += n
         print("  stratum %-24s A-only %d, B-only %d (n=%d)" % (a + " vs " + b, x, y, n))
+    if tn == 0:
+        print("  no data")
+        print()
+        continue
     print("  POOLED: A-only %d, B-only %d over n=%d   exact McNemar p = %.4f"
           % (tb, tc, tn, mcnemar_exact(tb, tc)))
     rate_b, rate_c = tb / tn, tc / tn
@@ -83,6 +98,9 @@ for geo, pairs in (("geoNew U(0,60)", [("base_geoNew", "base  "), ("geomA_geoNew
                    ("geoOld U(30,60)", [("base_geoOld", "base  "), ("geomA_geoOld", "geomA ")])):
     print("  %s" % geo)
     for tag, name in pairs:
+        if tag not in D:
+            print("    %s (cell not available)" % name)
+            continue
         d = D[tag]
         row = []
         for lo, hi in EDGES:
@@ -99,6 +117,9 @@ print("G. secondary metrics at matched geometry (policy effect)")
 print("=" * 76)
 for geo, a, b in (("geoNew U(0,60)", "geomA_geoNew", "base_geoNew"),
                   ("geoOld U(30,60)", "geomA_geoOld", "base_geoOld")):
+    if a not in D or b not in D:
+        print("  %s  skipped (cell not available)" % geo)
+        continue
     da, db = D[a], D[b]
     print("  %s  geomA vs base" % geo)
     for key in ("hit_rate", "launches_per_episode", "wez_reach_rate", "mean_steps"):

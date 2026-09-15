@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
@@ -23,13 +24,16 @@ import sys
 from math import comb
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CELLS = {
-    "base_geoOld": "results/shoot_eval/eval_2x2_base_geoOld_s42.json",
-    "geomA_geoNew": "results/shoot_eval/eval_2x2_geomA_geoNew_s42.json",
-    "base_geoNew": "results/shoot_eval/eval_2x2_base_geoNew_s42.json",
-    "geomA_geoOld": "results/shoot_eval/eval_2x2_geomA_geoOld_s42.json",
-}
+TAGS = ("base_geoOld", "geomA_geoNew", "base_geoNew", "geomA_geoOld")
+CELLS = {}
 REPRO_CHECK = {"base_geoOld": (87, 100), "geomA_geoNew": (95, 100)}
+
+
+def cell_paths(eps: int, seed: int):
+    """Mirror the output naming rule of scripts/_run_geom2x2.sh."""
+    sfx = "" if eps == 100 else "_n%d" % eps
+    return {t: "results/shoot_eval/eval_2x2_%s%s_s%d.json" % (t, sfx, seed)
+            for t in TAGS}
 Z = 1.959963985
 
 
@@ -86,11 +90,22 @@ def load(tag: str):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--eps", type=int, default=100,
+                        help="episodes per cell; any value != 100 expects the "
+                             "_n<eps> output suffix written by _run_geom2x2.sh")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+    global CELLS
+    CELLS = cell_paths(args.eps, args.seed)
+
     data = {tag: load(tag) for tag in CELLS}
     missing = [t for t, d in data.items() if d is None]
     if missing:
-        print("MISSING CELLS:", ", ".join(missing))
-        print("run scripts/_run_geom2x2.sh first")
+        print("NOTE: cells not found, skipped: %s" % ", ".join(missing))
+        print("      (run scripts/_run_geom2x2.sh --eps %d to produce them)" % args.eps)
+    if all(d is None for d in data.values()):
+        print("no cells available at eps=%d seed=%d" % (args.eps, args.seed))
         return 2
 
     print("=" * 78)
@@ -99,12 +114,14 @@ def main() -> int:
     ks = {}
     for tag in CELLS:
         d = data[tag]
+        if d is None:
+            continue
         k = d["termination_reasons"].get("target_killed", 0)
         n = d["episodes"]
         ks[tag] = (k, n)
         lo, hi = wilson(k, n)
         note = ""
-        if tag in REPRO_CHECK:
+        if args.eps == 100 and tag in REPRO_CHECK:
             ek, en = REPRO_CHECK[tag]
             note = ("  REPRO OK (== %d/%d)" % (ek, en) if (k, n) == (ek, en)
                     else "  REPRO MISMATCH (expected %d/%d)" % (ek, en))
@@ -120,8 +137,10 @@ def main() -> int:
     print("=" * 78)
     print("B. realised initial heading bias |bias| (deg)")
     print("=" * 78)
-    for tag in ("base_geoOld", "geomA_geoNew"):
+    for tag in ("base_geoOld", "geomA_geoNew", "base_geoNew", "geomA_geoOld"):
         d = data[tag]
+        if d is None:
+            continue
         bs = [abs(e["init_heading_bias_deg"]) for e in d["episodes_detail"]]
         print("  %-13s mean %.2f  median %.2f  min %.2f  max %.2f"
               % (tag, sum(bs) / len(bs), sorted(bs)[len(bs) // 2],
@@ -129,6 +148,12 @@ def main() -> int:
 
     # ---- paired contrasts --------------------------------------------------
     def paired(tag_a: str, tag_b: str, label: str):
+        if data[tag_a] is None or data[tag_b] is None:
+            print()
+            print("-" * 78)
+            print("%s" % label)
+            print("  skipped: cell not available at this eps")
+            return
         da, db = data[tag_a], data[tag_b]
         ka = {e["seed"]: e["kill"] for e in da["episodes_detail"]}
         kb = {e["seed"]: e["kill"] for e in db["episodes_detail"]}
@@ -183,6 +208,8 @@ def main() -> int:
                                  "geomA@U(0,60) vs base@U(30,60)  [the original +8 pp claim]"),
                                 ("geomA_geoNew", "base_geoNew",
                                  "geomA@U(0,60) vs base@U(0,60)")):
+        if tag_a not in ks or tag_b not in ks:
+            continue
         ka, na = ks[tag_a]
         kb, nb = ks[tag_b]
         lo, hi = newcombe(ka, na, kb, nb)
