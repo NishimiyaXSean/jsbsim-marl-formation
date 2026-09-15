@@ -15,6 +15,13 @@ Usage:
   python scripts/_render_shoot_acmi_bc.py \
       --weights data/expert/shoot_bc_asap_distilled.pth \
       --outdir results/shoot_acmi
+
+  # heading-bias geometry is selected with --min-heading-bias-deg and is
+  # recorded in manifest.json (omit -> code default, 0.0 = U(0,60)):
+  python scripts/_render_shoot_acmi_bc.py \
+      --weights data/expert/shoot_bc_asap_geomA.pth \
+      --outdir results/shoot_acmi_bias0to15_geomA \
+      --seeds 441 --difficulty 0.0 --min-heading-bias-deg 0.0
 """
 
 from __future__ import annotations
@@ -52,11 +59,17 @@ def _fwd(rpy_rad):
     ])
 
 
-def run_episode(model, device, seed, difficulty, acmi_path):
-    env = BaseEnv(task=SingleCombatShootTask({
+def run_episode(model, device, seed, difficulty, acmi_path,
+                min_heading_bias_deg=None):
+    task_cfg = {
         "difficulty_level": difficulty,
         "obs_include_closure": True,
-    }))
+    }
+    # Omitted -> the task's own default (0.0 = U(0,60), the post-fb48155
+    # geometry), which keeps this renderer's behaviour unchanged by default.
+    if min_heading_bias_deg is not None:
+        task_cfg["min_heading_bias_deg"] = float(min_heading_bias_deg)
+    env = BaseEnv(task=SingleCombatShootTask(task_cfg))
     obs, _ = env.reset(seed=seed)
     p0 = env.pursuers[0]
     t0 = env.targets[0]
@@ -101,6 +114,7 @@ def run_episode(model, device, seed, difficulty, acmi_path):
         "acmi": acmi_path,
         "seed": seed,
         "difficulty": difficulty,
+        "min_heading_bias_deg": min_heading_bias_deg,
         "steps": total_steps,
         "fires": fires,
         "init_dist_m": init_dist,
@@ -121,6 +135,10 @@ def main():
     ap.add_argument("--seeds", type=str, default="42,43,44",
                     help="comma-separated seeds for ID-difficulty episodes")
     ap.add_argument("--difficulty", type=float, default=0.0)
+    ap.add_argument("--min-heading-bias-deg", type=float, default=None,
+                    help="heading-bias geometry: omit for the code default "
+                         "(0.0 = U(0,60)); pass 30.0 for the pre-fb48155 "
+                         "U(30,60) geometry")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
@@ -135,6 +153,8 @@ def main():
     model.load_state_dict(ck["state_dict"])
     model.eval()
     print(f"[render-bc] weights={args.weights} device={device} "
+          f"difficulty={args.difficulty} "
+          f"min_heading_bias_deg={args.min_heading_bias_deg} "
           f"meta.best_epoch={ck.get('meta', {}).get('best_epoch')}")
 
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
@@ -143,7 +163,8 @@ def main():
         tag = f"bc_s{s:02d}_d{int(args.difficulty * 10):02d}"
         acmi = os.path.join(args.outdir, f"shoot_{tag}.acmi")
         t0 = time.time()
-        info = run_episode(model, device, s, args.difficulty, acmi)
+        info = run_episode(model, device, s, args.difficulty, acmi,
+                           min_heading_bias_deg=args.min_heading_bias_deg)
         info["wall_s"] = round(time.time() - t0, 2)
         sz_kb = round(os.path.getsize(acmi) / 1024.0, 1) if os.path.exists(acmi) else 0
         info["acmi_kb"] = sz_kb
@@ -157,6 +178,7 @@ def main():
     out = os.path.join(args.outdir, "manifest.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"weights": args.weights, "difficulty": args.difficulty,
+                   "min_heading_bias_deg": args.min_heading_bias_deg,
                    "episodes": manifest}, f, indent=2)
     print(f"[saved] {out}")
 
