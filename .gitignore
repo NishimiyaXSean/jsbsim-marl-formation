@@ -43,6 +43,19 @@ results/neural_tracking/
 # Generated visualization / eval artifacts (regenerable via scripts/)
 results/ctrl_viz/
 results/shoot_eval/*.json
+#
+# EXCEPTION (2026-09-16): the small paper's PRIMARY EVIDENCE must never be lost.
+# The blanket rule above is how the Phase-1 JSONs (paired_bc_vs_expert_500.json,
+# asap_baseline.json, fire_oracle_dist2_3k_60.json) disappeared: only prose
+# copies survived in docs/. Every eval JSON now carries a run_meta identity
+# block, so these files are self-describing and safe to track. Keep the
+# blanket ignore for ad-hoc evals; track the E-numbered queue explicitly.
+!results/shoot_eval/E1_*.json
+!results/shoot_eval/E2_*.json
+!results/shoot_eval/E3_*.json
+!results/shoot_eval/E5_*.json
+!results/shoot_eval/E6_*.json
+!results/shoot_eval/E7_*.json
 # Regenerable rule-expert dataset (scripts/generate_shoot_rule_expert.py --seed 42)
 data/expert/shoot_rule_expert*.npz
 # Generated audit / training logs

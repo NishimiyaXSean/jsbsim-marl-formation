@@ -1,0 +1,93 @@
+{
+  "comparison": {
+    "arm_a": "bc_round1",
+    "arm_b": "spc",
+    "file_a": "results/shoot_eval/E7_bc_round1_d0_n400_s20000.json",
+    "file_b": "results/shoot_eval/E7_spc_d0_n400_s20000.json"
+  },
+  "run_meta_a": {
+    "model_id": "bc_round1",
+    "checkpoint": "data/expert/shoot_bc_round1_baseline.pth",
+    "checkpoint_sha256": "aad05b459619bdb7745ac8da24ba4833f9b50d2719697eec00fa5531f1d17a60",
+    "seed_range": [
+      20000,
+      20399
+    ],
+    "n_episodes": 400,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "7d25f1e",
+    "script": "scripts/eval_bc_1v1.py",
+    "timestamp_utc": "2026-09-16T15:38:31Z"
+  },
+  "run_meta_b": {
+    "model_id": "spc_distilled",
+    "checkpoint": "data/expert/shoot_bc_asap_distilled.pth",
+    "checkpoint_sha256": "36d79bd9e0429860908a8d8dfbcc9d05250453a0a8588cfa9a428b49a2f50d98",
+    "seed_range": [
+      20000,
+      20399
+    ],
+    "n_episodes": 400,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "7d25f1e",
+    "script": "scripts/eval_bc_1v1.py",
+    "timestamp_utc": "2026-09-16T15:24:07Z"
+  },
+  "paired_seeds": {
+    "n": 400,
+    "first": 20000,
+    "last": 20399
+  },
+  "contingency": {
+    "both_kill": 186,
+    "neither_kill": 37,
+    "only_b_kill": 177,
+    "only_a_kill": 0,
+    "discordant_total": 177,
+    "discordant_favouring_b": 177
+  },
+  "kill_rate": {
+    "bc_round1": {
+      "kills": 186,
+      "n": 400,
+      "rate": 0.465,
+      "wilson95": [
+        0.41668591737505156,
+        0.5139799432286589
+      ]
+    },
+    "spc": {
+      "kills": 363,
+      "n": 400,
+      "rate": 0.9075,
+      "wilson95": [
+        0.8751014146075681,
+        0.9321460655063762
+      ]
+    },
+    "paired_diff_pp": 44.24999999999999
+  },
+  "mcnemar": {
+    "exact_two_sided_p": 1.044048714879764e-53,
+    "chi2_continuity_corrected_p": 5.969980697316216e-40,
+    "significant_at_0.05": true
+  },
+  "clr_on_shared_seeds": {
+    "bc_round1": {
+      "fire_allowed_steps": 16839,
+      "fire_commanded": 1223,
+      "clr": 0.07262901597482035
+    },
+    "spc": {
+      "fire_allowed_steps": 1560,
+      "fire_commanded": 1560,
+      "clr": 1.0
+    }
+  }
+}

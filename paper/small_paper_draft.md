@@ -30,11 +30,12 @@
 
 ## Abstract (~170 words)
 
-Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert fires at only **5.96%** of permitted steps, because it applies a launch-quality gate strictly tighter than the environment's legality mask. BC reproduces that gate faithfully (**7.37%**): the defect lies in the teacher's designed decision boundary, not in the imitation, which is behaving as intended. To isolate the cost we freeze the BC maneuver trajectory and enumerate the fire-policy family; firing whenever legal achieves 73.3% kills where the inherited policy achieves 6.7%, and every range- or delay-selective alternative is worse. We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on paired seeds, replacing the conservative launch decision raises the kill rate from **43.2% to 91.2%**, matching the rule oracle (90.6%). We do not claim that launching whenever legal is generally optimal; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
+Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert fires at only **5.96%** of permitted steps, because it applies a launch-quality gate strictly tighter than the environment's legality mask. BC reproduces that gate faithfully (**7.37%**): the defect lies in the teacher's designed decision boundary, not in the imitation, which is behaving as intended. To isolate the cost we freeze the BC maneuver trajectory and enumerate the fire-policy family; firing whenever legal achieves 73.3% kills where the inherited policy achieves 6.7%, and every range- or delay-selective alternative is worse. We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.5% to 90.8%** (**+44.3 pp**, exact McNemar **p ≈ 1e-53**), and SPC climbs to a CLR of exactly **100.0%**. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. We do not claim that launching whenever legal is generally optimal; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
-> **待 E7 落地后回填**：paired seed 数与 p 值（E7 正在跑，n=400，seeds 20000–20399）。
+> **E7 已落地（2026-09-16）**：n=400，seeds 20000–20399，几何 U(0,60)，d=0，确定性 argmax。BC=186/400=**46.50%**、SPC=363/400=**90.75%**、paired **+44.25 pp**、discordant **177 : 0**、exact McNemar **p=1.04e-53**。
+> **⚠ 数字已更新**：文档记录的 43.2% / 91.2%（500 seeds、旧几何）**被本次实测取代** —— 因为只有本次把 kill rate、CLR、几何放在**同一 seed 集**上，才是自洽可比的一对。论文一律采用 46.50% / 90.75% / +44.25 pp。
 
 ---
 
@@ -160,12 +161,21 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 
 | Policy | Allowed steps | Launch commands | **CLR** |
 |---|---|---|---|
-| Rule expert | 9395 | 560 | **5.96%** |
-| BC round1 (frozen) | 8327 | 614 | **7.37%** |
-| SPC | — | — | **≥ 99.5%** (gate G3) |
+| Rule expert (d=0, 200 ep) | 9395 | 560 | **5.96%** |
+| BC round1 (200 ep diagnostic) | 8327 | 614 | **7.37%** |
+| BC round1 (E7 seed set, 400 ep) | 16839 | 1223 | **7.26%** |
+| **SPC (E7 seed set, 400 ep)** | 1560 | 1560 | **100.00%** |
 | Rule oracle (fire = mask) | — | all allowed | 100% (by construction) |
 
-Two observations: (i) BC is *not* more conservative than the expert in aggregate — it inherits the gate and adds noise; (ii) both sit ~an order of magnitude below the oracle. **Neither figure alone proves suboptimality** — that requires §4.3.
+Two readings:
+1. Expert and BC agree closely across two independent evaluations (5.96% vs 7.37% / 7.26%), so the conservatism is a **stable property**, not sampling noise. BC is not "more broken" than the expert — it reproduces the gate and adds a little variance.
+2. **Neither figure alone proves suboptimality.** A low CLR diagnoses *conservatism* only; whether that conservatism is *costly* is established separately (§4.3, §4.4).
+
+> **⚠ Two caveats that must appear in the paper (both are reviewer-attack surfaces).**
+>
+> **(a) CLR(SPC) = 100.00% is true by construction, not an empirical discovery.** SPC's training target is literally "fire on every legal step", and gate G3 tests exactly that. It must not be presented as a result.
+>
+> **(b) The CLR denominator is policy-dependent, so CLR is not a like-for-like "fraction of opportunities exploited".** BC is legal on 16839 steps (≈42/episode); SPC on only 1560 (≈3.9/episode) — a factor of 10.8. The cause is mechanical: firing triggers the 30-step launch cooldown, which *removes* legality, so a policy that fires collapses its own opportunity set, while a policy that abstains stays "legal" across many consecutive steps. Comparing CLR across policies therefore compares different opportunity sets. This is precisely why the primary identification is the **frozen-trajectory enumeration** (§4.3), where the maneuver is fixed by construction and the opportunity set is held constant, rather than a cross-policy CLR comparison.
 
 ### 4.3 C3(a) — Off-policy enumeration on a frozen trajectory (the key identification)
 
@@ -193,24 +203,37 @@ Two observations: (i) BC is *not* more conservative than the expert in aggregate
 
 > **Artifact status:** the JSON (`results/shoot_eval/fire_oracle_dist2_3k_60.json`) is **GONE** — `results/shoot_eval/*.json` is gitignored and the file no longer exists on disk. The table above is transcribed from `docs/plan_bc_rule_expert.md` §"dist2_3k fire oracle" and `docs/summary_phase1.md` §4.2. **Must be regenerated before submission** — `scripts/fire_oracle_audit.py` survives.
 
-### 4.4 C3(b) — SPC intervention result
+### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
-| Policy | ID kill rate (500 paired seeds) | Launches/ep | Notes |
-|---|---|---|---|
-| v19 PPO (historical baseline) | 10% | 0.48 | old training artifact |
-| Rule expert | 35.8% | 2.89 | 500 paired seeds |
-| **BC round1 (frozen)** | **43.2%** | 3.01 | Δ vs expert **+7.4 pp**, bootstrap 95% CI [+3.8, +11.0] |
-| ASAP rule override (oracle) | 90.6% | 3.89 | fire = mask, maneuver frozen |
-| **SPC (this paper)** | **91.2%** | 3.90 | gates G1–G4 PASS; hit 99.9% |
+**Setting (all arms identical):** d=0, deterministic masked argmax, geometry U(0,60), **seeds 20000–20399 (n=400)**, one code path (`eval_bc_1v1.py`), identity recorded in each file's `run_meta` (BC `sha256 aad05b45…`, SPC `sha256 36d79bd9…`).
 
-- **Fire-only intervention effect: 43.2% → 91.2% = +48.0 pp**, with `lost = 0` and `bad = 0` in all suites.
-- **Report it bound to its conditions, never as a bare improvement.** The sentence to use is: *"Under a matched d=0, deterministic-argmax evaluation, replacing the conservative launch decision with SPC raises the kill rate from 43.2% to 91.2%."* Not: *"SPC improves performance by 48 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing: they are the reason the attribution is legitimate.
-- **Significance test**: the +48 pp figure is currently a point estimate. `scripts/paired_mcnemar.py` produces the paired exact McNemar test on shared seeds (E7). The abstract must not state +48 pp without the accompanying n and p.
-- SPC lands within **0.6 pp of the rule oracle** (91.2% vs 90.6%) without being told the rule — the learned head reproduces the ceiling.
-- Heading/speed behaviour is bit-identical to BC by construction (G1: `max diff < 1e-9`; G2: sequences identical), so the entire gain is attributable to the launch head.
-- Single-seed detail: `eval_distilled_d0_s42.json` (n=100, s42) → kill 87/100, hit 0.9974, launches 3.85, `lost_after_wez = 0`, launch quality `premium 218 / good 167 / bad 0` (i.e. the corrected policy does **not** trade shot quality for quantity — every launch still scores good-or-better under the expert's own quality function).
+| Arm | Kill rate | Wilson 95% | Launches/ep | CLR | lost | hit |
+|---|---|---|---|---|---|---|
+| **BC round1 (frozen)** | **186/400 = 46.50%** | [41.67, 51.40] | 3.06 | 7.26% | 0 | 1.00 |
+| **SPC (this paper)** | **363/400 = 90.75%** | [87.51, 93.21] | 3.90 | 100.00% | 0 | 1.00 |
 
-> **Artifact status:** `paired_bc_vs_expert_500.json` and `asap_baseline.json` are **GONE** (gitignored). Table transcribed from `docs/summary_phase1.md` §2/§4. **Must be regenerated.** `scripts/eval_paired_bc_vs_expert.py` and `scripts/eval_asap_baseline.py` survive.
+**Paired contingency and test** (`scripts/paired_mcnemar.py`, exact McNemar, no scipy):
+
+| | count |
+|---|---|
+| both kill | 186 |
+| neither kill | 37 |
+| **only SPC kills** | **177** |
+| **only BC kills** | **0** |
+| discordant total | 177 |
+
+- **Paired difference +44.25 pp**; exact McNemar **p = 1.04e-53** (χ² with continuity correction p = 5.97e-40).
+- **The direction is unanimous: all 177 discordant seeds favour the correction; there is no seed where BC succeeds and SPC fails.** This is stronger than a small p-value — it is a *dominance* statement over the evaluated scenario set, and it is the cleanest single number in the paper.
+- `lost_target = 0` and `launch_quality.bad = 0` in both arms — the corrected policy does **not** buy kills with reckless launches: premium 921 / good 639 / bad 0, i.e. **every** SPC launch still scores "good-or-better" under the expert's own quality function.
+- Heading/speed behaviour is bit-identical to BC by construction (G1 `max diff < 1e-9`; G2 identical action sequences), so the entire gain is attributable to the launch head alone.
+
+**Report it bound to its conditions, never as a bare improvement.** Use: *"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the conservative launch decision with SPC raises the kill rate from 46.5% to 90.8% (+44.3 pp, exact McNemar p ≈ 1e-53)."* Not: *"SPC improves performance by 44 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing — they are *why* the attribution is legitimate.
+
+> **Artifact status.** E7 is **verified against live artifacts** (`results/shoot_eval/E7_{bc_round1,spc}_d0_n400_s20000.json`, `E7_paired_bc_vs_spc_d0_n400.json`).
+>
+> **⚠ Superseded numbers.** The docs-attested Phase-1 pair **43.2% → 91.2% = +48.0 pp** (500 seeds, *old* geometry U(30,60)) is **replaced** by the measured **46.50% → 90.75% = +44.25 pp** (400 seeds, U(0,60)). The old pair was not self-consistent: its BC figure came from a different geometry generation than its CLR figure. E7 puts kill rate, CLR, and geometry on **one** seed set. Cite 46.50 / 90.75 / +44.25 in the paper.
+>
+> Still **docs-only and to be regenerated if used**: the rule-expert ID kill rate (35.8%) and the ASAP rule-oracle ID kill rate (90.6%) — `paired_bc_vs_expert_500.json` / `asap_baseline.json` are gone. The SPC-vs-oracle comparison (90.75% vs 90.6%) currently spans two evaluations and should be re-measured on one seed set before being asserted in print.
 
 ### 4.5 Robustness A — widened initial-geometry (heading bias)
 
@@ -275,7 +298,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 - Integrate into the hierarchical tactical architecture planned for the thesis.
 
 ### 5.4 Claim statement (exact wording to use)
-> We do **not** claim that always-launching is optimal. We claim that **a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime**: with the maneuver policy provably frozen (`max logit diff < 1e-9`, identical action sequences), correcting the launch head alone raises the kill rate from 43.2% to 91.2% on 500 paired seeds, and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by every-launch-when-legal within the enumerated fire-policy family.
+> We do **not** claim that always-launching is optimal. We claim that **a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime**: with the maneuver policy provably frozen (`max logit diff < 1e-9`, identical action sequences), correcting the launch head alone raises the kill rate from 46.50% to 90.75% on 400 paired seeds (+44.25 pp, exact McNemar p = 1.04e-53, with all 177 discordant seeds favouring the correction and none favouring the original), and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by every-launch-when-legal within the enumerated fire-policy family.
 
 ---
 
@@ -285,6 +308,12 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 
 | Metric | Value | Artifact |
 |---|---|---|
+| **E7: BC kill rate** | **186/400 = 46.50%** (Wilson [41.67, 51.40]) | `results/shoot_eval/E7_bc_round1_d0_n400_s20000.json` |
+| **E7: SPC kill rate** | **363/400 = 90.75%** (Wilson [87.51, 93.21]) | `results/shoot_eval/E7_spc_d0_n400_s20000.json` |
+| **E7: paired diff / p / discordant** | **+44.25 pp / 1.04e-53 / 177:0** | `results/shoot_eval/E7_paired_bc_vs_spc_d0_n400.json` |
+| **E7: BC CLR** | 7.26% (1223/16839) | same |
+| **E7: SPC CLR** | 100.00% (1560/1560) — by construction | same |
+| E7 identity | BC `sha256 aad05b45…`, SPC `sha256 36d79bd9…`, geometry U(0,60), d=0, argmax | `run_meta` in each file |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
@@ -300,13 +329,13 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 | Metric | Value | Doc source | Regenerating script |
 |---|---|---|---|
 | Expert ID kill | 35.8% | `docs/summary_phase1.md` §2 | `eval_paired_bc_vs_expert.py` |
-| BC ID kill | 43.2% (Δ+7.4 pp, CI [+3.8,+11.0]) | same | same |
+| ~~BC ID kill~~ | ~~43.2%~~ → **use 46.50%** (E7) | superseded | — |
 | ASAP rule oracle ID kill | 90.6% | same | `eval_asap_baseline.py` |
-| SPC ID kill | 91.2% | same | `eval_bc_1v1.py` |
+| ~~SPC ID kill~~ | ~~91.2%~~ → **use 90.75%** (E7) | superseded | — |
 | Fire-policy oracle table (§4.3) | asap 73.3% … BC 6.7% | `docs/plan_bc_rule_expert.md` §"dist2_3k fire oracle" | `fire_oracle_audit.py` |
 | dist2_3k: BC / ASAP / SPC | 6.7% / 74% / 77% | `docs/summary_phase1.md` §2 | `eval_scenario_matrix.py` |
 
-**Not yet measured:** d=0.3 statistics for any policy; paired BC-vs-SPC McNemar at n≥400; multi-seed-family extrapolation.
+**Not yet measured:** d=0.3 statistics for any policy (E5); SPC vs rule oracle on a single shared seed set; multi-seed-family extrapolation (seeds 42–441 and 20000–20399 are each a single family; see §4.5 caveat 1).
 
 ---
 
@@ -332,7 +361,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 
 | Step | Command (WSL Ubuntu shell) | Cost | Status |
 |---|---|---|---|
-| **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈2–3 h | **RUNNING** (n=400, seeds 20000–20399) |
+| **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈2–3 h | pending E7 |
 | **E6** | `fire_oracle_audit.py --cell target_evasive ...` | ≈1 h | **interface unverified** — Sean's call: dry-run/接口确认 only, do not spend GPU time yet |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈1 h | pending |
@@ -342,7 +371,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 
 **Scope decision (Sean):** only artifacts that enter the paper or its supplement get regenerated. Scenario-matrix and stress suites are dropped unless a reviewer asks.
 
-**Note:** BC's CLR (7.37%, measured under the *current* U(0,60) geometry) and BC's kill rate (43.2%, from the sealed Phase-1 record under the *old* U(30,60) geometry) came from different geometry generations. **E7 resolves this** by putting kill rate, CLR, and geometry on one seed set (seeds 20000–20399, U(0,60)). Treat the 43.2%/91.2% pair as *provisional* until E7 reports.
+**Note:** BC's CLR (7.37%, measured under the *current* U(0,60) geometry) and BC's kill rate (43.2%, from the sealed Phase-1 record under the *old* U(30,60) geometry) came from different geometry generations. **E7 resolved this**: kill rate, CLR, and geometry now all sit on seeds 20000–20399 under U(0,60) — see §4.4. The 43.2%/91.2% pair is **superseded**; use 46.50%/90.75%.
 
 
 ---
@@ -359,12 +388,13 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 ## 9. TODO Before Submission
 
 **Integrity prerequisites**
-- [ ] **E7**: paired McNemar BC vs SPC at n=400 — *running*; the headline +48 pp currently has no significance test
-- [ ] **E5**: d=0.3 for expert / BC / SPC on the shared seed set
+- [x] **E7**: paired McNemar BC vs SPC at n=400 — **DONE**, +44.25 pp, p=1.04e-53, discordant 177:0
+- [ ] **E5**: d=0.3 for expert / BC / SPC on the shared seed set (20000–20399)
 - [ ] Regenerate the lost JSON artifacts that enter the paper (E1 oracle, E2 rule-oracle, E3 paired baseline)
-- [ ] Reconcile BC's CLR geometry (U(0,60)) with BC's kill-rate geometry (U(30,60)) — E7 does this
+- [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
 - [x] Expert seed-pairing patch (`run_one(seed=...)`) — previously impossible
+- [ ] **Re-measure the SPC-vs-rule-oracle comparison on one seed set** (currently 90.75% vs the docs-only 90.6% from a different evaluation)
 
 **Content**
 - [ ] **Related Work §2.2 is a stub** — needs 5–10 *real* citations on imitation from suboptimal demonstrations / expert conservatism. Do not submit with placeholders.
