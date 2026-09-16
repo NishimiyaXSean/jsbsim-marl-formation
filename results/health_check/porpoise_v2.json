@@ -1,0 +1,112 @@
+{
+  "seconds": 30,
+  "seed": 42,
+  "patterns": {
+    "hold_hdg": {
+      "n_steps": 1000,
+      "ran_full_seconds": false,
+      "termination_reason": "timeout",
+      "initial_state": {
+        "pitch": 0.005693114168783672,
+        "roll": -0.00015366563951476725,
+        "alt": 2996.452075480405,
+        "spd": 207.02367524707088,
+        "hdg": 0.0
+      },
+      "pitch_pp_deg": 3.224151141328528,
+      "pitch_std_deg": 0.35472398055847376,
+      "pitch_osc_hz": 2.25,
+      "alt_pp_m": 16.65967757048611,
+      "alt_std_m": 3.095935854960631,
+      "alt_osc_hz": 0.03,
+      "spd_pp_mps": 79.69880249325618,
+      "hdg_pp_deg": 0.0,
+      "verdict": "PARTIAL: terminated at step 1000 with reason 'timeout'"
+    },
+    "slight_left": {
+      "n_steps": 1000,
+      "ran_full_seconds": false,
+      "termination_reason": "timeout",
+      "initial_state": {
+        "pitch": -0.039570649490255926,
+        "roll": -3.889397749914368,
+        "alt": 2996.542457184264,
+        "spd": 206.81569035299557,
+        "hdg": 0.0
+      },
+      "pitch_pp_deg": 3.5483884530962237,
+      "pitch_std_deg": 0.35352330539115123,
+      "pitch_osc_hz": 3.7199999999999998,
+      "alt_pp_m": 16.89414060514582,
+      "alt_std_m": 2.9092922005672848,
+      "alt_osc_hz": 0.06,
+      "spd_pp_mps": 80.72044006826835,
+      "hdg_pp_deg": 0.0,
+      "verdict": "PARTIAL: terminated at step 1000 with reason 'timeout'"
+    },
+    "slight_right": {
+      "n_steps": 1000,
+      "ran_full_seconds": false,
+      "termination_reason": "timeout",
+      "initial_state": {
+        "pitch": 0.03818875874210211,
+        "roll": 3.886106623715769,
+        "alt": 2996.3612229738414,
+        "spd": 207.22504492227145,
+        "hdg": 0.0
+      },
+      "pitch_pp_deg": 3.1062046880080856,
+      "pitch_std_deg": 0.3710312206472106,
+      "pitch_osc_hz": 1.95,
+      "alt_pp_m": 15.216127677842906,
+      "alt_std_m": 3.0794720671199665,
+      "alt_osc_hz": 0.03,
+      "spd_pp_mps": 80.9543296191869,
+      "hdg_pp_deg": 0.0,
+      "verdict": "PARTIAL: terminated at step 1000 with reason 'timeout'"
+    },
+    "left": {
+      "n_steps": 1000,
+      "ran_full_seconds": false,
+      "termination_reason": "timeout",
+      "initial_state": {
+        "pitch": -0.05254987949502324,
+        "roll": -5.539965336188063,
+        "alt": 2996.5716503242224,
+        "spd": 206.61713700244513,
+        "hdg": 0.0
+      },
+      "pitch_pp_deg": 4.041035196583953,
+      "pitch_std_deg": 0.40779987909777315,
+      "pitch_osc_hz": 6.42,
+      "alt_pp_m": 16.4704693975209,
+      "alt_std_m": 2.977788793241886,
+      "alt_osc_hz": 0.06,
+      "spd_pp_mps": 80.4699191896994,
+      "hdg_pp_deg": 0.0,
+      "verdict": "PARTIAL: terminated at step 1000 with reason 'timeout'"
+    },
+    "right": {
+      "n_steps": 1000,
+      "ran_full_seconds": false,
+      "termination_reason": "timeout",
+      "initial_state": {
+        "pitch": 0.03256160834063024,
+        "roll": 5.545329732776769,
+        "alt": 2996.332240095395,
+        "spd": 207.42106266876596,
+        "hdg": 0.0
+      },
+      "pitch_pp_deg": 4.64671318545826,
+      "pitch_std_deg": 0.3838228809470078,
+      "pitch_osc_hz": 6.1499999999999995,
+      "alt_pp_m": 15.525205531507709,
+      "alt_std_m": 2.819433655998484,
+      "alt_osc_hz": 0.03,
+      "spd_pp_mps": 80.2201299978064,
+      "hdg_pp_deg": 0.0,
+      "verdict": "PARTIAL: terminated at step 1000 with reason 'timeout'"
+    }
+  },
+  "overall": "ALL_TERMINATED (5 patterns ended early)"
+}

@@ -1,0 +1,19 @@
+{
+  "bc_hesi_rate": 0.9262639606100637,
+  "bc_fire_rate_on_allowed": 0.07373603938993635,
+  "bc_allowed_steps": 8327,
+  "bc_fire_steps": 614,
+  "bc_episodes": 200,
+  "bc_mean_ep_len": 1242.36,
+  "expert": {
+    "n_allowed": 9395,
+    "n_fire": 560,
+    "fire_rate_on_allowed": 0.05960617349654071,
+    "n_fire_desired_on_allowed": 560,
+    "n_disallowed": 256357,
+    "n_fire_desired_on_disallowed": 10336,
+    "fire_desired_disallowed_rate": 0.040318774209403295
+  },
+  "verdict": "EXPERT_PATHOLOGY: BC inherits expert hesi tancy; ASAP recovers it",
+  "action": "ANGLE A REVISED \u2014 frame as 'expert suboptimality' not 'BC pathology'"
+}
