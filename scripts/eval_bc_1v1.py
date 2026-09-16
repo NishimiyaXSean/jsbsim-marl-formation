@@ -114,6 +114,15 @@ def main():
                              "Do NOT rely on the output filename: pass e.g. "
                              "'bc_round1' or 'spc_distilled'.")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--resume", action="store_true",
+                        help="If --out already exists, skip the seeds recorded in "
+                             "it and continue. Aborts if weights/difficulty/"
+                             "action_mode differ from the existing file.")
+    parser.add_argument("--checkpoint-every", type=int, default=1,
+                        help="Write a partial result every N episodes (default 1). "
+                             "Long evaluations must survive a shutdown or kill; a "
+                             "1.8 h run with no mid-run dump is one Ctrl-C from "
+                             "losing everything.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") \
@@ -138,14 +147,140 @@ def main():
     lost_after_wez = 0
     wez_reached = 0
 
+    # ── Resume support ─────────────────────────────────────────────────────
+    # Long runs must be interruptible. Previously the result JSON was written
+    # only after the final episode, so shutting the machine down mid-run
+    # discarded all of it.
+    done_seeds = set()
+    if args.resume:
+        if not os.path.exists(args.out):
+            print(f"[resume] {args.out} does not exist; starting from scratch")
+        else:
+            with open(args.out, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+            if prev.get("run_meta", {}).get("complete", True):
+                print(f"[resume] {args.out} is already marked complete; "
+                      f"nothing to do. Delete it to force a rerun.")
+                return
+            pmeta = prev.get("run_meta", {})
+            for key, now in (("checkpoint", args.weights),
+                             ("difficulty", args.difficulty),
+                             ("action_mode", "argmax")):
+                if pmeta.get(key) != now:
+                    print(f"[FATAL] --resume: {key} differs from the existing file "
+                          f"(existing={pmeta.get(key)!r}, requested={now!r}); "
+                          f"refusing to merge runs.")
+                    sys.exit(2)
+            acc = prev.get("_accumulators")
+            if acc is None:
+                print("[FATAL] --resume: the existing file has no _accumulators "
+                      "block (it predates checkpointing). Delete it and rerun, or "
+                      "choose a new --out.")
+                sys.exit(2)
+            n_ep = acc["n_ep"]
+            term_reasons = acc["term_reasons"]
+            launches_total = acc["launches_total"]
+            hits_total = acc["hits_total"]
+            kills = acc["kills"]
+            clr_allowed = acc["clr_allowed"]
+            clr_fires = acc["clr_fires"]
+            launch_geo = acc["launch_geo"]
+            quality = acc["quality"]
+            wez_firsts = acc["wez_firsts"]
+            fire_firsts = acc["fire_firsts"]
+            wez_fire_latency = acc["wez_fire_latency"]
+            ata_p90s = acc["ata_p90s"]
+            closure_pos_ratios = acc["closure_pos_ratios"]
+            ep_steps = acc["ep_steps"]
+            ep_detail = acc["ep_detail"]
+            lost_after_wez = acc["lost_after_wez"]
+            wez_reached = acc["wez_reached"]
+            done_seeds = {int(r["seed"]) for r in ep_detail}
+            print(f"[resume] {len(done_seeds)} episodes already recorded; "
+                  f"skipping those seeds")
+
     task_cfg = {
         "difficulty_level": args.difficulty,
         "obs_include_closure": True,
     }
     if args.min_heading_bias_deg is not None:
         task_cfg["min_heading_bias_deg"] = float(args.min_heading_bias_deg)
+    if not args.model_id:
+        print("[warn] --model-id not given; falling back to the checkpoint stem. "
+              "Prefer passing an explicit id (bc_round1 / spc_distilled).")
+
+    def build_out(complete: bool) -> dict:
+        """Assemble the result document from the current accumulators."""
+        n = max(n_ep, 1)
+        meta = build_run_meta(
+            model_id=args.model_id or "",
+            checkpoint=args.weights,
+            first_seed=args.seed,
+            episodes=args.episodes,
+            difficulty=args.difficulty,
+            min_heading_bias_deg=args.min_heading_bias_deg,
+            action_mode="argmax",
+            script="scripts/eval_bc_1v1.py",
+        )
+        meta["complete"] = bool(complete)
+        meta["episodes_completed"] = int(n_ep)
+        return {
+            "run_meta": meta,
+            "weights": args.weights,
+            "episodes": n_ep,
+            "difficulty": args.difficulty,
+            "termination_reasons": term_reasons,
+            "lost_target_rate": term_reasons.get("lost_target", 0) / n,
+            "kill_rate": kills / n,
+            "launches_per_episode": launches_total / n,
+            "hits": hits_total,
+            "hit_rate": hits_total / max(launches_total, 1),
+            "launch_geometry": {k: summarize(v) for k, v in launch_geo.items()},
+            "launch_quality": quality,
+            "wez_reach_rate": wez_reached / n,
+            "time_to_wez_steps": summarize(wez_firsts),
+            "first_fire_steps": summarize(fire_firsts),
+            "wez_to_fire_latency_steps": summarize(wez_fire_latency),
+            "ata_p90": float(np.mean(ata_p90s)) if ata_p90s else 0.0,
+            "closure_positive_ratio": (float(np.mean(closure_pos_ratios))
+                                       if closure_pos_ratios else 0.0),
+            "lost_after_wez": lost_after_wez,
+            "mean_steps": float(np.mean(ep_steps)) if ep_steps else 0.0,
+            "seed": args.seed,
+            "min_heading_bias_deg": args.min_heading_bias_deg,
+            "clr": (clr_fires / clr_allowed) if clr_allowed else float("nan"),
+            "clr_allowed_steps": clr_allowed,
+            "clr_fire_commands": clr_fires,
+            "episodes_detail": ep_detail,
+        }
+
+    def save(complete: bool) -> dict:
+        """Atomically write the result; keep accumulator state while incomplete."""
+        out = build_out(complete)
+        if not complete:
+            out["_accumulators"] = {
+                "n_ep": n_ep, "term_reasons": term_reasons,
+                "launches_total": launches_total, "hits_total": hits_total,
+                "kills": kills, "clr_allowed": clr_allowed, "clr_fires": clr_fires,
+                "launch_geo": launch_geo, "quality": quality,
+                "wez_firsts": wez_firsts, "fire_firsts": fire_firsts,
+                "wez_fire_latency": wez_fire_latency, "ata_p90s": ata_p90s,
+                "closure_pos_ratios": closure_pos_ratios, "ep_steps": ep_steps,
+                "ep_detail": ep_detail, "lost_after_wez": lost_after_wez,
+                "wez_reached": wez_reached,
+            }
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        # Write-then-rename: a kill during the write can never leave a
+        # half-written JSON that --resume would then refuse to parse.
+        tmp = args.out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+        os.replace(tmp, args.out)
+        return out
 
     for ep in range(args.episodes):
+        if (args.seed + ep) in done_seeds:
+            continue  # already recorded by a previous, interrupted run
         env = BaseEnv(task=SingleCombatShootTask(dict(task_cfg)))
         obs, _ = env.reset(seed=args.seed + ep)
         # Signed initial heading offset (pursuer minus target), deg in [-180, 180).
@@ -224,55 +359,14 @@ def main():
         })
         n_ep += 1
         env.close()
-        if (ep + 1) % 10 == 0:
-            print(f"  ep {ep+1}/{args.episodes} done")
+        if args.checkpoint_every > 0 and n_ep % args.checkpoint_every == 0:
+            save(complete=False)
+        if n_ep % 10 == 0:
+            print(f"  ep {n_ep}/{args.episodes} done")
 
     n = max(n_ep, 1)
     clr = (clr_fires / clr_allowed) if clr_allowed else float("nan")
-    if not args.model_id:
-        print("[warn] --model-id not given; falling back to the checkpoint stem. "
-              "Prefer passing an explicit id (bc_round1 / spc_distilled).")
-    run_meta = build_run_meta(
-        model_id=args.model_id or "",
-        checkpoint=args.weights,
-        first_seed=args.seed,
-        episodes=n_ep,
-        difficulty=args.difficulty,
-        min_heading_bias_deg=args.min_heading_bias_deg,
-        action_mode="argmax",
-        script="scripts/eval_bc_1v1.py",
-    )
-    out = {
-        "run_meta": run_meta,
-        "weights": args.weights,
-        "episodes": n_ep,
-        "difficulty": args.difficulty,
-        "termination_reasons": term_reasons,
-        "lost_target_rate": term_reasons.get("lost_target", 0) / n,
-        "kill_rate": kills / n,
-        "launches_per_episode": launches_total / n,
-        "hits": hits_total,
-        "hit_rate": hits_total / max(launches_total, 1),
-        "launch_geometry": {k: summarize(v) for k, v in launch_geo.items()},
-        "launch_quality": quality,
-        "wez_reach_rate": wez_reached / n,
-        "time_to_wez_steps": summarize(wez_firsts),
-        "first_fire_steps": summarize(fire_firsts),
-        "wez_to_fire_latency_steps": summarize(wez_fire_latency),
-        "ata_p90": float(np.mean(ata_p90s)),
-        "closure_positive_ratio": float(np.mean(closure_pos_ratios)),
-        "lost_after_wez": lost_after_wez,
-        "mean_steps": float(np.mean(ep_steps)),
-        "seed": args.seed,
-        "min_heading_bias_deg": args.min_heading_bias_deg,
-        "clr": clr,
-        "clr_allowed_steps": clr_allowed,
-        "clr_fire_commands": clr_fires,
-        "episodes_detail": ep_detail,
-    }
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
+    out = save(complete=True)
 
     print("=" * 66)
     print(f"BC CLOSED-LOOP EVAL — {n_ep} episodes, difficulty={args.difficulty}")
