@@ -50,3 +50,12 @@ logs/
 # Regenerable speed-teacher dataset (S3)
 data/expert/speed_teacher_data*.npz
 
+# Thesis tracker (local progress log, regenerable from conversation history)
+THESIS_TRACKER.md
+
+# Project health check plan (operational, regenerable from conversation history)
+HEALTH_CHECK_PLAN.md
+
+# Transient evaluation run logs (the JSON results are the durable artifact)
+results/shoot_eval/*.log
+

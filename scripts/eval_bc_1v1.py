@@ -31,8 +31,13 @@ from src.environment.base_env import BaseEnv
 from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 from src.models.shoot_mask_model import ShootMaskModel
 from scripts.train_shoot_bc import BCShootPolicy, ACTION_DIMS, MASK_NEG
+from scripts.eval_meta import build_run_meta
 
 MAX_STEPS = 1500
+
+# Flat action-mask layout is [speed(3), heading(5), altitude(1), fire(2)].
+# Fire occupies the last two slots; index 10 is the "launch" branch.
+FIRE_IDX = 3 + 5 + 1 + 1  # 10
 
 
 def compute_forward_vector(rpy_rad):
@@ -104,6 +109,10 @@ def main():
                              "(deg). None keeps the default U(0, 60); pass 30 to "
                              "reproduce the pre-fb48155 geometry U(30, 60).")
     parser.add_argument("--out", default="results/shoot_eval/eval_bc_round1.json")
+    parser.add_argument("--model-id", default=None,
+                        help="Explicit policy identifier written into run_meta. "
+                             "Do NOT rely on the output filename: pass e.g. "
+                             "'bc_round1' or 'spc_distilled'.")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
@@ -119,6 +128,8 @@ def main():
     n_ep = 0
     term_reasons = {}
     launches_total = hits_total = kills = 0
+    # Conditional Launch Rate accumulators: CLR = P(a_fire=1 | m_fire=1)
+    clr_allowed = clr_fires = 0
     launch_geo = {"range_m": [], "ata_deg": [], "aa_deg": [], "closure_mps": []}
     quality = {"bad": 0, "good": 0, "premium": 0}
     wez_firsts, fire_firsts, wez_fire_latency = [], [], []
@@ -144,9 +155,18 @@ def main():
         reason = "timeout"
         wez_first = fire_first = None
         ep_launches = ep_hits = 0
+        ep_allowed = ep_fires = 0
         ata_hist, closure_hist = [], []
         for step in range(MAX_STEPS):
+            # CLR is measured against the environment legality mask, read on the
+            # same state the action is chosen from. get_action_mask is a pure
+            # function of the current state, so this is exact.
+            mask = env.task.get_action_mask(env, "p0")
             act = policy_action(model, obs["p0"], device)
+            if mask[FIRE_IDX] == 1.0:
+                ep_allowed += 1
+                if int(act[3]) == 1:
+                    ep_fires += 1
             obs, rews, terms, truncs, info = env.step({"p0": act})
             ep_hits += env.task._hit_this_step.get("p0", 0)
             g = launch_geometry(env)
@@ -170,6 +190,8 @@ def main():
                 break
         launches_total += ep_launches
         hits_total += ep_hits
+        clr_allowed += ep_allowed
+        clr_fires += ep_fires
         if reason == "target_killed":
             kills += 1
         term_reasons[reason] = term_reasons.get(reason, 0) + 1
@@ -197,6 +219,8 @@ def main():
             "steps": step + 1,
             "wez_first_step": wez_first,
             "fire_first_step": fire_first,
+            "fire_allowed_steps": ep_allowed,
+            "fire_commanded_on_allowed": ep_fires,
         })
         n_ep += 1
         env.close()
@@ -204,7 +228,22 @@ def main():
             print(f"  ep {ep+1}/{args.episodes} done")
 
     n = max(n_ep, 1)
+    clr = (clr_fires / clr_allowed) if clr_allowed else float("nan")
+    if not args.model_id:
+        print("[warn] --model-id not given; falling back to the checkpoint stem. "
+              "Prefer passing an explicit id (bc_round1 / spc_distilled).")
+    run_meta = build_run_meta(
+        model_id=args.model_id or "",
+        checkpoint=args.weights,
+        first_seed=args.seed,
+        episodes=n_ep,
+        difficulty=args.difficulty,
+        min_heading_bias_deg=args.min_heading_bias_deg,
+        action_mode="argmax",
+        script="scripts/eval_bc_1v1.py",
+    )
     out = {
+        "run_meta": run_meta,
         "weights": args.weights,
         "episodes": n_ep,
         "difficulty": args.difficulty,
@@ -226,6 +265,9 @@ def main():
         "mean_steps": float(np.mean(ep_steps)),
         "seed": args.seed,
         "min_heading_bias_deg": args.min_heading_bias_deg,
+        "clr": clr,
+        "clr_allowed_steps": clr_allowed,
+        "clr_fire_commands": clr_fires,
         "episodes_detail": ep_detail,
     }
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -241,6 +283,8 @@ def main():
     print(f"  launches: {launches_total} ({launches_total/n:.2f}/ep)  "
           f"hits: {hits_total} ({hits_total/max(launches_total,1):.2f}/launch)  "
           f"kills: {kills} ({kills/n*100:.1f}%)")
+    print(f"  CLR (fire | allowed): {clr*100:.2f}%  "
+          f"({clr_fires}/{clr_allowed} allowed steps)")
     q = quality
     qn = sum(q.values())
     print(f"  launch quality: premium={q['premium']} good={q['good']} bad={q['bad']} "

@@ -19,7 +19,7 @@ Usage:
   python scripts/generate_shoot_rule_expert.py --episodes 200 --out data/expert/shoot_rule_expert.npz
   python scripts/generate_shoot_rule_expert.py --validate --episodes 100
 """
-import os, sys, math, argparse
+import os, sys, math, json, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['JSBSIM_DEBUG'] = '0'
 import warnings
@@ -34,6 +34,7 @@ from src.dynamics.flight_controller import FlightControlTargets
 from src.dynamics.controller_base import FlightTarget
 from src.dynamics.pid_controller import PIDFlightController
 from src.dynamics.safety_interceptor import SafetyInterceptor
+from scripts.eval_meta import build_run_meta
 
 DELTA_HDG = [-10.0, -5.0, 0.0, 5.0, 10.0]
 DELTA_SPD = [-20.0, 0.0, 20.0]
@@ -131,14 +132,23 @@ def classify_phase(obs, fire_allowed, fire_desired, prev_closure, prev_phase, di
     return 'wez_approach' if ata < 25.0 else 'far_approach'
 
 
-def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
-    """Run the discretized rule for one episode; optionally record data."""
-    obs, _ = env.reset()
+def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0, seed=None):
+    """Run the discretized rule for one episode; optionally record data.
+
+    ``seed`` (added 2026-09-16) makes the expert's episode reproduce a specific
+    scenario. Without it the rule cannot be paired seed-by-seed against BC/SPC,
+    which blocks any paired significance test involving the expert.
+    """
+    if seed is None:
+        obs, _ = env.reset()
+    else:
+        obs, _ = env.reset(seed=seed)
     bias_est = abs(float(obs['p0'][21]) * 180.0)
     prev_closure = None
     prev_phase = 'far_approach'
     dist_history = []
     fired = 0
+    allowed = 0
     hits = 0
     first_fire = None
     wez_first = None
@@ -147,6 +157,8 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
     for step in range(1500):
         mask = env.task.get_action_mask(env, 'p0')
         fire_allowed = mask[FIRE_IDX] == 1.0
+        if fire_allowed:
+            allowed += 1
         desired = fire_desired(obs['p0'])
         fire = 1 if (fire_allowed and desired) else 0
         if fire:
@@ -192,8 +204,10 @@ def run_one(env, p0, t0, cmd_speed, record=None, episode_id=0):
         if terms.get('__all__') or truncs.get('__all__'):
             reason = info.get('p0', {}).get('termination_reason', 'unknown')
             break
-    return {'reason': reason, 'fired': fired, 'wez_first': wez_first,
+    return {'reason': reason, 'fired': fired, 'allowed': allowed,
+            'wez_first': wez_first,
             'hits': hits, 'first_fire': first_fire, 'bias_est': bias_est,
+            'steps': step + 1,
             'ata_p90': float(np.percentile(ata_hist, 90)) if ata_hist else 0.0}
 
 
@@ -205,11 +219,24 @@ def main():
     parser.add_argument('--out', type=str, default='data/expert/shoot_rule_expert.npz')
     parser.add_argument('--validate', action='store_true',
                         help='run the discretized rule closed-loop and report Gate-1 metrics')
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed', type=int, default=42,
+                        help='base seed for --validate (episode e uses seed+e). '
+                             'The data-generation path stays unseeded so that '
+                             'shoot_rule_expert.npz remains reproducible as-is.')
+    parser.add_argument('--out-json', type=str, default=None,
+                        help='with --validate, also write a result JSON '
+                             '(includes run_meta identity block + CLR)')
+    parser.add_argument('--model-id', type=str, default='rule_expert')
+    parser.add_argument('--min-heading-bias-deg', type=float, default=None,
+                        help='Override the task minimum initial heading bias. '
+                             'None keeps the default U(0,60); 30 reproduces '
+                             'the pre-fb48155 geometry U(30,60).')
     args = parser.parse_args()
 
-    env = BaseEnv(task=SingleCombatShootTask({'difficulty_level': args.difficulty,
-                                               'obs_include_closure': True}))
+    task_cfg = {'difficulty_level': args.difficulty, 'obs_include_closure': True}
+    if args.min_heading_bias_deg is not None:
+        task_cfg['min_heading_bias_deg'] = float(args.min_heading_bias_deg)
+    env = BaseEnv(task=SingleCombatShootTask(task_cfg))
     p0, t0 = env.pursuers[0], env.targets[0]
     p0.controller = SafetyInterceptor(PIDFlightController())
 
@@ -217,27 +244,81 @@ def main():
         reasons = {}
         wez_reach = 0
         fired_total = 0
+        allowed_total = 0
+        kills = 0
         ata_p90s = []
         wez_firsts = []
+        ep_detail = []
         n_ep = 0
         for ep in range(args.episodes):
-            r = run_one(env, p0, t0, args.cmd_speed)
+            ep_seed = (args.seed + ep) if args.seed is not None else None
+            r = run_one(env, p0, t0, args.cmd_speed, seed=ep_seed)
             reasons[r['reason']] = reasons.get(r['reason'], 0) + 1
             if r['wez_first'] is not None:
                 wez_reach += 1
                 wez_firsts.append(r['wez_first'])
             fired_total += r['fired']
+            allowed_total += r['allowed']
+            if r['reason'] == 'target_killed':
+                kills += 1
             ata_p90s.append(r['ata_p90'])
+            ep_detail.append({
+                'ep': ep,
+                'seed': ep_seed,
+                'kill': bool(r['reason'] == 'target_killed'),
+                'reason': r['reason'],
+                'launches': r['fired'],
+                'hits': r['hits'],
+                'steps': r['steps'],
+                'wez_first_step': r['wez_first'],
+                'fire_first_step': r['first_fire'],
+                'fire_allowed_steps': r['allowed'],
+                'fire_commanded_on_allowed': r['fired'],
+            })
             n_ep += 1
         lost = reasons.get('lost_target', 0)
+        clr = (fired_total / allowed_total) if allowed_total else float('nan')
         print(f'=== Gate-1 validate: discretized rule, {n_ep} episodes ===')
         print(f'  lost_target: {lost}/{n_ep} ({lost/n_ep*100:.1f}%)')
         print(f'  reasons: {reasons}')
+        print(f'  kills: {kills}/{n_ep} ({kills/n_ep*100:.1f}%)')
         print(f'  WEZ reach: {wez_reach}/{n_ep} ({wez_reach/n_ep*100:.1f}%)')
         if wez_firsts:
             print(f'  first WEZ time: median={np.median(wez_firsts)*0.2:.1f}s')
         print(f'  launches: {fired_total} ({fired_total/n_ep:.2f}/ep)')
+        print(f'  CLR (fire | allowed): {clr*100:.2f}% '
+              f'({fired_total}/{allowed_total} allowed steps)')
         print(f'  ATA p90: median across eps = {np.median(ata_p90s):.1f} deg')
+        if args.out_json:
+            meta = build_run_meta(
+                model_id=args.model_id or 'rule_expert',
+                checkpoint='',
+                first_seed=(args.seed if args.seed is not None else -1),
+                episodes=n_ep,
+                difficulty=args.difficulty,
+                min_heading_bias_deg=args.min_heading_bias_deg,
+                action_mode='argmax',
+                script='scripts/generate_shoot_rule_expert.py --validate',
+            )
+            out = {
+                'run_meta': meta,
+                'policy': 'discrete_rule_expert',
+                'episodes': n_ep,
+                'difficulty': args.difficulty,
+                'termination_reasons': reasons,
+                'lost_target_rate': lost / max(n_ep, 1),
+                'kill_rate': kills / max(n_ep, 1),
+                'wez_reach_rate': wez_reach / max(n_ep, 1),
+                'launches_per_episode': fired_total / max(n_ep, 1),
+                'clr': clr,
+                'clr_allowed_steps': allowed_total,
+                'clr_fire_commands': fired_total,
+                'episodes_detail': ep_detail,
+            }
+            os.makedirs(os.path.dirname(args.out_json) or '.', exist_ok=True)
+            with open(args.out_json, 'w', encoding='utf-8') as f:
+                json.dump(out, f, indent=2)
+            print(f'[saved] {args.out_json}')
         env.close()
         return
 
