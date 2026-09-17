@@ -383,7 +383,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
 | **E2: rule oracle vs SPC, same seeds** | both **363/400 = 90.75%**, launches 3.90, hit 1.0000, lost 0, reasons identical | `results/shoot_eval/E2_asap_oracle_id_n400_s20000.json` vs `E7_spc_*` |
-| **E3: paired BC vs rule expert** | expert **36.75%** (147/400) vs BC **46.50%** (186/400); Δ **+9.75 pp**, W/L/T **63/24/313**, exact McNemar **p = 3.48e-05** | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000.json` |
+| **E3: paired BC vs rule expert** | expert **36.75%** (147/400) vs BC **46.50%** (186/400); Δ **+9.75 pp**, W/L/T **63/24/313**, exact McNemar **p = 3.48e-05** | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v2.json` (has `run_meta` incl. `env_lifecycle`; reproduces the original run bit-for-bit) |
 | **Env-lifecycle confound (expert)** | reused-env expert **32.25%** vs fresh-env expert **36.75%** on identical seeds; per-seed kill vectors differ | `tests/check_expert_path_consistency.sh` |
 | **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
