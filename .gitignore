@@ -56,6 +56,8 @@ results/shoot_eval/*.json
 !results/shoot_eval/E5_*.json
 !results/shoot_eval/E6_*.json
 !results/shoot_eval/E7_*.json
+!results/shoot_eval/mechanism_*.json
+!results/shoot_eval/mechanism_*.png
 # Regenerable rule-expert dataset (scripts/generate_shoot_rule_expert.py --seed 42)
 data/expert/shoot_rule_expert*.npz
 # Generated audit / training logs
