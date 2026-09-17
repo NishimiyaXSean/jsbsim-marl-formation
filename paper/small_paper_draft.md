@@ -12,25 +12,22 @@
 
 ## Title Candidates
 
-**首选**：
-*Diagnosing and Surgically Correcting Conservative Engagement Gating in Imitation-Learned Air Combat Policies*
+**首选（Sean 2026-09-17 定稿方向）**：
+*Diagnosing and Surgically Correcting Conservative Decision Bias in Imitation-Learned Air Combat Policies*
 
 **备选**：
-- *Diagnosing and Surgically Correcting Conservative Engagement Policies in Rule-Based Air Combat Agents*
-- *Conditional Launch Rate: Diagnosing Inherited Conservatism in Imitation-Learned Air Combat Policies*
+- *Surgical Correction of Expert-Induced Decision Bias in Imitation-Learned Air Combat Agents*（更短）
+- *Diagnosing and Surgically Correcting Conservative Engagement Gating in Imitation-Learned Air Combat Policies*（前版，机制词更具体）
 
-> **为什么从「Hidden Suboptimalities…」改掉（2026-09-16 Sean 拍板）**：真正的机制不是泛泛的「隐藏次优」，而是**conservative engagement gating** —— 一个**可定位、有名字、可量化**的设计门。标题直接说出机制，比说出症状更有力。
+> **标题演进记录**：v1 "Hidden Suboptimalities…" → 2026-09-16 Sean 拍板突出机制（conservative engagement gating）→ 2026-09-17 Sean 定稿方向 **conservative decision bias**（比 gating 更通用、比 suboptimality 更具体，且直接呼应论文真正证明的链条：expert-induced bias → diagnosis → correction）。
 >
-> **一处必须注意的归属问题**：Sean 给的版本是「…in Rule-Based Air Combat Agents」。但本文**被修正的对象是 BC 策略，不是规则 agent 本身** —— 规则专家只是偏差的**来源**（诊断靶点），修正发生在模仿出来的策略上。若标题落在 "Rule-Based … Agents"，reviewer 会读成「我们改进了规则专家」，与正文不符。故首选版把对象写成 "Imitation-Learned … Policies"，同时保留 "Conservative Engagement Gating" 这个机制词。备选第 1 条即 Sean 原版，若最终采用需在 §1 显式声明修正对象为模仿策略。
->
-> 定位（AAMAS）：落到 **interacting-agent environments 中 expert-induced policy bias** 这一层，而不是「给 F-16 分类头打了个补丁」。
-> 卖点是：规则专家的**局部**决策规则（一条 DLZ 质量门）在**闭环**对抗中产生**全局**性能损失，且该偏差被模仿学习无损继承 —— 这是 multi-agent / interactive 场景特有的失效模式。
+> 定位（AAMAS）：**interacting-agent environments 中 expert-induced policy bias** 这一层。卖点：规则专家的**局部**决策规则（一条比环境合法性更严的发射门）在**闭环**对抗中产生**全局**性能损失，被模仿学习忠实继承 —— 这是 interactive 场景特有的失效模式，且可诊断、可局部修正。
 
 ---
 
 ## Abstract (~170 words)
 
-Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert fires at only **5.96%** of permitted steps, because it applies a launch-quality gate strictly tighter than the environment's legality mask. BC reproduces that gate faithfully (**7.37%**): the defect lies in the teacher's designed decision boundary, not in the imitation, which is behaving as intended. To isolate the cost we freeze the BC maneuver trajectory and enumerate the fire-policy family; firing whenever legal achieves 73.3% kills where the inherited policy achieves 6.7%, and every range- or delay-selective alternative is worse. We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.5% to 90.8%** (**+44.3 pp**, exact McNemar **p ≈ 1e-53**), and SPC climbs to a CLR of exactly **100.0%**. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC's kill rate is **unchanged at 90.8%** while the baseline falls to 42.3%, widening the gap to **+48.5 pp** with all 194 discordant seeds again favouring the correction. We do not claim that launching whenever legal is generally optimal; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
+Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert commands launch at only {{EXPERT_CLR}} of permitted steps; BC reproduces that preference at **7.26%** (400 episodes, fresh env per episode). The cause is a launch-quality gate the expert applies *on top of* the environment's legality condition — a conservative engagement preference the environment does not require, not a deficit in the imitation, which is behaving as intended. Two interventions isolate its cost. **(A)** Holding the BC maneuver trajectory frozen and enumerating fire policies on top of it, a mask-permissive policy (launch whenever the environment-level launch mask permits) achieves **86.7%** kills where the inherited launch policy achieves **15.0%**, and every range- or delay-selective alternative is worse; the maneuver is fixed by construction, so the gap is attributable to the launch decision alone. **(B)** We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.50% to 90.75%** (**+44.25 pp**, exact McNemar **p = 1.04e-53**); SPC's CLR of **100.00%** is true by construction, not a finding. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC is unchanged at **90.75%** while the baseline falls to **42.25%**, widening the gap to **+48.50 pp** with all 194 discordant seeds again favouring the correction. We do not claim that the mask-permissive policy is optimal in general; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
@@ -53,32 +50,47 @@ Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-co
 - Existing BC evaluation reports aggregate task success only; it does not attribute the residual to a specific decision head.
 
 ### 1.3 Contributions
-1. **C1 — Diagnosis.** A cheap, transferable metric: the **Conditional Launch Rate (CLR)**, `P(a_fire=1 | m_fire=1)`. Measured on one matched seed set, the expert sits at **6.04%** (d=0) / **5.43%** (d=0.3) and BC at **7.26%** / **6.95%**, and we localize the cause to a *designed* launch-quality gate strictly tighter than the environment's legality mask (§3.2).
-2. **C2 — Intervention.** **Surgical Policy Correction (SPC)**: re-train a single binary action head toward the environment-legality policy while freezing all other parameters, verified bit-identical by logit and action-sequence gates (§3.3).
-3. **C3 — Causal evidence.** Two independent identifications that the inherited launch policy is suboptimal *conditional on the maneuver*: (a) off-policy enumeration of the fire-policy family on a **frozen** BC maneuver trajectory (§4.3), and (b) the SPC intervention with provably frozen maneuver heads (§4.4). The effect holds under an evading, reacting target — and grows (+44.3 → +48.5 pp, §4.6).
+
+> 结构按 Sean 2026-09-17 定型。**第一贡献是诊断，不是性能提升**；叙事主线：*专家含有一个隐藏的、局部但灾难性的决策偏差；BC 忠实复制它；一个局部策略修正即可在不改变机动策略的前提下恢复性能。* 措辞纪律：不说 "expert 很差"，说 *the expert contains a conservative engagement preference that is not required by the environment constraints*（环境允许 ≠ 专家愿意 —— 这正是机制所在）。
+
+1. **C1 — Diagnosis: expert-induced conservative bias, quantified.** 我们引入 **Conditional Launch Rate（CLR）**，`P(a_fire=1 | m_fire=1)` —— 一个无需 oracle、可迁移到任何「离散提交型决策」（发射 / 交接 / 急停 / 变道）的指标 —— 并发现规则专家在环境允许发射的步上只发射约 6%，BC 忠实复现该偏好（约 7%）。我们把原因定位到一个**设计出来的**发射质量门：它严格地比环境合法性掩码更严（§3.2）。这不是专家「能力不足」，而是专家携带了一个**环境并不要求的保守偏好**。⚠ 数字来源纪律：C1 的 expert CLR 必须**只**采用 fresh-env 测量（E3 CLR run，进行中）；reused-env 的 6.04%/5.43% 已剔除，不得回流。
+2. **C2 — Surgical Policy Correction: isolating the behavioral dimension responsible.** SPC 重训**单个二值动作头**使其对齐环境合法性策略，**冻结其余一切参数**，并以 logit 与动作序列双门验证冻结的逐比特性（§3.3）。方法论要点不是「只训一个 head」这个实现细节，而是 **isolate the behavioral dimension responsible for the failure**：轨迹保持不变、修正局部化。没有这个隔离，「你只是 fine-tune」的质疑就无法反驳。
+3. **C3 — Causal validation: two interventions, one conclusion.** 两个互补的因果论证（§4.3, §4.4）：
+   - **Intervention A（frozen-trajectory oracle replacement）**：15.0% → 86.7% —— *the fire decision alone can explain the performance gap*；
+   - **Intervention B（SPC training）**：46.50% → 90.75%（配对，177:0，p≈1e-53）—— *the correction can be internalized into the policy*。
+   - 效果在规避目标下保持并扩大（+44.25 → +48.50 pp），且被一套独立的识别方法复现（§4.3 E6 matched 2×2：+40.0 → +50.0 pp）。
+
+**叙事结构**（正文按此展开，比普通 ablation 高一层）：
+```
+Observation（CLR 异常低）
+   → Where is the failure? → 冻结轨迹干预 ⇒ 发射决策是因果因素
+   → Can the policy be repaired? → SPC ⇒ 修正可被内化进策略
+```
 
 ---
 
 ## 2. Related Work (1 page)
 
-### 2.1 Behavior cloning for air combat
-- [Pope et al. 2021] hierarchical action decomposition for BFM
-- [Yang et al. 2022] BC + self-play for UCAV maneuvering
-- [Pang et al. 2024] BC from a rule-based expert + RL fine-tuning
-- 待补：BC 在 safety-critical control 中「继承专家缺陷」的既有讨论（若有，必须引用并说明差异）
+> 结构按 Sean 2026-09-17 拍板：**三个关键词，不堆 RL 文献**。本文不是 air-combat RL 论文，related work 必须服务三个贡献（诊断 / 局部修正 / 因果验证），不要让 §2 变成 MARL 综述。所有引用标注 `[verify]` 的须在投稿前核对真实性 —— **宁可留空也不编造**。
 
-### 2.2 Expert suboptimality and its diagnosis
-- 既有的 imitation-vs-expert gap 工作多聚焦 **distribution shift**（DAgger 系）或 **compounding error**；
-- 本文不同：误差**不来自纠缠**，而来自**专家自身的一个可定位的判断门**，且被无损复制。
-- 待补 3–5 篇：reward misspecification / expert conservatism / "imitation of suboptimal demonstrations"。
+### 2.1 Imitation learning and expert demonstration
 
-### 2.3 Knowledge distillation & head-only fine-tuning
-- Hinton et al. 2015 通用 teacher–student；
-- Policy distillation: Rusu et al. 2016 (DQN→DQN), Parisotto et al. 2020 (Actor-Learner Distillation)；
-- 本文的 SPC 与 policy distillation 的区别：**目标不是逼近 teacher**，而是**有选择地偏离 teacher 的一个 head**，并以「其余部分逐比特冻结」作为因果识别手段。这是方法学上的关键差异，务必在正文写清。
+- 行为克隆的经典脉络：ALVINN [Pomerleau 1989, verify]、大规模 BC [Bojarski et al. 2016, verify]、以及 distribution shift 与 compounding error 的标准治疗 DAgger [Ross et al. 2011, verify]。
+- **核心句**：*Existing IL methods usually assume the demonstrations are informative and near-optimal; the learner's objective is fidelity to the expert.*
+- 我们的 gap：*what if the expert itself carries a designed-in conservative bias?* 已有 suboptimal-demonstration 工作（如 preference-based reward learning 一系 T-REX [Brown et al. 2019, verify]、imitation from suboptimal data）多把「次优」当**标量质量**处理；我们把次优**定位到一个可命名的决策门**并给出针对性修正。
+- 2 篇待补：IL 里「专家缺陷被继承」的明确讨论（若存在，必须引并说明差异）。
 
-### 2.4 Benchmarks
-- JSBSim 系空战仿真；SMAC / PettingZoo（协同 MARL 基准，作对照说明本文是 1v1 对抗）
+### 2.2 Policy distillation and model editing
+
+- Policy distillation [Rusu et al. 2015, verify]、Actor-Learner/Atari distillation [Parisotto et al., verify]、teacher-student 范式 [Hinton et al. 2015, verify]。
+- Parameter-efficient adaptation：LoRA [Hu et al. 2021, verify] 等——改少数参数、保其余冻结。
+- Model editing [Meng et al. 2022 (ROME), verify]：定位并编辑模型中承载特定事实/行为的少数参数。
+- **核心句**：*Existing approaches transfer or modify policies globally; we study localized correction of a single decision dimension, and use the freezing itself as a causal identification device.* —— SPC 与 distillation 的区别务必写清：目标**不是逼近 teacher**，而是**有选择地偏离 teacher 的一个 head**；冻结不是工程便利，是识别策略。
+
+### 2.3 Autonomous air combat decision-making
+
+- JSBSim 系空战仿真 [JSBSim, verify]；BFM/机动决策的分层方法 [Pope et al. 2021, verify]；BC+RL 混合 [Pang et al. 2024, verify]。
+- **约束**：这一节不超过半页。它是场景定位，不是贡献定位 —— reviewer 应该从 §2.1/§2.2 进入本文，而不是把它归类为「又一篇空战 RL」。
 
 ---
 
@@ -169,12 +181,12 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | BC round1 (E5 seed set, 400 ep, d=0.3) | 17169 | 1194 | **6.95%** |
 | **SPC (E7 seed set, 400 ep, d=0)** | 1560 | 1560 | **100.00%** |
 | SPC (E5 seed set, 400 ep, d=0.3) | 1577 | 1563 | **99.11%** |
-| Rule oracle (fire = mask) | — | all allowed | 100% (by construction) |
+| Rule oracle (fire whenever the mask permits) | — | all allowed | 100% (by construction) |
 
 **BC and SPC rows are safe**: both come from `eval_bc_1v1.py`, which builds a fresh env per episode. **The expert CLR rows are excluded** — they come from the reused-env path (§4.4 note). Producing a comparable expert CLR requires the paired script to compute CLR, which it does not; that is an open gap, not a measurement to substitute. The claim "expert is the most launch-conservative, then BC, then SPC" therefore currently rests on one excluded leg and must be re-derived before it is asserted.
 
 Two readings:
-1. Expert and BC agree closely across two independent evaluations (5.96% vs 7.37% / 7.26%), so the conservatism is a **stable property**, not sampling noise. BC is not "more broken" than the expert — it reproduces the gate and adds a little variance.
+1. Expert and BC agree closely across two independent evaluations (5.96% vs 7.37% / 7.26%), so the conservatism is a **stable property**, not sampling noise. BC is not more conservative than the teacher in any meaningful sense — it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
 2. **Neither figure alone proves suboptimality.** A low CLR diagnoses *conservatism* only; whether that conservatism is *costly* is established separately (§4.3, §4.4).
 
 > **⚠ Two caveats that must appear in the paper (both are reviewer-attack surfaces).**
@@ -191,7 +203,7 @@ Two readings:
 
 | Fire policy | Kill rate (measured) | *docs, old geom U(30,60)* | Launches/ep | Reach-4-launch |
 |---|---|---|---|---|
-| **`asap` — fire whenever legal** | **86.7%** | *73.3%* | 3.85 | 86.7% |
+| **`asap` — fire whenever the launch mask permits** | **86.7%** | *73.3%* | 3.85 | 86.7% |
 | `delay_30` (first legal + 30) | 38.3% | *28.3%* | 3.25 | 38.3% |
 | `delay_60` | 10.0% | *10.0%* | 2.78 | 10.0% |
 | `dlz_mid` (depth 0.4–0.6) | 0.0% | *0.0%* | 1.27 | 0.0% |
@@ -206,8 +218,9 @@ Two readings:
 **Reading:**
 - The scenario is **not infeasible** — the environment permits a 4-launch salvo in 86.7% of episodes, and `asap` realizes 86.7% kills.
 - The bottleneck is the launch policy: the inherited policy uses **2.37 of 3.85** available windows, because most windows have DLZ depth < 0.25 and are rejected by `fire_desired`.
-- **Every** selective alternative is worse than fire-whenever-legal, and by a wide margin (best rival `delay_30` at 38.3%). Within this family, on this trajectory class, always-launching dominates.
-- Note what this does and does not show: it establishes suboptimality **conditional on the frozen maneuver**. It does not establish that always-launching is optimal for arbitrary maneuvers of arbitrary policies. (§4.4 supplies the within-policy counterpart.)
+- **Every** selective alternative is worse than the mask-permissive policy, and by a wide margin (best rival `delay_30` at 38.3%). Within this family, on this trajectory class, launching on every mask-permitted step dominates.
+- Note what this does and does not show: it establishes suboptimality **conditional on the frozen maneuver**. It does not establish that the mask-permissive policy is optimal for arbitrary maneuvers of arbitrary policies. (§4.4 supplies the within-policy counterpart.)
+- **Terminology discipline.** The mask-permissive policy is *not* "always fire": it fires only on steps where the environment-level launch mask is 1. The correction removes a gate the expert added *on top of* the environment's legality condition; it does not relax the environment's condition itself.
 
 > **Artifact status:** verified against the live artifact `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` (tracked in git, carries `run_meta` with `cell_config`, geometry, difficulty, seed range and the frozen checkpoint's sha256). The old JSON is genuinely gone; the docs column above is all that survived of it, which is exactly why the regenerated file is now version-controlled.
 
@@ -258,7 +271,7 @@ Three things follow:
 - `lost_target = 0` and `launch_quality.bad = 0` in both arms — the corrected policy does **not** buy kills with reckless launches: premium 921 / good 639 / bad 0, i.e. **every** SPC launch still scores "good-or-better" under the expert's own quality function.
 - Heading/speed behaviour is bit-identical to BC by construction (G1 `max diff < 1e-9`; G2 identical action sequences), so the entire gain is attributable to the launch head alone.
 
-**Report it bound to its conditions, never as a bare improvement.** Use: *"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the conservative launch decision with SPC raises the kill rate from 46.5% to 90.8% (+44.3 pp, exact McNemar p ≈ 1e-53)."* Not: *"SPC improves performance by 44 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing — they are *why* the attribution is legitimate.
+**Report it bound to its conditions, never as a bare improvement.** Use: *"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the conservative launch decision with SPC raises the kill rate from 46.50% to 90.75% (+44.25 pp, exact McNemar p = 1.04e-53)."* Not: *"SPC improves performance by 44 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing — they are *why* the attribution is legitimate.
 
 > **Artifact status.** E7 is **verified against live artifacts** (`results/shoot_eval/E7_{bc_round1,spc}_d0_n400_s20000.json`, `E7_paired_bc_vs_spc_d0_n400.json`).
 >
@@ -355,7 +368,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 ### 5.2 Limitations
 - **1v1 WVR only**; N-vs-N extension is future work (and the thesis's core).
 - **Single expert, single designed gate**: we identify one instance of the failure mode, not its prevalence.
-- **Suboptimality is established conditionally**: on the frozen BC maneuver trajectory (§4.3) and within the frozen-heads intervention (§4.4). We do not claim fire-whenever-legal is optimal in general.
+- **Suboptimality is established conditionally**: on the frozen BC maneuver trajectory (§4.3) and within the frozen-heads intervention (§4.4). We do not claim the mask-permissive policy is optimal in general.
 - **Statistical scope**: the +3.25 pp geometry result is a single seed family and fails a Bonferroni α=0.0125.
 - **Evasion is a single interpolated setting** (`difficulty = 0.3`, one scripted evasion family), not a learned or optimised opponent. "Interactive" here means a reacting scripted target, not an adversary trained against the policy.
 - SPC requires knowing *which* head to correct; automating that (e.g. per-head CLR + ablation ranking) is open.
@@ -363,11 +376,11 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 ### 5.3 Future Work
 - Automate head selection from per-head diagnostics.
 - N-vs-N: per-agent CLR and per-agent surgical correction; does the bias compound with fleet size?
-- Launch *timing* when launch cost/ammo scarcity makes always-firing genuinely suboptimal — the regime where PPO becomes meaningful (project record documents that the current reward admits no such trade-off).
+- Launch *timing* when launch cost/ammo scarcity makes launching on every mask-permitted step genuinely suboptimal — the regime where PPO becomes meaningful (project record documents that the current reward admits no such trade-off).
 - Integrate into the hierarchical tactical architecture planned for the thesis.
 
 ### 5.4 Claim statement (exact wording to use)
-> We do **not** claim that always-launching is optimal. We claim that **a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime**: with the maneuver policy provably frozen (`max logit diff < 1e-9`, identical action sequences), correcting the launch head alone raises the kill rate from 46.50% to 90.75% on 400 paired seeds (+44.25 pp, exact McNemar p = 1.04e-53, with all 177 discordant seeds favouring the correction and none favouring the original), and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by every-launch-when-legal within the enumerated fire-policy family.
+> We do **not** claim that the mask-permissive policy is optimal in general. We claim that **a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime**: with the maneuver policy provably frozen (`max logit diff < 1e-9`, identical action sequences), correcting the launch head alone raises the kill rate from 46.50% to 90.75% on 400 paired seeds (+44.25 pp, exact McNemar p = 1.04e-53, with all 177 discordant seeds favouring the correction and none favouring the original), and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by the mask-permissive policy within the enumerated fire-policy family.
 
 ---
 
