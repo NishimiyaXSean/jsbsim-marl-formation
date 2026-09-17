@@ -5,7 +5,12 @@ cheap way to prove the draft and the artifacts still agree. It reads only the
 JSON artifacts and each file's own run_meta -- never a filename-derived
 assumption about which model produced what.
 
-Run:  python scripts/_audit_paper_numbers.py
+Run:  python scripts/audit_paper_numbers.py
+
+The E3-CLR artifact is optional on purpose: while the fresh-env expert-CLR run
+is still going, the audit stays useful, and the moment the artifact appears two
+extra obligations switch on -- the measured value must be quoted in the draft,
+and the {{EXPERT_CLR}} placeholder must be gone.
 """
 from __future__ import annotations
 
@@ -84,7 +89,8 @@ def main():
             str(d.get("run_meta", {}).get("env_lifecycle", "ABSENT")), fn)
         add("E3 %s expert CLR" % tag,
             ("%.2f%%" % (100 * d["expert"]["clr"])
-             if "clr" in d.get("expert", {}) else "ABSENT (this is the open gap)"), fn)
+             if "clr" in d.get("expert", {})
+             else "ABSENT in this file (see the E3-CLR block below)"), fn)
 
     # --- E1 / E6: frozen-trajectory oracle ----------------------------------
     def oracle_rate(doc, name, art):
@@ -122,6 +128,35 @@ def main():
             add("E2 rule oracle kill", "ABSENT", "E2_asap_oracle_id_n400_s20000.json")
     except Exception as exc:                                  # noqa: BLE001
         add("E2 rule oracle", "UNREADABLE: %s" % exc, "-")
+
+    # --- E3-CLR: the fresh-env expert CLR (the paper's last open gap) --------
+    # Deliberately optional: the run takes ~1.7 h, so the audit must stay
+    # useful while it is in flight. When the artifact lands, two extra
+    # obligations switch on automatically: the measured value must appear in
+    # the draft, and the {{EXPERT_CLR}} placeholder must be gone.
+    expert_clr_pct = None
+    clr_name = "E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json"
+    clr_path = os.path.join(EV, clr_name)
+    if os.path.exists(clr_path):
+        d = load(clr_name)
+        done = bool(d.get("run_meta", {}).get("complete", False))
+        expert_clr_pct = 100.0 * float(d["expert"]["clr"])
+        add("E3-CLR d=0 expert CLR",
+            "%.2f%% (%d/%d)" % (expert_clr_pct, d["expert"]["clr_fire_commands"],
+                                d["expert"]["clr_allowed_steps"]), clr_name)
+        add("E3-CLR d=0 BC CLR",
+            "%.2f%% (%d/%d)" % (100.0 * d["bc"]["clr"], d["bc"]["clr_fire_commands"],
+                                d["bc"]["clr_allowed_steps"]), clr_name)
+        add("E3-CLR d=0 run state",
+            "complete" if done else "IN FLIGHT (%s/%s episodes)"
+            % (d.get("run_meta", {}).get("episodes_completed", "?"),
+               d.get("run_meta", {}).get("n_episodes", "?")), clr_name)
+        if not done:
+            expert_clr_pct = None
+            print("note: %s exists but is not complete; the CLR it reports is "
+                  "partial and must not be cited yet." % clr_name)
+    else:
+        add("E3-CLR d=0 expert CLR", "ABSENT (run in flight or not started)", clr_name)
 
     # --- environment-threshold sanity (should match Appendix B) -------------
     sys.path.insert(0, ROOT)
@@ -164,6 +199,15 @@ def main():
         ("2.5e-65", "TRAP: must be ABSENT (ties passed as discordant)"),
         ("4.4e-65", "TRAP: must be ABSENT (same error, second instance)"),
     ]
+    if expert_clr_pct is not None:
+        # The CLR run is complete, so the draft must now carry its value and
+        # must no longer carry any placeholder for it.
+        checks.append(("%.2f%%" % expert_clr_pct, "E3-CLR expert CLR in text"))
+        checks.append(("{{EXPERT_CLR",
+                       "TRAP: must be ABSENT (placeholder left unfilled)"))
+    else:
+        checks.append(("{{EXPERT_CLR",
+                       "placeholder still expected (CLR run incomplete)"))
     print()
     print("=" * 96)
     print("DRAFT TEXT OCCURRENCE CHECK")
