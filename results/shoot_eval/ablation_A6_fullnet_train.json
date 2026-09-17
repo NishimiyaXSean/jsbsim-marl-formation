@@ -1,0 +1,77 @@
+{
+  "gates": {
+    "hdg_spd_logits_identical": false,
+    "hdg_spd_logits_max_diff": 8.512420654296875,
+    "hdg_spd_sequence_identical": false,
+    "fire_allowed_agreement": true
+  },
+  "comparison": {
+    "bc": {
+      "id": {
+        "kill_rate": 0.4,
+        "lost_rate": 0.0,
+        "launches_per_ep": 3.066666666666667,
+        "reach4_rate": 0.4,
+        "window_utilization": 0.07173489278752436,
+        "bad_total": 0,
+        "hit_rate": 0.9945652173913043
+      },
+      "dist2_3k": {
+        "kill_rate": 0.15,
+        "lost_rate": 0.0,
+        "launches_per_ep": 2.3666666666666667,
+        "reach4_rate": 0.15,
+        "window_utilization": 0.06704438149197356,
+        "bad_total": 0,
+        "hit_rate": 1.0
+      }
+    },
+    "distilled": {
+      "id": {
+        "kill_rate": 0.8166666666666667,
+        "lost_rate": 0.0,
+        "launches_per_ep": 3.783333333333333,
+        "reach4_rate": 0.8166666666666667,
+        "window_utilization": 0.9826839826839827,
+        "bad_total": 0,
+        "hit_rate": 1.0
+      },
+      "dist2_3k": {
+        "kill_rate": 0.6666666666666666,
+        "lost_rate": 0.0,
+        "launches_per_ep": 3.683333333333333,
+        "reach4_rate": 0.6833333333333333,
+        "window_utilization": 1.0,
+        "bad_total": 0,
+        "hit_rate": 0.995475113122172
+      }
+    },
+    "rule": {
+      "id": {
+        "kill_rate": 0.95,
+        "lost_rate": 0.0,
+        "launches_per_ep": 3.933333333333333,
+        "reach4_rate": 0.95,
+        "window_utilization": 1.0,
+        "bad_total": 0,
+        "hit_rate": 0.9957627118644068
+      },
+      "dist2_3k": {
+        "kill_rate": 0.8666666666666667,
+        "lost_rate": 0.0,
+        "launches_per_ep": 3.85,
+        "reach4_rate": 0.8666666666666667,
+        "window_utilization": 1.0,
+        "bad_total": 0,
+        "hit_rate": 1.0
+      }
+    }
+  },
+  "training_mode": "full-network",
+  "full_network": true,
+  "hierarchical_maneuver_deviation": {
+    "hdg_spd_logits_max_diff": 8.512420654296875,
+    "hdg_spd_sequence_identical": false
+  },
+  "best_val_allowed_acc": 0.9966638684272766
+}

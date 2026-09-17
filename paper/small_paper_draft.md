@@ -375,9 +375,30 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
 | A5 | Fire head from random init, encoder frozen | not run | is the BC encoder necessary, or is the mask enough? |
-| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **RUNNING** 2026-09-17 | shows that *freezing* is what buys clean attribution, not the objective |
+| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (60-seed screening) | shows that *freezing* is what buys clean attribution, not the objective |
 
 **A6 protocol (state it, because the fairness objection is obvious).** Identical objective, identical data, identical loss and identical initialisation as SPC; the **only** change is that every parameter is trainable instead of the launch head alone. Budget is set **more generously** than the fire-head-only run (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), specifically so the ablation cannot be dismissed as under-trained. Two measurements decide the question, and they are measured, not asserted: (i) **maneuver deviation** — the heading/speed logit max-diff vs the frozen BC, which the fire-head-only run holds below `1e-9` and which full-network fine-tuning is expected to move; and (ii) **kill rate and CLR under the paper's primary protocol** (d=0, U(0,60), 400 paired seeds), so the result is directly comparable to the 46.50% / 90.75% pair of §4.4. A smoke run already confirms the instrument reads what it should: fire-head-only gives logit diff `<1e-9` and identical action sequences; full-network at a 6-epoch budget gives diff **0.613**, non-identical sequences, and only 22% window utilisation — the maneuver moved *and* the fire head did not finish learning. The gates therefore report `FAIL` in A6 mode **by construction**; the failure is the measurement.
+
+**A6 result — the maneuver moves, and the correction is still worse than doing nothing clever.** Both pre-registered measurements came back on 2026-09-18:
+
+| Measurement | SPC (fire head only) | A6 (full network) | Reading |
+|---|---|---|---|
+| heading/speed logit max-diff vs θ_BC | **< 1e-9** | **8.51** | the maneuver is provably untouched under SPC and provably *changed* under A6 |
+| heading/speed action sequences identical | **yes** | **no** | same conclusion, measured behaviourally rather than in logit space |
+| launch-mask agreement | yes | yes | both reach the target behaviour on the launch head |
+| validation allowed-window accuracy | ≥ 0.995 | 0.9967 | neither arm can be dismissed as under-trained |
+
+Kill rate on the **60-seed screening set** used by the ablation script (which evaluates the `id` and `dist2_3k` cells side by side, so all three arms see the same seeds):
+
+| Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) |
+|---|---|---|---|
+| BC (inherited launch policy) | 40.0% | 15.0% | 7.2% |
+| **A6 — full-network fine-tune** | **81.7%** | **66.7%** | **98.3%** |
+| mask-permissive rule oracle | **95.0%** | **86.7%** | 100% |
+
+The load-bearing reading is the middle row against the bottom row, because they share one seed set: **full-network fine-tuning recovers most of the gap but is still beaten by a rule that simply fires whenever the mask permits (81.7% vs 95.0%)**, and it pays for that with an 8.51-logit maneuver change. So A6 is dominated on both axes at once — less effective, and no longer attributable. Freezing is therefore doing real work: it is what makes "the launch decision alone explains the gap" a *statement* rather than a hope.
+
+> **⚠ Two honest limits on this table.** (i) It is a **60-seed screening** result, not the paper's primary protocol: the same 60 seeds give BC 40.0% where n=400 gives 46.50%, and the rule oracle 95.0% where n=400 gives 90.75% — so the screening numbers carry roughly ±10 pp of small-sample spread and must **not** be quoted alongside the 400-seed figures as if they were one comparison. (ii) The 400-seed primary-protocol run of the A6 weights (`eval_bc_1v1.py --episodes 400 --seed 20000`, killing/CLR against the 46.50% / 90.75% pair) is **queued, not run** — deliberately deferred so the d=0.3 expert-CLR measurement gets the machine first. Until it lands, the A6 arm is a screening result and is presented as one.
 | A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
 
 ---
@@ -453,6 +474,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **E3: paired BC vs rule expert** | d=0: expert **36.75%** vs BC **46.50%**, Δ **+9.75 pp**, W/L/T 63/24/313, exact McNemar **p=3.48e-05** · d=0.3: expert **25.75%** vs BC **42.25%**, Δ **+16.50 pp**, W/L/T 85/19/296, **p=3.79e-11** | `results/shoot_eval/E3_paired_bc_vs_expert_{d0_n400_s20000_v2,d03_n400_s20000}.json` (both have `run_meta` incl. `env_lifecycle`) |
 | **Evasion cost by policy** | expert **−11.00 pp** > BC **−4.25 pp** > SPC **0.00 pp** (all fresh-env, one protocol) | derived from the E3 pair + `E7`/`E5` |
 | **Env-lifecycle confound (expert)** | reused-env expert **32.25%** vs fresh-env expert **36.75%** on identical seeds; per-seed kill vectors differ | `tests/check_expert_path_consistency.sh` |
+| **A6: full-network fine-tune (60-seed screening)** | maneuver logits **8.51** (SPC: <1e-9), action sequences **not** identical, val allowed-acc 0.9967; kill `id` **81.7%** vs mask-permissive rule **95.0%** vs BC **40.0%** on one seed set ⇒ dominated on both axes. ⚠ **60 seeds ≠ the 400-seed primary protocol** — do not quote these alongside §4.4 | `results/shoot_eval/ablation_A6_fullnet_train.json` |
 | **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
 | Expert CLR (corroboration only) | 5.96% (560/9395) | recomputable from `data/expert/shoot_rule_expert.npz` — ⚠ **old geometry U(30,60)**: the npz mtime 2026-09-13 20:22 predates `fb48155` (2026-09-14 09:06) |
 | BC CLR (corroboration only) | 7.37% (614/8327) | `results/health_check/fire_hesitancy.json` (2026-09-16 ⇒ U(0,60)). **The two corroboration rows are geometry-mixed — never present them as one matched pair** |
