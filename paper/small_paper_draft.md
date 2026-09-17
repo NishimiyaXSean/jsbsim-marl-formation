@@ -30,7 +30,7 @@
 
 ## Abstract (~170 words)
 
-Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert fires at only **5.96%** of permitted steps, because it applies a launch-quality gate strictly tighter than the environment's legality mask. BC reproduces that gate faithfully (**7.37%**): the defect lies in the teacher's designed decision boundary, not in the imitation, which is behaving as intended. To isolate the cost we freeze the BC maneuver trajectory and enumerate the fire-policy family; firing whenever legal achieves 73.3% kills where the inherited policy achieves 6.7%, and every range- or delay-selective alternative is worse. We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.5% to 90.8%** (**+44.3 pp**, exact McNemar **p ≈ 1e-53**), and SPC climbs to a CLR of exactly **100.0%**. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. We do not claim that launching whenever legal is generally optimal; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
+Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert fires at only **5.96%** of permitted steps, because it applies a launch-quality gate strictly tighter than the environment's legality mask. BC reproduces that gate faithfully (**7.37%**): the defect lies in the teacher's designed decision boundary, not in the imitation, which is behaving as intended. To isolate the cost we freeze the BC maneuver trajectory and enumerate the fire-policy family; firing whenever legal achieves 73.3% kills where the inherited policy achieves 6.7%, and every range- or delay-selective alternative is worse. We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.5% to 90.8%** (**+44.3 pp**, exact McNemar **p ≈ 1e-53**), and SPC climbs to a CLR of exactly **100.0%**. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC's kill rate is **unchanged at 90.8%** while the baseline falls to 42.3%, widening the gap to **+48.5 pp** with all 194 discordant seeds again favouring the correction. We do not claim that launching whenever legal is generally optimal; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
@@ -55,7 +55,7 @@ Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-co
 ### 1.3 Contributions
 1. **C1 — Diagnosis.** A cheap, transferable metric: the **Conditional Launch Rate (CLR)**, `P(a_fire=1 | m_fire=1)`. We show the expert sits at 5.96% and BC at 7.37%, and we localize the cause to a *designed* launch-quality gate strictly tighter than the environment's legality mask (§3.2).
 2. **C2 — Intervention.** **Surgical Policy Correction (SPC)**: re-train a single binary action head toward the environment-legality policy while freezing all other parameters, verified bit-identical by logit and action-sequence gates (§3.3).
-3. **C3 — Causal evidence.** Two independent identifications that the inherited launch policy is suboptimal *conditional on the maneuver*: (a) off-policy enumeration of the fire-policy family on a **frozen** BC maneuver trajectory (§4.3), and (b) the SPC intervention with provably frozen maneuver heads (§4.4).
+3. **C3 — Causal evidence.** Two independent identifications that the inherited launch policy is suboptimal *conditional on the maneuver*: (a) off-policy enumeration of the fire-policy family on a **frozen** BC maneuver trajectory (§4.3), and (b) the SPC intervention with provably frozen maneuver heads (§4.4). The effect holds under an evading, reacting target — and grows (+44.3 → +48.5 pp, §4.6).
 
 ---
 
@@ -250,16 +250,26 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 - **Caveats to state in the paper:** single seed family (seeds 42–441); d=0 only; Bonferroni α=0.0125 would put p=0.0146 just outside; JSBSim physics is not cross-machine reproducible.
 - **Framing rule:** never present 87→95 as the effect of the launch-head correction. The launch-head correction is §4.4.
 
-### 4.6 Robustness B — target evasion (`difficulty_level = 0.3`) — **REQUIRED, NOT YET RUN**
+### 4.6 Robustness B — target evasion (`difficulty_level = 0.3`) — **DONE (E5)**
 
-- Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a dive to `−800·d` m (floor 2000 m).
-- Status: only a 2-seed ACMI render exists (`results/shoot_acmi_d03/manifest.json`, both seeds killed, `wez_to_fire_latency` 1 and 18 steps). **No statistical evaluation.**
-- **Unified protocol (all three arms, identical seeds, one code path):**
-  - BC and SPC: `eval_bc_1v1.py --difficulty 0.3 --episodes 400 --seed 20000` (same command as E7, only `--difficulty` changes — so d=0 and d=0.3 share the seed framework and are directly comparable)
-  - Expert: `generate_shoot_rule_expert.py --validate --difficulty 0.3 --episodes 400 --seed 20000 --out-json ...`
-- **Expert seed-pairing was previously impossible**: `run_one()` called `env.reset()` with no seed, so the expert's episodes could not be aligned to BC/SPC by seed and no paired test involving the expert was possible. Patched 2026-09-16: `run_one(..., seed=...)` plus `--out-json` emitting `run_meta` and CLR. The data-generation path is deliberately left unseeded so the existing `shoot_rule_expert.npz` remains byte-reproducible.
-- **Smoke result (3 episodes, seeds 20000–20002, d=0.3, not evidential):** expert CLR **6.94%** (10/144 allowed) — statistically indistinguishable from the d=0 value of 5.96%. Early indication that the designed gate is **insensitive to evasion**, i.e. the conservatism is structural rather than scenario-specific. Needs the full n=400 run before being asserted.
-- Why it matters: it is the only test of whether the diagnosis+correction survives a *non-stationary, reacting* opponent — i.e. the interactive claim. Priority: **highest among remaining experiments.**
+Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a dive to `−800·d` m (floor 2000 m). Identical protocol to §4.4 — d=0 vs d=0.3 differ **only** in `--difficulty`, same seeds 20000–20399, same code path, identity recorded in each file's `run_meta`.
+
+| Arm | d=0 kill | d=0.3 kill | Δ | d=0 CLR | d=0.3 CLR |
+|---|---|---|---|---|---|
+| BC round1 | 46.50% | **42.25%** (169/400) | −4.25 pp | 7.26% | **6.95%** |
+| **SPC** | 90.75% | **90.75%** (363/400) | **0.00** | 100.00% | **99.11%** |
+| **gap** | +44.25 pp | **+48.50 pp** | **+4.25 pp** | — | — |
+
+**Paired test at d=0.3:** discordant **194 : 0** (once again unanimous), exact McNemar **p = 7.97e-59**. SPC launches 3.91/ep, hit rate 0.9994, `lost_target = 0`, `launch_quality.bad = 0`.
+
+Three findings:
+1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194.
+2. **The conservatism is structural, not scenario-specific.** BC's CLR barely moves (7.26% → 6.95%), i.e. the designed gate suppresses launches to the same degree whether or not the target manoeuvres.
+3. **The identical aggregate is not an artefact — it was verified explicitly.** 363 kills at both difficulties looked like a bug, so it was tested: **368/400 episodes change length** (so `difficulty=0.3` is definitely applied) and **382/400 seeds keep the same kill outcome, with 18 flips split perfectly 9 gained / 9 lost**. The match is a genuine near-cancellation, not a no-op. Report this check in the paper — a reviewer will ask.
+
+**Expert arm at d=0.3** is running (task `s4Oqks`) as an unpaired reference; it now uses the seed-pairing patch (`run_one(seed=...)`) so it can be aligned to the same seeds.
+
+> **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json` and `E5_paired_bc_vs_spc_d03_n400.json`.
 
 ### 4.7 Ablation ladder (ordered by the decided priority)
 
@@ -267,7 +277,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 |---|---|---|---|
 | A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | done, JSON lost → re-run | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | done, JSON lost → re-run | learned head matches the ceiling ⇒ not a hand-coded hack |
-| A3 | **`difficulty_level = 0.3`** (§4.6) | **not run** | interactive/reacting opponent |
+| A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
 | A5 | Fire head from random init, encoder frozen | not run | is the BC encoder necessary, or is the mask enough? |
 | A6 | Full-network distillation (unfreeze all) | not run | shows freezing is what buys clean attribution |
@@ -288,7 +298,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 - **Single expert, single designed gate**: we identify one instance of the failure mode, not its prevalence.
 - **Suboptimality is established conditionally**: on the frozen BC maneuver trajectory (§4.3) and within the frozen-heads intervention (§4.4). We do not claim fire-whenever-legal is optimal in general.
 - **Statistical scope**: the +3.25 pp geometry result is a single seed family and fails a Bonferroni α=0.0125.
-- **d=0.3 unverified** as of this draft (§4.6).
+- **Evasion is a single interpolated setting** (`difficulty = 0.3`, one scripted evasion family), not a learned or optimised opponent. "Interactive" here means a reacting scripted target, not an adversary trained against the policy.
 - SPC requires knowing *which* head to correct; automating that (e.g. per-head CLR + ablation ranking) is open.
 
 ### 5.3 Future Work
@@ -314,6 +324,10 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 | **E7: BC CLR** | 7.26% (1223/16839) | same |
 | **E7: SPC CLR** | 100.00% (1560/1560) — by construction | same |
 | E7 identity | BC `sha256 aad05b45…`, SPC `sha256 36d79bd9…`, geometry U(0,60), d=0, argmax | `run_meta` in each file |
+| **E5: BC kill @ d=0.3** | **169/400 = 42.25%** (Wilson [37.51, 47.14]) | `results/shoot_eval/E5_bc_round1_d03_n400_s20000.json` |
+| **E5: SPC kill @ d=0.3** | **363/400 = 90.75%** (Wilson [87.51, 93.21]) | `results/shoot_eval/E5_spc_d03_n400_s20000.json` |
+| **E5: paired diff / p / discordant @ d=0.3** | **+48.50 pp / 7.97e-59 / 194:0** | `results/shoot_eval/E5_paired_bc_vs_spc_d03_n400.json` |
+| **E5: SPC invariance check** | 368/400 episode lengths differ, 382/400 same kill, 18 flips split 9:9 | computed from `E7_spc_*` vs `E5_spc_*` `episodes_detail` |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
@@ -362,7 +376,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 | Step | Command (WSL Ubuntu shell) | Cost | Status |
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
-| **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈2–3 h | pending E7 |
+| **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
 | **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds N --oracles asap,bc` | see cost note | **interface VERIFIED (2026-09-17), not yet run** |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈1 h | pending |
 | **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
@@ -395,7 +409,9 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 
 **Integrity prerequisites**
 - [x] **E7**: paired McNemar BC vs SPC at n=400 — **DONE**, +44.25 pp, p=1.04e-53, discordant 177:0
-- [ ] **E5**: d=0.3 for expert / BC / SPC on the shared seed set (20000–20399)
+- [x] **E5**: d=0.3 for BC / SPC on the shared seed set — **DONE**: 42.25% vs 90.75%, +48.50 pp, p=7.97e-59, discordant 194:0
+- [ ] E5 expert arm at d=0.3 (running) — unpaired reference only
+- [ ] d=0 vs d=0.3 comparison write-up (§4.6) — SPC invariant, gap widens
 - [ ] Regenerate the lost JSON artifacts that enter the paper (E1 oracle, E2 rule-oracle, E3 paired baseline)
 - [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
