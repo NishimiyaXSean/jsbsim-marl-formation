@@ -101,6 +101,7 @@ Observation（CLR 异常低）
 - **Observation**: 41-dim flattened = 30-dim state features + 11-dim action-mask bits. The BC encoder consumes the 30-dim state block; the mask block is applied as a separate masked-argmax step, not fed to the network.
 - **Action space**: `MultiDiscrete([3, 5, 1, 2])` = (speed Δ, heading Δ, altitude, fire).
 - **Episode**: max 1500 steps; termination = target killed / low altitude / fled altitude / target lost / ammo exhausted / timeout.
+- **Step duration — state it explicitly, it is a units trap.** One environment step advances the simulation by **0.2 s** (`BaseEnv._acmi_time += 0.2`), i.e. the agent runs at **5 Hz**; 1500 steps ≈ 300 s. This is *not* the JSBSim internal frame rate. Every step→second conversion in this paper uses 0.2 s/step (`§4.3`: 67 steps = 13.4 s, 743.5 steps = 149 s). Any figure or table that appears to use 1/60 s per step is wrong by 12×.
 - **Evaluation protocol**: **deterministic masked argmax**, JSBSim physics, `difficulty_level` as noted per experiment.
 - **Three policies in play**:
   - **Rule expert** — hand-designed, stateless: every label is a pure function of the current observation (`scripts/generate_shoot_rule_expert.py`). No external publication is the source; it is this project's own rule design. → §6 acknowledgement note.
@@ -241,6 +242,17 @@ Three things follow:
 1. **The direction replicates under an independent method.** Here the maneuver is frozen and only the fire policy varies; in §4.4/§4.6 the fire head is re-trained and the maneuver heads are frozen. Two different identification strategies, same answer: **evasion punishes the conservative launch policy and not the aggressive one.** `asap` rises slightly (93.3 → 96.7%) while the inherited policy falls (53.3 → 46.7%), so the gap widens by 10.0 pp — the same sign as the +4.25 pp widening measured by the within-policy intervention.
 2. **The opportunity-set asymmetry is a structural constant, not a difficulty effect.** The legal-window median is 4.0 for `asap` and 42.0 for the abstaining policy — *identical at both difficulties*. Firing collapses your own window (cooldown removes legality); abstaining inflates it ~10×. This is the measured basis for the §4.2 caveat, and it is stable across the difficulty change.
 3. **Cell and difficulty were separated, not conflated.** An earlier reading of this run compared it against the `dist2_3k` table in §4.3 and would have attributed part of the difference to evasion when it was actually the 2–3 km range restriction. The matched pair above removes that confound.
+
+### 4.3b Figure 2 — the mechanism, made visible
+
+**Figure 2** (`results/shoot_eval/mechanism_seed20007_d00.png`) shows one matched episode (seed 20007, d=0) played by BC and by SPC, with everything else held identical.
+
+- **Panel A** plots the state the decision is taken on — range to target and angle-off (ATA) — with the environment-legal launch windows shaded, every legal step BC declines marked, and both policies' launches marked.
+- **Panel B** plots the decisions themselves as three rows: launch mask, BC fire command, SPC fire command.
+
+**What the figure is for.** It is an *attribution* device, not a trajectory showcase. BC uses **3 of 41** environment-legal steps on this seed (CLR 7.32%, close to the 7.26% aggregate) and times out after 1500 steps; SPC uses **4 of 4** and kills the target at step 842. The state trace is **bit-identical** over all 842 common steps (maximum position deviation **0.0e+00 m**) — the maneuver heads are frozen — so the figure contains a *single* state trajectory and the entire difference is confined to Panel B. That is the claim: same geometry, same maneuver, different launch decision.
+
+Two caveats the caption must carry: (i) this is a **single illustrative episode**, chosen to make the mechanism legible — the aggregate evidence is Table 3 (`§4.3`) and Table 4 (`§4.4`); (ii) SPC's legal-step count (4) is smaller than BC's (41) because firing triggers the launch cooldown, which removes legality — the policy-dependent denominator documented in §4.2(b), not a defect of the figure.
 
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
@@ -386,6 +398,22 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 
 ## 6. Number Provenance & Integrity Ledger
 
+### 6.0 Figure and table plan (final structure — Sean 2026-09-17 拍板)
+
+正文固定为 **4 表 3 图**，每张都对应一个贡献，不设冗余表。
+
+| # | 内容 | 服务贡献 | 数据来源 / 状态 |
+|---|---|---|---|
+| **Table 1** | Setup：任务、观测/动作空间、三个策略、评测协议（d=0、deterministic argmax、U(0,60)、fresh env/episode） | 全部 | §3.1，**可写** |
+| **Table 2** | CLR diagnosis：Expert / BC / SPC × (allowed steps, fire decisions, CLR) | **C1** | §4.2；**expert 行待 E3 CLR 跑补齐**，BC/SPC 已有 |
+| **Table 3** | Causal intervention A：frozen BC trajectory 上的 fire-policy 枚举（inherited vs mask-permissive 及 5 个选择性策略） | **C3** | §4.3，E1 已入库 |
+| **Table 4** | SPC performance：BC vs SPC，d=0 与 d=0.3，kill / CLR / 配对检验 | **C2 + C3** | §4.4–4.6，E7/E5 已入库 |
+| **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | 待画 |
+| **Figure 2** | **Mechanism visualization**（不是普通轨迹图）：同一 seed、同一机动轨迹（已实测 max deviation = 0 m），Panel A = 距离/ATA 与决策点，Panel B = mask / BC fire / SPC fire 三行时间轴 | **C3** | `results/shoot_eval/mechanism_seed20007_d00.{png,json}`（**已产出并入库**，seed 20007：BC 3/41 合法步、超时；SPC 4/4、击杀） |
+| **Figure 3** | Difficulty robustness：d=0 vs d=0.3 的 kill rate 与 gap | C3 稳健性 | 待画 |
+
+> **Figure 2 的定位**：它不展示「飞得多漂亮」，只展示 *same engagement geometry, same maneuver trajectory, different launch decision*。因为机动头被冻结，BC 与 SPC 的轨迹**逐位相同**（脚本实测 max position deviation = 0.000e+00 m），所以图里只有**一条**轨迹 —— 这比画两条更能说明问题。选种子时须在 caption 中声明是**示例性单局**，聚合证据在 Table 3/4。
+
 **Verified against live artifacts on 2026-09-16 (re-checkable):**
 
 | Metric | Value | Artifact |
@@ -417,7 +445,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | SPC @ U(30,60), n=100 s42 | 87/100 | `results/shoot_eval/eval_2x2_base_geoOld_s42.json` (**= `eval_distilled_d0_s42.json`**) |
 | geomA-retrained @ U(0,60), n=100 s42 | 95/100 | `results/shoot_eval/eval_geomA_d0_s42.json` |
 | n=400 paired, base vs geomA | 362 vs 375, p=0.0146 | `eval_2x2_{base,geomA}_geoNew_n400_s42.json` + `geom2x2_n400_report.md` |
-| Porpoising / low-level control | **no sustained porpoising**; script verdict = `PARTIAL` (1000-step cap < 30 s target, not instability) | `results/health_check/porpoise_v2.json` — alt p-p 15.2–16.9 m, alt osc 0.03–0.06 Hz; pitch p-p 3.1–4.6° but pitch std only ≈0.4° (small-amplitude, larger on turn patterns). Residual: revisit turn-pattern pitch during M2. |
+| Porpoising / low-level control | **no sustained porpoising**; script verdict = `PARTIAL` (alt p-p 15.2–16.9 m, alt osc 0.03–0.06 Hz; pitch p-p 3.1–4.6° but pitch std only ≈0.4°) | `results/health_check/porpoise_v2.json`. ⚠ its "1000-step cap < 30 s" parenthetical only holds at 1/60 s per step; at the environment's **0.2 s per step** 1000 steps = 200 s. **Do not cite that parenthetical until the runner behind this JSON is confirmed** — it may have driven JSBSim directly rather than through `BaseEnv`. Residual: revisit turn-pattern pitch during M2. |
 | d=0.3 smoke | 2/2 kills | `results/shoot_acmi_d03/manifest.json` |
 
 **Docs-attested only — JSON lost, MUST be regenerated before submission:**
