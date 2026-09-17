@@ -209,16 +209,23 @@ Two readings:
 
 > **Artifact status:** verified against the live artifact `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` (tracked in git, carries `run_meta` with `cell_config`, geometry, difficulty, seed range and the frozen checkpoint's sha256). The old JSON is genuinely gone; the docs column above is all that survived of it, which is exactly why the regenerated file is now version-controlled.
 
-**Same enumeration under an evading target (E6, cell `target_evasive`, d=0.3, seeds 20000–20059):**
+**Same enumeration under an evading target — matched 2×2 (E6, seeds 20000–20059, n=60).**
 
-| Fire policy | Kill | Launches/ep | Legal-window median |
-|---|---|---|---|
-| **`asap`** | **96.7%** (58/60) | 3.97 | **4.0 steps** |
-| frozen BC (inherited) | 46.7% (28/60) | 3.05 | **42.0 steps** |
+`target_evasive` changes difficulty *and* nothing else if we pair it with the default cell: its config is `{difficulty_level: 0.3}` — all other parameters default (2–5 km). Its matched d=0 counterpart is therefore cell `id_bias30_60` (empty config ≡ defaults). Both cells are therefore the same scenario distribution, differing **only** in the target's evasion.
 
-- `asap` still dominates by **+50.0 pp** — the "fire whenever legal" conclusion is not an artefact of the straight-flying target.
-- **⚠ Do not read this as a difficulty comparison against the table above.** `target_evasive` moves the *difficulty* **and** the range regime (its config is only `{difficulty_level: 0.3}`, so it uses the default 2–5 km, whereas `dist2_3k` forces 2–3 km). Cell and difficulty change together, so the two tables are not a 2×2. A matched run on the default cell at d=0 is in progress to separate the two.
-- The legal-window medians **dramatize the §4.2 caveat with a direct measurement**: `asap` sees 4.0 legal steps/episode, the abstaining inherited policy sees 42.0. Firing collapses the policy's own opportunity set (the 30-step cooldown removes legality); abstaining inflates it by an order of magnitude. This is now measured rather than inferred, and it is why cross-policy CLR must not be compared naively.
+| difficulty | fire policy | Kill | Launches/ep | Legal-window median |
+|---|---|---|---|---|
+| d=0 | `asap` | **93.3%** | 3.92 | 4.0 |
+| d=0 | frozen BC (inherited) | **53.3%** | 3.18 | 42.0 |
+| d=0.3 | `asap` | **96.7%** | 3.97 | 4.0 |
+| d=0.3 | frozen BC (inherited) | **46.7%** | 3.05 | 42.0 |
+| | **`asap` − inherited gap** | **+40.0 pp → +50.0 pp** | | |
+
+Three things follow:
+
+1. **The direction replicates under an independent method.** Here the maneuver is frozen and only the fire policy varies; in §4.4/§4.6 the fire head is re-trained and the maneuver heads are frozen. Two different identification strategies, same answer: **evasion punishes the conservative launch policy and not the aggressive one.** `asap` rises slightly (93.3 → 96.7%) while the inherited policy falls (53.3 → 46.7%), so the gap widens by 10.0 pp — the same sign as the +4.25 pp widening measured by the within-policy intervention.
+2. **The opportunity-set asymmetry is a structural constant, not a difficulty effect.** The legal-window median is 4.0 for `asap` and 42.0 for the abstaining policy — *identical at both difficulties*. Firing collapses your own window (cooldown removes legality); abstaining inflates it ~10×. This is the measured basis for the §4.2 caveat, and it is stable across the difficulty change.
+3. **Cell and difficulty were separated, not conflated.** An earlier reading of this run compared it against the `dist2_3k` table in §4.3 and would have attributed part of the difference to evasion when it was actually the 2–3 km range restriction. The matched pair above removes that confound.
 
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
@@ -285,7 +292,7 @@ Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a
 
 **Paired test at d=0.3:** discordant **194 : 0** (once again unanimous), exact McNemar **p = 7.97e-59**. SPC launches 3.91/ep, hit rate 0.9994, `lost_target = 0`, `launch_quality.bad = 0`.
 
-Four findings:1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194.
+Four findings:1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
 2. **The conservatism is structural, not scenario-specific.** BC's CLR barely moves (7.26% → 6.95%), i.e. the designed gate suppresses launches to the same degree whether or not the target manoeuvres.
 3. **The identical aggregate is not an artefact — it was verified explicitly.** 363 kills at both difficulties looked like a bug, so it was tested: **368/400 episodes change length** (so `difficulty=0.3` is definitely applied) and **382/400 seeds keep the same kill outcome, with 18 flips split perfectly 9 gained / 9 lost**. The match is a genuine near-cancellation, not a no-op. Report this check in the paper — a reviewer will ask.
 4. **Evasion cost is ordered by how conservative the launch policy is**: expert **−7.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**. The most launch-suppressing policy loses the most when the target starts manoeuvring. This is consistent with the mechanism (a wasted launch *window* due to a stricter gate has no remedy once the target turns away) but n=400 on one seed family is not enough to claim the ordering as a law — present it as a suggestive pattern.
@@ -356,7 +363,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
-| **E6: fire oracle @ d=0.3** | asap **96.7%** vs inherited **46.7%** (+50.0 pp); legal-window median 4.0 vs **42.0** | `results/shoot_eval/E6_fire_oracle_target_evasive_s60.json` (has `run_meta`) |
+| **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
@@ -406,7 +413,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
-| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` | ≈25 min | **DONE** — asap **96.7%** vs inherited **46.7%**; matched d=0 default cell running |
+| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` + matched d=0 cell `id_bias30_60` | ≈50 min | **DONE** — matched 2×2: gap **+40.0 → +50.0 pp**; replicates the §4.6 widening by an independent method |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
 | **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |

@@ -1,0 +1,70 @@
+{
+  "run_meta": {
+    "model_id": "oracle_audit__id_bias30_60",
+    "checkpoint": "data/expert/shoot_bc_round1_baseline.pth",
+    "checkpoint_sha256": "aad05b459619bdb7745ac8da24ba4833f9b50d2719697eec00fa5531f1d17a60",
+    "seed_range": [
+      20000,
+      20059
+    ],
+    "n_episodes": 60,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "63053af",
+    "script": "scripts/fire_oracle_audit.py",
+    "timestamp_utc": "2026-09-17T05:44:06Z",
+    "artifact_kind": "oracle_enumeration_on_frozen_trajectory",
+    "cell": "id_bias30_60",
+    "cell_config": {},
+    "oracles": [
+      "asap",
+      "bc"
+    ],
+    "note": "trajectory frozen from --weights; only the fire policy varies",
+    "complete": true
+  },
+  "asap": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.9333333333333333,
+      "launches_per_episode": 3.9166666666666665,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.9333333333333333,
+      "first_fire_median": 69.0,
+      "first_allowed_median": 69.0,
+      "allowed_total_median": 4.0,
+      "first_to_fourth_median": 746.0,
+      "blockers": {
+        "episode_end_in_window": 4
+      },
+      "reasons": {
+        "target_killed": 56,
+        "timeout": 4
+      }
+    }
+  },
+  "bc": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.5333333333333333,
+      "launches_per_episode": 3.183333333333333,
+      "hit_rate": 0.9947643979057592,
+      "reach_4_launches_rate": 0.5333333333333333,
+      "first_fire_median": 95.0,
+      "first_allowed_median": 69.0,
+      "allowed_total_median": 42.0,
+      "first_to_fourth_median": 793.5,
+      "blockers": {
+        "episode_end_in_window": 28
+      },
+      "reasons": {
+        "target_killed": 32,
+        "timeout": 28
+      }
+    }
+  }
+}
