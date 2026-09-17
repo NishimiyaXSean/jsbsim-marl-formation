@@ -209,6 +209,17 @@ Two readings:
 
 > **Artifact status:** verified against the live artifact `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` (tracked in git, carries `run_meta` with `cell_config`, geometry, difficulty, seed range and the frozen checkpoint's sha256). The old JSON is genuinely gone; the docs column above is all that survived of it, which is exactly why the regenerated file is now version-controlled.
 
+**Same enumeration under an evading target (E6, cell `target_evasive`, d=0.3, seeds 20000–20059):**
+
+| Fire policy | Kill | Launches/ep | Legal-window median |
+|---|---|---|---|
+| **`asap`** | **96.7%** (58/60) | 3.97 | **4.0 steps** |
+| frozen BC (inherited) | 46.7% (28/60) | 3.05 | **42.0 steps** |
+
+- `asap` still dominates by **+50.0 pp** — the "fire whenever legal" conclusion is not an artefact of the straight-flying target.
+- **⚠ Do not read this as a difficulty comparison against the table above.** `target_evasive` moves the *difficulty* **and** the range regime (its config is only `{difficulty_level: 0.3}`, so it uses the default 2–5 km, whereas `dist2_3k` forces 2–3 km). Cell and difficulty change together, so the two tables are not a 2×2. A matched run on the default cell at d=0 is in progress to separate the two.
+- The legal-window medians **dramatize the §4.2 caveat with a direct measurement**: `asap` sees 4.0 legal steps/episode, the abstaining inherited policy sees 42.0. Firing collapses the policy's own opportunity set (the 30-step cooldown removes legality); abstaining inflates it by an order of magnitude. This is now measured rather than inferred, and it is why cross-policy CLR must not be compared naively.
+
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
 **Setting (all arms identical):** d=0, deterministic masked argmax, geometry U(0,60), **seeds 20000–20399 (n=400)**, one code path (`eval_bc_1v1.py`), identity recorded in each file's `run_meta` (BC `sha256 aad05b45…`, SPC `sha256 36d79bd9…`).
@@ -345,6 +356,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
+| **E6: fire oracle @ d=0.3** | asap **96.7%** vs inherited **46.7%** (+50.0 pp); legal-window median 4.0 vs **42.0** | `results/shoot_eval/E6_fire_oracle_target_evasive_s60.json` (has `run_meta`) |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
@@ -394,7 +406,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
-| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` | ≈25 min | **RUNNING** (interface verified 2026-09-17) |
+| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` | ≈25 min | **DONE** — asap **96.7%** vs inherited **46.7%**; matched d=0 default cell running |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
 | **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |
