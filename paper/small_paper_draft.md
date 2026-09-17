@@ -108,7 +108,7 @@ Observation（CLR 异常低）
 - **Step duration — state it explicitly, it is a units trap.** One environment step advances the simulation by **0.2 s** (`BaseEnv._acmi_time += 0.2`), i.e. the agent runs at **5 Hz**; 1500 steps ≈ 300 s. This is *not* the JSBSim internal frame rate. Every step→second conversion in this paper uses 0.2 s/step (`§4.3`: 67 steps = 13.4 s, 743.5 steps = 149 s). Any figure or table that appears to use 1/60 s per step is wrong by 12×.
 - **Evaluation protocol**: **deterministic masked argmax**, JSBSim physics, `difficulty_level` as noted per experiment.
 - **Three policies in play**:
-  - **Rule expert** — hand-designed, stateless: every label is a pure function of the current observation (`scripts/generate_shoot_rule_expert.py`). No external publication is the source; it is this project's own rule design. → §6 acknowledgement note.
+  - **Rule expert** — hand-designed, stateless: every label is a pure function of the current observation (`scripts/generate_shoot_rule_expert.py`). **Provenance, stated plainly: there is no external publication to cite.** It is this project's own rule controller, built from standard BFM heuristics (nose alignment, DLZ depth, closure sign) plus the launch-quality gate of §3.2, and trained against nothing. We do not claim it is a strong or a state-of-the-art expert; we claim only that it is *a* competent teacher (`wez_reach_rate = 1.00`, `hit_rate ≈ 0.997`, `lost_target_rate = 0`) whose behaviour carries a measurable conservative bias. Every headline claim in this paper is about *what imitation inherits from a given teacher*, holding the teacher fixed — so the paper does not depend on where the teacher came from, and inventing a citation for it would be worse than saying this.
   - **BC round1** — MLP encoder (256-256-128) + 4 heads, trained on 200 expert episodes, masked cross-entropy.
   - **SPC** — BC with only the launch head re-trained (§3.3).
 
@@ -532,11 +532,11 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 **Integrity prerequisites**
 - [x] **E7**: paired McNemar BC vs SPC at n=400 — **DONE**, +44.25 pp, p=1.04e-53, discordant 177:0
 - [x] **E5**: d=0.3 for BC / SPC on the shared seed set — **DONE**: 42.25% vs 90.75%, +48.50 pp, p=7.97e-59, discordant 194:0
-- [ ] E5 expert arm at d=0.3 (running) — unpaired reference only
-- [ ] d=0 vs d=0.3 comparison write-up (§4.6) — SPC invariant, gap widens
+- [x] **Expert arm at d=0.3** — done as the fresh-env paired arm inside `E3_paired_bc_vs_expert_d03_n400_s20000.json` (**25.75%**), which supersedes the reused-env `E5_expert_d03` figure as the citable number
+- [x] **d=0 vs d=0.3 comparison write-up (§4.6)** — SPC invariant at 90.75%, gap widens **+44.25 → +48.50 pp**; five findings written up
 - [x] Regenerate the paper's evidence artifacts — E1 (oracle, reproducibility-verified), E2 (rule oracle), E3 (paired BC vs expert, both difficulties) all done
 - [ ] **Produce a fresh-env expert CLR** — `eval_paired_bc_vs_expert.py` does not compute CLR, so the CLR table's expert row is currently an open gap. Do not substitute the reused-env value. **In flight:** the CLR patch landed 2026-09-17 and `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` is being produced (d=0, n=400, same seeds, fresh env). When it lands: fill the abstract, the §4.2 table row, §4.6's expert row, the §6 ledger, and re-render Figure 1.
-- [ ] Decide whether to keep the reused-env path's `--validate` diagnostic at all, or have it emit a warning that it is not comparable to the other eval paths
+- [x] Decide whether to keep the reused-env path's `--validate` diagnostic at all — **decided 2026-09-17: keep it, but fence it.** It is still the cheapest rule-behaviour check, so it stays; it now (i) prints a five-line lifecycle banner at the top of its output, (ii) warns in its `--help` text, (iii) writes `env_lifecycle='reused across episodes (… NOT comparable to fresh-env arms)'` into `run_meta`, and (iv) its artifacts are renamed `EXCLUDED_reused_env_expert_*` so `collect_matrix.py` skips them. Delegating the exclusion to a filename a human must remember was the original failure mode; the fence is now mechanical.
 - [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
 - [x] Expert seed-pairing patch (`run_one(seed=...)`) — previously impossible
@@ -547,7 +547,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [x] **Mechanism figure** — `scripts/make_mechanism_figure.py` → `results/shoot_eval/mechanism_seed20007_d00.png` (tracked). Seed 20007: BC uses 3/41 legal steps and times out; SPC uses 4/4 and kills. The maneuver is bit-identical over 842 common steps (max deviation 0.0e+00 m). Shipped as a range/ATA-versus-time panel instead of a top view, because with a bit-identical maneuver a top view contains one line and no visible divergence.
 - [x] **Appendix A–D** — internal↔paper name map (including the retired `SHD` and the misleading `id_bias30_60` cell), the mask-versus-`fire_desired` constant-by-constant table with the strict-subset proof, the seven-arm oracle family, and the reproduction commands.
 - [x] **Figures 1 and 3** — `scripts/make_paper_figures.py` → `results/shoot_eval/framework_fig1.{png,pdf}` and `robustness_fig3.{png,pdf}` (both tracked). Every plotted value is read from the tracked E-numbered artifacts; the script holds no numeric constants, so figure and text cannot drift apart. Figure 3 carries Wilson 95% CIs and the paired +44.25 / +48.50 pp spans.
-- [ ] Acknowledge the rule expert's provenance honestly (§3.1) — it is this project's own hand-designed rule; there is no external paper to cite, and inventing one would be worse than saying so
+- [x] Acknowledge the rule expert's provenance honestly (§3.1) — done: the text now states outright that there is no external publication to cite, that it is this project's own rule controller, and that no state-of-the-art claim is made for it (only that it is competent and measurably conservative). The paper's claims are all teacher-conditional, so the teacher's origin is not load-bearing.
 - [ ] Ablation A5/A6 (random-init fire head; full-network) if space permits
 - [ ] Format to AAMAS template
 

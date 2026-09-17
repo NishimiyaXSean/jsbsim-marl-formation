@@ -15,6 +15,13 @@ Speed label   = delta toward cruise speed, or turn speed when |ATA| large.
 --validate: run the discretized rule closed-loop and report Gate-1 metrics
 (lost_target, WEZ reach, fire rate, launches, hits, ATA p90) WITHOUT saving data.
 
+WARNING (2026-09-17): --validate builds ONE BaseEnv and reuses it for every
+episode. The fresh-env eval paths (eval_bc_1v1.py, eval_paired_bc_vs_expert.py,
+fire_oracle_audit.py) build a new env per episode, and the two disagree on
+identical seeds (32.25% vs 36.75% kills at d=0). Treat --validate as a
+rule-behaviour sanity check only; never pool its kill/CLR figures with the
+fresh-env arms. Gate: tests/check_expert_path_consistency.sh.
+
 Usage:
   python scripts/generate_shoot_rule_expert.py --episodes 200 --out data/expert/shoot_rule_expert.npz
   python scripts/generate_shoot_rule_expert.py --validate --episodes 100
@@ -218,7 +225,12 @@ def main():
     parser.add_argument('--cmd-speed', type=float, default=280.0)
     parser.add_argument('--out', type=str, default='data/expert/shoot_rule_expert.npz')
     parser.add_argument('--validate', action='store_true',
-                        help='run the discretized rule closed-loop and report Gate-1 metrics')
+                        help='run the discretized rule closed-loop and report '
+                             'Gate-1 metrics. WARNING: this path reuses one '
+                             'BaseEnv across episodes, so its numbers are NOT '
+                             'comparable to the fresh-env eval paths '
+                             '(eval_bc_1v1.py, eval_paired_bc_vs_expert.py, '
+                             'fire_oracle_audit.py).')
     parser.add_argument('--seed', type=int, default=42,
                         help='base seed for --validate (episode e uses seed+e). '
                              'The data-generation path stays unseeded so that '
@@ -281,6 +293,16 @@ def main():
         lost = reasons.get('lost_target', 0)
         clr = (fired_total / allowed_total) if allowed_total else float('nan')
         print(f'=== Gate-1 validate: discretized rule, {n_ep} episodes ===')
+        print('  !! LIFECYCLE WARNING: this path reuses ONE BaseEnv for every '
+              'episode,')
+        print('     which is measurably different from the fresh-env evaluation '
+              'paths')
+        print('     (32.25% vs 36.75% kills at d=0 on identical seeds). These '
+              'numbers')
+        print('     must NOT be pooled with eval_bc_1v1.py / '
+              'eval_paired_bc_vs_expert.py /')
+        print('     fire_oracle_audit.py results. See '
+              'tests/check_expert_path_consistency.sh.')
         print(f'  lost_target: {lost}/{n_ep} ({lost/n_ep*100:.1f}%)')
         print(f'  reasons: {reasons}')
         print(f'  kills: {kills}/{n_ep} ({kills/n_ep*100:.1f}%)')
