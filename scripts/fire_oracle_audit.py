@@ -45,6 +45,7 @@ from scripts.eval_bc_1v1 import policy_action
 from scripts.train_shoot_bc import BCShootPolicy
 from scripts.generate_shoot_rule_expert import dlz_depth, FIRE_IDX
 from scripts.eval_scenario_matrix import CELLS
+from scripts.eval_meta import build_run_meta
 from src.environment.singlecombat_shoot_task import MIN_ATTACK_INTERVAL
 
 MAX_STEPS = 1500
@@ -241,9 +242,33 @@ def main():
               f"lost={agg['lost_rate']*100:4.1f}%")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    # Provenance block (2026-09-17). This file is the paper's causal core, so it
+    # must record which geometry/difficulty produced it: the earlier dist2_3k
+    # audit (docs) read 73.3% for `asap` under U(30,60) while the current
+    # default U(0,60) gives 86.7%, and nothing in the old JSON said which.
+    # Always state the geometry -- never compare across these two tables.
+    meta = build_run_meta(
+        model_id=f"oracle_audit__{args.cell}",
+        checkpoint=args.weights,
+        first_seed=args.start_seed,
+        episodes=args.seeds,
+        difficulty=float(cell_cfg.get("difficulty_level", 0.0)),
+        min_heading_bias_deg=cell_cfg.get("min_heading_bias_deg"),
+        action_mode="argmax",
+        script="scripts/fire_oracle_audit.py",
+        extra={
+            "artifact_kind": "oracle_enumeration_on_frozen_trajectory",
+            "cell": args.cell,
+            "cell_config": {k: v for k, v in cell_cfg.items()},
+            "oracles": oracles,
+            "note": "trajectory frozen from --weights; only the fire policy varies",
+        },
+    )
+    meta["complete"] = True
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({o: {"aggregate": results[o]["aggregate"]}
-                   for o in results}, f, indent=2)
+        json.dump({"run_meta": meta,
+                   **{o: {"aggregate": results[o]["aggregate"]}
+                      for o in results}}, f, indent=2)
     print(f"[saved] {args.out}")
 
 

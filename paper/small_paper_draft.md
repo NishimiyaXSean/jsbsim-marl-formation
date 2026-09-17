@@ -185,27 +185,29 @@ Two readings:
 
 **Design.** Take BC's heading/speed decisions as a *frozen* maneuver trajectory per seed, and enumerate a family of fire policies on top of it. Because the maneuver is fixed by construction, the maneuver policy is controlled, and differences are attributable to the launch decision.
 
-**Cell `dist2_3k`, 60 seeds:**
+**Cell `dist2_3k`, 60 seeds, geometry U(0,60) — regenerated 2026-09-17 (E1):**
 
-| Fire policy | Kill rate | Launches/ep | Reach-4-launch |
-|---|---|---|---|
-| **`asap` — fire whenever legal** | **73.3%** | 3.68 | 73.3% |
-| `delay_30` (first legal + 30) | 28.3% | 2.97 | 28.3% |
-| `delay_60` | 10.0% | 2.60 | 10.0% |
-| `dlz_mid` (depth 0.4–0.6) | 0.0% | 1.08 | 0.0% |
-| `dlz_deep` (depth ≥ 0.6) | 3.3% | 1.12 | 3.3% |
-| `interval_100` | 0.0% | 1.92 | 0.0% |
-| **frozen BC (inherited)** | **6.7%** | 2.07 | 6.7% |
+| Fire policy | Kill rate (measured) | *docs, old geom U(30,60)* | Launches/ep | Reach-4-launch |
+|---|---|---|---|---|
+| **`asap` — fire whenever legal** | **86.7%** | *73.3%* | 3.85 | 86.7% |
+| `delay_30` (first legal + 30) | 38.3% | *28.3%* | 3.25 | 38.3% |
+| `delay_60` | 10.0% | *10.0%* | 2.78 | 10.0% |
+| `dlz_mid` (depth 0.4–0.6) | 0.0% | *0.0%* | 1.27 | 0.0% |
+| `dlz_deep` (depth ≥ 0.6) | 0.0% | *3.3%* | 1.12 | 0.0% |
+| `interval_100` | 0.0% | *0.0%* | 1.95 | 0.0% |
+| **frozen BC (inherited)** | **15.0%** | *6.7%* | 2.37 | 15.0% |
 
-**Reachability audit (asap arm):** median first-legal step 75 (15 s); **cumulative legal-window length ≈ 4 steps per episode (~1 step per DLZ transit)**; median step-1 → step-4 launch = 783 (157 s); 16/60 seeds never reach 4 launches (15 episodes end with the window still open, 1 never reopens).
+> **⚠ Geometry generation matters — never mix these two columns.** The italic column is the 2026-08-06 run recorded in `docs/plan_bc_rule_expert.md`, executed under the *pre-`fb48155`* geometry U(30,60). The measured column is today's default U(0,60). `delay_60` (10.0%) and `dlz_mid` (0.0%) reproduce **exactly**, which shows the script's behaviour is unchanged; `asap` moves 73.3% → 86.7% purely because the benchmark got easier (§4.5), where the same-weights geometry change alone was worth ≈ +4.5 pp. **Cite only the measured column, always with its geometry attached.**
+
+**Reachability audit (asap arm, measured):** median first-legal step **67** (13.4 s); **cumulative legal-window length ≈ 4 steps per episode** (median 4.0) — i.e. roughly one legal step per DLZ transit; median step-1 → step-4 launch **743.5** (149 s); 52/60 killed, 8 timeouts, **8 of which ended with the window still open** (`blockers = {episode_end_in_window: 8}`). The "≈4 legal steps per episode" figure is the load-bearing structural fact and it reproduces the 2026-08-06 audit.
 
 **Reading:**
-- The scenario is **not infeasible** — the environment permits a 4-launch salvo in 73% of episodes, and `asap` realizes 73.3% kills.
-- The bottleneck is the launch policy: the inherited policy uses **2.07 of 3.68** available windows, because most windows have DLZ depth < 0.25 and are rejected by `fire_desired`.
-- **Every** selective alternative is worse than fire-whenever-legal. Within this family, on this trajectory class, always-launching dominates.
+- The scenario is **not infeasible** — the environment permits a 4-launch salvo in 86.7% of episodes, and `asap` realizes 86.7% kills.
+- The bottleneck is the launch policy: the inherited policy uses **2.37 of 3.85** available windows, because most windows have DLZ depth < 0.25 and are rejected by `fire_desired`.
+- **Every** selective alternative is worse than fire-whenever-legal, and by a wide margin (best rival `delay_30` at 38.3%). Within this family, on this trajectory class, always-launching dominates.
 - Note what this does and does not show: it establishes suboptimality **conditional on the frozen maneuver**. It does not establish that always-launching is optimal for arbitrary maneuvers of arbitrary policies. (§4.4 supplies the within-policy counterpart.)
 
-> **Artifact status:** the JSON (`results/shoot_eval/fire_oracle_dist2_3k_60.json`) is **GONE** — `results/shoot_eval/*.json` is gitignored and the file no longer exists on disk. The table above is transcribed from `docs/plan_bc_rule_expert.md` §"dist2_3k fire oracle" and `docs/summary_phase1.md` §4.2. **Must be regenerated before submission** — `scripts/fire_oracle_audit.py` survives.
+> **Artifact status:** verified against the live artifact `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` (tracked in git, carries `run_meta` with `cell_config`, geometry, difficulty, seed range and the frozen checkpoint's sha256). The old JSON is genuinely gone; the docs column above is all that survived of it, which is exactly why the regenerated file is now version-controlled.
 
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
@@ -285,7 +287,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 
 | # | Ablation | Status | Purpose |
 |---|---|---|---|
-| A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | done, JSON lost → re-run | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
+| A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | **DONE** (E1 regenerated, tracked) | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | done, JSON lost → re-run | learned head matches the ceiling ⇒ not a hand-coded hack |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
@@ -341,6 +343,8 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **Matched expert @ d=0** | **129/400 = 32.25%**, CLR 6.04% (1119/18521) | `results/shoot_eval/E5_expert_d0_n400_s20000.json` |
 | **Matched expert @ d=0.3** | **101/400 = 25.25%**, CLR 5.43% (1071/19736) | `results/shoot_eval/E5_expert_d03_n400_s20000.json` |
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
+| **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
+| **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
@@ -359,7 +363,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | ~~BC ID kill~~ | ~~43.2%~~ → **use 46.50%** (E7) | superseded | — |
 | ASAP rule oracle ID kill | 90.6% | same | `eval_asap_baseline.py` |
 | ~~SPC ID kill~~ | ~~91.2%~~ → **use 90.75%** (E7) | superseded | — |
-| Fire-policy oracle table (§4.3) | asap 73.3% … BC 6.7% | `docs/plan_bc_rule_expert.md` §"dist2_3k fire oracle" | `fire_oracle_audit.py` |
+| ~~Fire-policy oracle table (§4.3)~~ | ~~asap 73.3% … BC 6.7%~~ → **superseded by E1** (old geometry U(30,60)) | `docs/plan_bc_rule_expert.md` | — |
 | dist2_3k: BC / ASAP / SPC | 6.7% / 74% / 77% | `docs/summary_phase1.md` §2 | `eval_scenario_matrix.py` |
 
 **Not yet measured:** d=0.3 statistics for any policy (E5); SPC vs rule oracle on a single shared seed set; multi-seed-family extrapolation (seeds 42–441 and 20000–20399 are each a single family; see §4.5 caveat 1).
@@ -390,8 +394,8 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
-| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds N --oracles asap,bc` | see cost note | **interface VERIFIED (2026-09-17), not yet run** |
-| **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈1 h | pending |
+| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` | ≈25 min | **RUNNING** (interface verified 2026-09-17) |
+| **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
 | **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |
 | **E4** | already covered by E7's `spc_distilled` arm | — | folded into E7 |
