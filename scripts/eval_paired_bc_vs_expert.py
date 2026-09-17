@@ -33,6 +33,7 @@ from src.environment.singlecombat_shoot_task import SingleCombatShootTask
 from scripts.generate_shoot_rule_expert import (
     hdg_label, spd_label, fire_desired, FIRE_IDX)
 from scripts.eval_bc_1v1 import policy_action
+from scripts.eval_meta import build_run_meta
 from scripts.train_shoot_bc import BCShootPolicy
 
 MAX_STEPS = 1500
@@ -188,6 +189,7 @@ def main():
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--difficulty", type=float, default=0.0)
     parser.add_argument("--weights", default="data/expert/shoot_bc_round1_baseline.pth")
+    parser.add_argument("--model-id", default="paired_bc_vs_expert")
     parser.add_argument("--out", default="results/shoot_eval/paired_bc_vs_expert_500.json")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
@@ -236,6 +238,27 @@ def main():
         "delta_launches_mean": float(np.mean(d_launch)),
     }
     out = {
+        # Provenance block (2026-09-17). This file holds TWO arms, so it also
+        # records the env lifecycle -- the reused-vs-fresh-env difference is a
+        # real confound: generate_shoot_rule_expert.py --validate reuses one env
+        # across episodes and disagrees with this script's expert arm on
+        # identical seeds, so the lifecycle must be on the record.
+        "run_meta": build_run_meta(
+            model_id=args.model_id or "paired_bc_vs_expert",
+            checkpoint=args.weights,
+            first_seed=args.start_seed,
+            episodes=args.seeds,
+            difficulty=args.difficulty,
+            min_heading_bias_deg=None,
+            action_mode="argmax",
+            script="scripts/eval_paired_bc_vs_expert.py",
+            extra={
+                "artifact_kind": "paired_two_arm_eval",
+                "arms": {"expert": "discrete rule (hdg_label/spd_label/fire_desired)",
+                         "bc": "BCShootPolicy from --weights"},
+                "env_lifecycle": "fresh env per episode (matches eval_bc_1v1/oracle paths)",
+            },
+        ),
         "weights": args.weights,
         "difficulty": args.difficulty,
         "seeds": [args.start_seed, args.start_seed + args.seeds - 1],
@@ -245,6 +268,7 @@ def main():
         "per_seed": {str(s): {"expert": by_seed[s]["expert"],
                               "bc": by_seed[s]["bc"]} for s in sorted(by_seed)},
     }
+    out["run_meta"]["complete"] = True
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)

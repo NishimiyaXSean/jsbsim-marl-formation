@@ -162,14 +162,16 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | Policy | Allowed steps | Launch commands | **CLR** |
 |---|---|---|---|
 | Rule expert (200 ep diagnostic) | 9395 | 560 | 5.96% |
-| **Rule expert (E5/E7 seed set, 400 ep, d=0)** | 18521 | 1119 | **6.04%** |
-| **Rule expert (same seed set, 400 ep, d=0.3)** | 19736 | 1071 | **5.43%** |
+| ~~Rule expert (400 ep, d=0)~~ | ~~18521~~ | ~~1119~~ | ~~6.04%~~ — **excluded, reused-env path** |
+| ~~Rule expert (400 ep, d=0.3)~~ | ~~19736~~ | ~~1071~~ | ~~5.43%~~ — **excluded, reused-env path** |
 | BC round1 (200 ep diagnostic) | 8327 | 614 | 7.37% |
 | BC round1 (E7 seed set, 400 ep, d=0) | 16839 | 1223 | **7.26%** |
+| BC round1 (E5 seed set, 400 ep, d=0.3) | 17169 | 1194 | **6.95%** |
 | **SPC (E7 seed set, 400 ep, d=0)** | 1560 | 1560 | **100.00%** |
+| SPC (E5 seed set, 400 ep, d=0.3) | 1577 | 1563 | **99.11%** |
 | Rule oracle (fire = mask) | — | all allowed | 100% (by construction) |
 
-**All rows from the matched seed set (20000–20399) agree in ordering: expert is the most launch-conservative, then BC, then SPC** — and the expert's CLR barely moves between difficulties (6.04% vs 5.43%), which is the direct evidence for finding 2 in §4.6.
+**BC and SPC rows are safe**: both come from `eval_bc_1v1.py`, which builds a fresh env per episode. **The expert CLR rows are excluded** — they come from the reused-env path (§4.4 note). Producing a comparable expert CLR requires the paired script to compute CLR, which it does not; that is an open gap, not a measurement to substitute. The claim "expert is the most launch-conservative, then BC, then SPC" therefore currently rests on one excluded leg and must be re-derived before it is asserted.
 
 Two readings:
 1. Expert and BC agree closely across two independent evaluations (5.96% vs 7.37% / 7.26%), so the conservatism is a **stable property**, not sampling noise. BC is not "more broken" than the expert — it reproduces the gate and adds a little variance.
@@ -233,11 +235,13 @@ Three things follow:
 
 | Arm | Kill rate | Wilson 95% | Launches/ep | CLR | lost | hit |
 |---|---|---|---|---|---|---|
-| Rule expert (matched) | 129/400 = **32.25%** | — | 2.80 | 6.04% | 0 | n/a |
+| Rule expert (fresh-env path, E3) | 147/400 = **36.75%** | [32.17, 41.58] | 2.83 | — | 0 | 0.9973 |
 | **BC round1 (frozen)** | **186/400 = 46.50%** | [41.67, 51.40] | 3.06 | 7.26% | 0 | 0.9984 |
 | **SPC (this paper)** | **363/400 = 90.75%** | [87.51, 93.21] | 3.90 | 100.00% | 0 | 1.0000 |
 
-> The expert row is now **measured on the same seed set** (seeds 20000–20399, U(0,60), argmax) rather than inherited from `docs/summary_phase1.md` (which reported 35.8% on 500 seeds under the *old* geometry). The two agree in direction and rough magnitude; the matched figure is the one to cite. Note BC beats the expert at both difficulties (+14.25 pp at d=0), a larger margin than the docs' +7.4 pp — a consequence of the different seed set and geometry, and worth stating rather than hiding.
+**Paired BC vs expert on the same 400 seeds:** Δkill **+9.75 pp**, win/lose/tie **63 / 24 / 313**, exact McNemar **p = 3.48e-05** (χ²cc p = 4.62e-05); 72% of the 87 discordant seeds favour BC. Δlost = 0.00, Δlaunches = +0.23. This is the first *significance test* attached to the BC-beats-expert claim — the sealed Phase-1 record had only a bootstrap CI ([+3.8, +11.0] pp, 500 seeds, old geometry).
+
+> **⚠ Env-lifecycle confound — read before citing any expert number.** Two scripts evaluate "the expert" and they disagree on identical seeds (32.25% vs 36.75% at n=400; a 20-seed screen shows **different per-seed kill vectors**, not noise). Both import the same rule functions (`hdg_label` / `spd_label` / `fire_desired`) at the same `CMD_SPEED = 280`, and `BaseEnv.__init__` already installs `SafetyInterceptor(PIDFlightController())`, so neither the rule nor the controller explains it. The cause is **environment lifecycle**: `generate_shoot_rule_expert.py --validate` builds **one** `BaseEnv` and reuses it for all episodes, whereas `eval_paired_bc_vs_expert.py`, `eval_bc_1v1.py`, `fire_oracle_audit.py` and `eval_asap_baseline.py` all build a **fresh env per episode**. Every policy figure in this paper comes from the fresh-env path, so the fresh-env expert (**36.75%**) is the only comparable one. The reused-env figures (32.25%, and 25.25% at d=0.3) are **excluded from this paper** — they are not wrong, they are measured under a different episode-construction protocol, and mixing them would repeat exactly the confound this section warns about.
 
 **Paired contingency and test** (`scripts/paired_mcnemar.py`, exact McNemar, no scipy):
 
@@ -296,10 +300,12 @@ Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a
 
 | Arm | d=0 kill | d=0.3 kill | Δ | d=0 CLR | d=0.3 CLR |
 |---|---|---|---|---|---|
-| Rule expert | 32.25% | **25.25%** (101/400) | −7.00 pp | 6.04% | 5.43% |
+| Rule expert (fresh env) | 36.75% | *pending (E3 @ d=0.3 running)* | — | — | — |
 | BC round1 | 46.50% | **42.25%** (169/400) | −4.25 pp | 7.26% | **6.95%** |
 | **SPC** | 90.75% | **90.75%** (363/400) | **0.00** | 100.00% | **99.11%** |
 | **SPC − BC gap** | +44.25 pp | **+48.50 pp** | **+4.25 pp** | — | — |
+
+> **The expert row is measured under a different protocol and is excluded.** The figures 32.25% / 25.25% come from `generate_shoot_rule_expert.py --validate`, which reuses one env across episodes; every other arm here builds a fresh env per episode. The two protocols disagree on identical seeds (§4.4 note). The fresh-env expert is being re-measured at d=0.3 (E3) and the row will be filled from that run, not from the reused-env path.
 
 **All three policies on one seed set** (seeds 20000–20399, U(0,60), deterministic argmax), so the rows are directly comparable. Source table is generated by `scripts/collect_matrix.py` from each file's own `run_meta`, not assembled by hand.
 
@@ -308,7 +314,7 @@ Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a
 Four findings:1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
 2. **The conservatism is structural, not scenario-specific.** BC's CLR barely moves (7.26% → 6.95%), i.e. the designed gate suppresses launches to the same degree whether or not the target manoeuvres.
 3. **The identical aggregate is not an artefact — it was verified explicitly.** 363 kills at both difficulties looked like a bug, so it was tested: **368/400 episodes change length** (so `difficulty=0.3` is definitely applied) and **382/400 seeds keep the same kill outcome, with 18 flips split perfectly 9 gained / 9 lost**. The match is a genuine near-cancellation, not a no-op. Report this check in the paper — a reviewer will ask.
-4. **Evasion cost is ordered by how conservative the launch policy is**: expert **−7.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**. The most launch-suppressing policy loses the most when the target starts manoeuvring. This is consistent with the mechanism (a wasted launch *window* due to a stricter gate has no remedy once the target turns away) but n=400 on one seed family is not enough to claim the ordering as a law — present it as a suggestive pattern.
+4. **Evasion cost appears ordered by how conservative the launch policy is — but this finding is NOT yet usable.** The excluded reused-env run suggested expert −7.00 pp > BC −4.25 pp > SPC 0.00 pp, i.e. the more launch-suppressing the policy, the more evasion costs it. The direction is mechanistically plausible (a launch *window* wasted by an over-strict gate cannot be recovered once the target turns away), but the expert leg rests on the incomparable protocol, and n=400 on one seed family is a single draw. **Re-derive the expert leg from the fresh-env E3 d=0.3 run before asserting the ordering at all.** The BC and SPC legs are sound as measured.
 
 **Expert arm at d=0.3** is running (task `s4Oqks`) as an unpaired reference; it now uses the seed-pairing patch (`run_one(seed=...)`) so it can be aligned to the same seeds.
 
@@ -377,6 +383,8 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
 | **E2: rule oracle vs SPC, same seeds** | both **363/400 = 90.75%**, launches 3.90, hit 1.0000, lost 0, reasons identical | `results/shoot_eval/E2_asap_oracle_id_n400_s20000.json` vs `E7_spc_*` |
+| **E3: paired BC vs rule expert** | expert **36.75%** (147/400) vs BC **46.50%** (186/400); Δ **+9.75 pp**, W/L/T **63/24/313**, exact McNemar **p = 3.48e-05** | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000.json` |
+| **Env-lifecycle confound (expert)** | reused-env expert **32.25%** vs fresh-env expert **36.75%** on identical seeds; per-seed kill vectors differ | `tests/check_expert_path_consistency.sh` |
 | **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
