@@ -36,6 +36,8 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from scripts.eval_meta import build_run_meta  # noqa: E402
+
 
 def load_arm(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -160,6 +162,26 @@ def main():
     fires_b = sum(int(ep_b[s].get("fire_commanded_on_allowed", 0)) for s in common)
 
     result = {
+        # This file is derived from two evaluations, so it identifies itself by
+        # the comparison it represents (plus the two parents below), keeping the
+        # one-file-one-identity contract of scripts/eval_meta.py.
+        "run_meta": build_run_meta(
+            model_id=f"{args.label_a}_vs_{args.label_b}",
+            checkpoint="",
+            first_seed=meta_a.get("seed_range", [common[0]])[0],
+            episodes=len(common),
+            difficulty=meta_a.get("difficulty", float("nan")),
+            min_heading_bias_deg=meta_a.get("min_heading_bias_deg"),
+            action_mode=meta_a.get("action_mode", ""),
+            script="scripts/paired_mcnemar.py",
+            extra={
+                "artifact_kind": "derived_paired_comparison",
+                "derived_from": [args.a, args.b],
+                "parent_model_ids": [meta_a.get("model_id"), meta_b.get("model_id")],
+                "parent_checkpoint_sha256": [meta_a.get("checkpoint_sha256"),
+                                             meta_b.get("checkpoint_sha256")],
+            },
+        ),
         "comparison": {"arm_a": args.label_a, "arm_b": args.label_b,
                        "file_a": args.a, "file_b": args.b},
         "run_meta_a": meta_a,

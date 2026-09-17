@@ -1,4 +1,34 @@
 {
+  "run_meta": {
+    "model_id": "bc_round1_vs_spc",
+    "checkpoint": "",
+    "checkpoint_sha256": "MISSING",
+    "seed_range": [
+      20000,
+      20399
+    ],
+    "n_episodes": 400,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "5c84055",
+    "script": "scripts/paired_mcnemar.py",
+    "timestamp_utc": "2026-09-17T02:09:44Z",
+    "artifact_kind": "derived_paired_comparison",
+    "derived_from": [
+      "results/shoot_eval/E7_bc_round1_d0_n400_s20000.json",
+      "results/shoot_eval/E7_spc_d0_n400_s20000.json"
+    ],
+    "parent_model_ids": [
+      "bc_round1",
+      "spc_distilled"
+    ],
+    "parent_checkpoint_sha256": [
+      "aad05b459619bdb7745ac8da24ba4833f9b50d2719697eec00fa5531f1d17a60",
+      "36d79bd9e0429860908a8d8dfbcc9d05250453a0a8588cfa9a428b49a2f50d98"
+    ]
+  },
   "comparison": {
     "arm_a": "bc_round1",
     "arm_b": "spc",
