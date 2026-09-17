@@ -655,14 +655,18 @@ python scripts/eval_paired_bc_vs_expert.py --seeds 400 --start-seed 20000 \
     --out results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v2.json
 ```
 
-The ε-difficulty arms are the same two commands with `--difficulty 0.3`.
+The ε-difficulty arms are the same two commands with `--difficulty 0.3`. The CLR measurement is the same command again with `--model-id paired_bc_vs_expert_d0_clr` and `--out results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json`.
 
-Figure 2 and the auto-generated matrix:
+Figures 1–3 and the auto-generated matrix:
 
 ```
 python scripts/make_mechanism_figure.py --seed 20000 --scan 30
+python scripts/make_paper_figures.py            # Figures 1 and 3
 python scripts/collect_matrix.py --glob 'results/shoot_eval/E*_*.json' \
     --out results/shoot_eval/matrix_E1_E5_E7.md
+python scripts/audit_paper_numbers.py           # recompute every headline number
 ```
+
+`make_paper_figures.py` reads every plotted value from the tracked `E*_*.json` artifacts and holds **no numeric constants**, so Figures 1 and 3 cannot drift away from the text; the abstract's `{{EXPERT_CLR}}` placeholder is rendered as `pending` until the CLR artifact lands. `audit_paper_numbers.py` recomputes the headline numbers straight from the artifacts and then checks that the draft still quotes them — including two must-be-absent guards: the placeholder (once the CLR run completes) and the bogus `2.5e-65` p-value produced by feeding tie counts into `exact_mcnemar`.
 
 `collect_matrix.py` reads **only** each file's `run_meta` — never filenames — and skips any artifact whose name is marked `EXCLUDED_`, so retired evidence cannot silently re-enter the table.
