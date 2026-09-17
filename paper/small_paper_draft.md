@@ -481,7 +481,10 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 | `checkpoint` + `checkpoint_sha256` | kills "same filename, new weights" |
 | `seed_range` | makes paired tests verifiable |
 | `geometry`, `difficulty`, `action_mode` | guards against comparing across settings |
+| `env_lifecycle` | **added 2026-09-17** — whether the simulator was rebuilt per episode or reused. Two runs can match on geometry, difficulty, seeds and weights and still be incomparable if they differ here (see §4.4). |
 | `git_head`, `script`, `timestamp_utc` | provenance |
+
+**⚠ Honest coverage status of `env_lifecycle`.** The field was added to the contract on 2026-09-17, so only artifacts produced after that date carry it: `E3_paired_bc_vs_expert_d0_n400_s20000_v2.json` and `E3_paired_bc_vs_expert_d03_n400_s20000.json`. **`E1_*`, `E5_*`, `E6_*`, `E7_*` do not carry it, and were not retro-edited** — back-filling a provenance field into a finished artifact would manufacture evidence rather than record it. For those files the lifecycle is established from the *producing code* instead, which is checkable at the recorded `git_head`: `eval_bc_1v1.py` constructs its `BaseEnv` inside the per-episode loop, and `fire_oracle_audit.py` likewise; `generate_shoot_rule_expert.py --validate` constructs one env *before* the loop and now labels itself accordingly. Any future re-run attaches the field automatically.
 
 `scripts/paired_mcnemar.py` **refuses to compute a p-value** if any of these disagree across arms, or if the two arms share a `model_id`/checkpoint hash. Identity is asserted, not assumed.
 
@@ -535,10 +538,124 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [x] **Re-measure SPC vs the rule oracle on one seed set** — done: exactly equal (90.75% both); framed as a completeness check, not independent validation
 
 **Content**
-- [ ] **Related Work §2.2 is a stub** — needs 5–10 *real* citations on imitation from suboptimal demonstrations / expert conservatism. Do not submit with placeholders.
-- [ ] ACMI trajectory figure: BC vs SPC on one seed, marking the missed legal window (the figure that makes the mechanism legible)
-- [ ] Appendix: internal-name ↔ paper-name mapping (`ASAP distillation` ↔ SPC), oracle definitions, the fire-mask vs `fire_desired` contrast table
+- [x] **Related Work** — rewritten 2026-09-17 with 13 citations checked against the live record (arXiv IDs, venues, page numbers). Two errors corrected: a nonexistent "Pang et al. 2024", and "Actor-Learner Distillation" (a misnomer for Actor-Mimic). Three items still to confirm before submission: the Rusu venue, the Pomerleau year, and the Hinton/LoRA/ROME page numbers.
+- [x] **Mechanism figure** — `scripts/make_mechanism_figure.py` → `results/shoot_eval/mechanism_seed20007_d00.png` (tracked). Seed 20007: BC uses 3/41 legal steps and times out; SPC uses 4/4 and kills. The maneuver is bit-identical over 842 common steps (max deviation 0.0e+00 m). Shipped as a range/ATA-versus-time panel instead of a top view, because with a bit-identical maneuver a top view contains one line and no visible divergence.
+- [x] **Appendix A–D** — internal↔paper name map (including the retired `SHD` and the misleading `id_bias30_60` cell), the mask-versus-`fire_desired` constant-by-constant table with the strict-subset proof, the seven-arm oracle family, and the reproduction commands.
 - [ ] Acknowledge the rule expert's provenance honestly (§3.1) — it is this project's own hand-designed rule; there is no external paper to cite, and inventing one would be worse than saying so
 - [ ] Ablation A5/A6 (random-init fire head; full-network) if space permits
 - [ ] Format to AAMAS template
 
+
+---
+
+## Appendix A. Internal names versus paper names
+
+Artifact names predate the terminology used here and several of them are actively misleading. This table is the authority: **never read a claim off a filename** (see §7.0 for why that rule exists).
+
+| internal identifier | paper term | note |
+|---|---|---|
+| `shoot_bc_round1_baseline.pth`, `model_id = bc_round1` | **BC round1** | MLP 256-256-128 + 4 heads, 200 expert episodes, masked cross-entropy |
+| `shoot_bc_asap_distilled.pth`, `model_id = spc_distilled` | **SPC** | legacy internal wording ("distilled", "asap"); **the artifact name is not the method** |
+| `shoot_bc_asap_geomA.pth` | geomA-retrained | used only in the §4.5 geometry 2×2. **Not an arm of this paper** — its 95/100 is geometry + retrain, not the launch-head correction |
+| `asap` oracle | **mask-permissive policy** | fires on every step the environment-level launch mask permits (Appendix C) |
+| `fire_desired` (in `generate_shoot_rule_expert.py`) | **the expert's extra gate**, launch-quality gate | the designed restriction strictly tighter than the mask (Appendix B) |
+| `difficulty_level` | **d** | scripted target evasion, 0 = straight-and-level |
+| `min_heading_bias_deg` | heading-bias geometry knob | `0.0` = today's default U(0,60); `30.0` = the pre-`fb48155` U(30,60) |
+| `dist2_3k`, `id_bias30_60`, `target_evasive` | evaluation cells | `fire_oracle_audit.py` cell configurations (2–3 km chase band etc.). ⚠ **`id_bias30_60` is a misleading name with a correct config**: its config is `{}` = task defaults, and since `fb48155` the default is **U(0,60)**, not U(30,60). It means "the current default geometry". Kept because it is already baked into recorded `model_id` values; read `cell_config` in `run_meta`, never the string. |
+| `SHD` | **retired — do not use** | acronym from v1 drafts that never named anything measurable |
+| `E1 … E7` | evidence artifacts | numbered per §6/§7.1; the number is a label, the `run_meta` is the identity |
+
+## Appendix B. The environment's launch mask versus the expert's extra gate
+
+**The mask.** The flat action mask is `[speed(3), heading(5), altitude(1), fire(2)]`. The launch branch is flat index **10**. `mask[10] = 1` requires *all* of:
+
+| # | condition | constant (`src/environment/singlecombat_shoot_task.py`) |
+|---|---|---|
+| C1 | missiles remaining > 0 | `NUM_MISSILES = 4` |
+| C1b | steps since last launch ≥ `MIN_ATTACK_INTERVAL` | `30` steps = **6 s at 5 Hz** |
+| C2 | target alive | — |
+| C3 | ATA < `MAX_ATTACK_ANGLE` | `15.0` deg |
+| C4 | `MIN_ATTACK_DISTANCE` ≤ range ≤ `3000 + 5000·(AA/180)` | `1500.0` m |
+| C5 | closure < 0 (closing on the target) | — |
+
+**The expert's gate.** The rule expert never fires merely because `mask[10] = 1`. It additionally requires its own `fire_desired`, a pure function of the observation:
+
+| axis | environment permits | expert additionally requires | relation |
+|---|---|---|---|
+| ATA | < 15.0 deg | < `ATA_STRICT` = **10.0** deg | strictly tighter |
+| closure | < 0 m/s | < `−CLOSURE_MIN` = **−5.0** m/s | strictly tighter |
+| range | 1500 m … `r_max(AA)` | DLZ depth in `[0.25, 0.75]`, where depth = `(range − 1500)/(r_max − 1500)` | strictly tighter **and two-sided** |
+
+**Why "strict subset" is exact, not rhetorical.** With `r_max(AA) = 3000 + 5000·(AA/180)`:
+
+- lower bound: `1500 + 0.25·(r_max − 1500) > 1500` whenever `r_max > 1500`, i.e. for every `AA > 0`;
+- upper bound: `1500 + 0.75·(r_max − 1500) = 0.75·r_max + 375 < r_max` whenever `r_max > 1500`.
+
+So on every axis the expert's admissible set is a strict subset of the environment's. This is the mechanical content of the paper's central claim that *the expert carries a conservative engagement preference that the environment does not require* — not a claim about the expert's competence.
+
+**Consequence to keep explicit: the mask, hence CLR's denominator, is policy-dependent.** Firing triggers C1b, which *closes* the window; abstaining leaves it open. A policy that fires therefore collapses its own opportunity set, while a policy that abstains inflates it. Measured on the Figure-2 seed: **41** legal steps for BC versus **4** for SPC (a factor of 10.25; the aggregate in §4.2 is ≈10.8×). CLR is consequently a **descriptive** statistic across policies; the causal claim rests on the frozen-trajectory enumeration of §4.3, where the opportunity set is held fixed by construction.
+
+## Appendix C. The enumerated fire-policy family
+
+All seven arms are evaluated on the *same frozen maneuver trajectory* per seed (the BC heading/speed actions), so only the launch decision varies (`scripts/fire_oracle_audit.py`):
+
+| arm | rule |
+|---|---|
+| `asap` | fire at the first legal step (the cooldown is already inside the mask), then whenever legal |
+| `delay_30` | fire at the first legal step ≥ first-legal + 30 |
+| `delay_60` | fire at the first legal step ≥ first-legal + 60 |
+| `dlz_mid` | fire only when DLZ depth ∈ [0.4, 0.6] |
+| `dlz_deep` | fire only when DLZ depth ≥ 0.6 |
+| `interval_100` | fire ASAP, then at most every 100 steps while legal |
+| `bc` | the inherited BC launch head (the reference arm) |
+
+`dlz_mid` and `dlz_deep` deliberately bracket the expert's own band `[0.25, 0.75]`, so the family contains a faithful approximation of the expert's gate as well as the mask-permissive extreme.
+
+## Appendix D. Reproduction commands
+
+All commands are for the **WSL Ubuntu shell**, from the repository root, using the project interpreter `/home/sean/miniconda3/envs/marl_env/bin/python`. Trace JSONs, logs and `.pth` checkpoints are excluded from version control, except the `E*_*.json` and `mechanism_*` artifacts, which are tracked.
+
+Primary endpoints (`§4.4`, Table 4):
+
+```
+python scripts/eval_bc_1v1.py --episodes 400 --seed 20000 --difficulty 0.0 \
+    --weights data/expert/shoot_bc_round1_baseline.pth --model-id bc_round1 \
+    --out results/shoot_eval/E7_bc_round1_d0_n400_s20000.json
+python scripts/eval_bc_1v1.py --episodes 400 --seed 20000 --difficulty 0.0 \
+    --weights data/expert/shoot_bc_asap_distilled.pth --model-id spc_distilled \
+    --out results/shoot_eval/E7_spc_d0_n400_s20000.json
+python scripts/paired_mcnemar.py \
+    --a results/shoot_eval/E7_bc_round1_d0_n400_s20000.json \
+    --b results/shoot_eval/E7_spc_d0_n400_s20000.json \
+    --label-a bc --label-b spc \
+    --out results/shoot_eval/E7_paired_bc_vs_spc_d0_n400.json
+```
+
+Frozen-trajectory enumeration (`§4.3`, Table 3):
+
+```
+python scripts/fire_oracle_audit.py --cell dist2_3k --seeds 60 --start-seed 0 \
+    --oracles all --weights data/expert/shoot_bc_round1_baseline.pth \
+    --out results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json
+```
+
+Matched BC-versus-expert pair (`§4.4`, fresh env per episode — note this path also computes CLR as of 2026-09-17):
+
+```
+python scripts/eval_paired_bc_vs_expert.py --seeds 400 --start-seed 20000 \
+    --difficulty 0.0 --weights data/expert/shoot_bc_round1_baseline.pth \
+    --model-id paired_bc_vs_expert_d0 \
+    --out results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v2.json
+```
+
+The ε-difficulty arms are the same two commands with `--difficulty 0.3`.
+
+Figure 2 and the auto-generated matrix:
+
+```
+python scripts/make_mechanism_figure.py --seed 20000 --scan 30
+python scripts/collect_matrix.py --glob 'results/shoot_eval/E*_*.json' \
+    --out results/shoot_eval/matrix_E1_E5_E7.md
+```
+
+`collect_matrix.py` reads **only** each file's `run_meta` — never filenames — and skips any artifact whose name is marked `EXCLUDED_`, so retired evidence cannot silently re-enter the table.

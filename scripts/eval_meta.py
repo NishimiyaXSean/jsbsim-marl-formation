@@ -27,9 +27,24 @@ Every eval script writes a top-level ``run_meta`` object built by
     geometry            initial-geometry descriptor, e.g. "bias U(0,60)"
     difficulty          difficulty_level used
     action_mode         "argmax" or "sample"
+    env_lifecycle       how the simulator was instantiated across episodes
     git_head            repo revision of the code that produced it
     script              script that produced it
     timestamp_utc       ISO-8601 UTC
+
+WHY env_lifecycle IS IN THE CONTRACT (2026-09-17)
+-------------------------------------------------
+Two scripts evaluated "the same rule expert" on identical seeds and disagreed:
+32.25% (d=0) via a path that REUSED one BaseEnv across all episodes, versus
+36.75% via a path that built a FRESH env per episode. Neither the rule nor the
+controller differed. A 20-seed screen showed different per-seed kill vectors,
+so the discrepancy is real, not tie-breaking noise.
+
+Consequence: an evaluation number is only comparable to another number with the
+same env_lifecycle. Recording geometry and difficulty is not enough -- a run can
+match on both and still be incomparable. Scripts that reuse an environment MUST
+pass an explicit ``env_lifecycle`` naming that fact, and any artifact derived
+from the reused path must not be pooled with fresh-env artifacts.
 """
 
 from __future__ import annotations
@@ -94,6 +109,9 @@ def geometry_label(min_heading_bias_deg=None) -> str:
     return f"heading_bias U({lo:g},{_BIAS_MAX:g})"
 
 
+FRESH_ENV_PER_EPISODE = "fresh env per episode"
+
+
 def build_run_meta(model_id: str,
                    checkpoint: str,
                    first_seed: int,
@@ -103,6 +121,7 @@ def build_run_meta(model_id: str,
                    action_mode: str = "argmax",
                    script: str = "",
                    repo_root: str = "",
+                   env_lifecycle: str = FRESH_ENV_PER_EPISODE,
                    extra: dict | None = None) -> dict:
     """Build the mandatory identity block for an evaluation artifact.
 
@@ -128,6 +147,7 @@ def build_run_meta(model_id: str,
                                  else float(min_heading_bias_deg)),
         "difficulty": float(difficulty),
         "action_mode": action_mode,
+        "env_lifecycle": env_lifecycle,
         "git_head": git_head(repo_root),
         "script": script or os.path.basename(
             __import__("sys").argv[0] if __import__("sys").argv else "unknown"),

@@ -94,11 +94,21 @@ def run_one_episode(policy, model, device, seed, difficulty=0.0,
     launches = hits = 0
     quality = {"bad": 0, "good": 0, "premium": 0}
     ata_hist, closure_hist = [], []
+    # CLR accumulators: P(a_fire=1 | m_fire=1), measured exactly as in
+    # eval_bc_1v1.py — the mask is read on the same state the action is
+    # chosen from, before env.step(). This closes the §4.2 gap: until now the
+    # only expert CLR came from the reused-env path, which is not comparable.
+    clr_allowed = clr_fires = 0
     for step in range(max_steps):
+        mask = env.task.get_action_mask(env, "p0")
         if policy == "expert":
             act = expert_action(env, obs["p0"])
         else:
             act = policy_action(model, obs["p0"], device)
+        if mask[FIRE_IDX] == 1.0:
+            clr_allowed += 1
+            if int(act[3]) == 1:
+                clr_fires += 1
         obs, rews, terms, truncs, info = env.step({"p0": act})
         hits += env.task._hit_this_step.get("p0", 0)
         g = launch_geometry(env)
@@ -132,6 +142,8 @@ def run_one_episode(policy, model, device, seed, difficulty=0.0,
         "lost": reason == "lost_target",
         "launches": launches,
         "hits": hits,
+        "fire_allowed_steps": clr_allowed,
+        "fire_commanded_on_allowed": clr_fires,
         "first_fire": fire_first,
         "wez_first": wez_first,
         "quality": quality,
@@ -160,6 +172,10 @@ def aggregate(records):
         "kill_rate": kills / max(n, 1),
         "launches_per_episode": launches / max(n, 1),
         "hit_rate": hits / max(launches, 1),
+        "clr_allowed_steps": sum(r["fire_allowed_steps"] for r in records),
+        "clr_fire_commands": sum(r["fire_commanded_on_allowed"] for r in records),
+        "clr": (sum(r["fire_commanded_on_allowed"] for r in records)
+                / max(sum(r["fire_allowed_steps"] for r in records), 1)),
         "wez_reach_rate": len(wez) / max(n, 1),
         "first_fire_median_steps": float(np.median(ff)) if ff else None,
         "wez_to_first_fire_median_steps": float(np.median(lat)) if lat else None,
@@ -242,8 +258,11 @@ def main():
         # records the env lifecycle -- the reused-vs-fresh-env difference is a
         # real confound: generate_shoot_rule_expert.py --validate reuses one env
         # across episodes and disagrees with this script's expert arm on
-        # identical seeds, so the lifecycle must be on the record.
+        # identical seeds, so the lifecycle must be on the record. Passed as a
+        # first-class field rather than via `extra`, so there is exactly one
+        # place that states it.
         "run_meta": build_run_meta(
+            env_lifecycle="fresh env per episode (matches eval_bc_1v1/oracle paths)",
             model_id=args.model_id or "paired_bc_vs_expert",
             checkpoint=args.weights,
             first_seed=args.start_seed,
@@ -256,7 +275,6 @@ def main():
                 "artifact_kind": "paired_two_arm_eval",
                 "arms": {"expert": "discrete rule (hdg_label/spd_label/fire_desired)",
                          "bc": "BCShootPolicy from --weights"},
-                "env_lifecycle": "fresh env per episode (matches eval_bc_1v1/oracle paths)",
             },
         ),
         "weights": args.weights,

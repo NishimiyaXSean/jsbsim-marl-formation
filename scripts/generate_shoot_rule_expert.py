@@ -302,6 +302,14 @@ def main():
                 min_heading_bias_deg=args.min_heading_bias_deg,
                 action_mode='argmax',
                 script='scripts/generate_shoot_rule_expert.py --validate',
+                # HONESTY FLAG (2026-09-17). This path builds ONE BaseEnv
+                # before the episode loop (see above) and reuses it for every
+                # episode. That is measurably different from the fresh-env
+                # paths: on identical seeds this script reports 32.25% kills at
+                # d=0 where eval_paired_bc_vs_expert.py reports 36.75%.
+                # Numbers from here must never be pooled with fresh-env arms.
+                env_lifecycle=('reused across episodes (one BaseEnv for all '
+                               'episodes; NOT comparable to fresh-env arms)'),
             )
             # This path only ever writes after the final episode, so the result
             # is complete by construction. Declare it explicitly so downstream

@@ -34,6 +34,15 @@ from scripts.train_shoot_bc import BCShootPolicy
 
 # label -> task config override (one dimension from the ID baseline)
 CELLS = [
+    # MISLEADING NAME, CORRECT CONFIG (flag 2026-09-17). "id_bias30_60" reads
+    # as U(30,60), but its config is {} = task defaults, and since commit
+    # fb48155 the task default is U(0,60). So this cell is the *current default
+    # geometry*, not the old one. The name is kept because it is already baked
+    # into recorded model_id values ("oracle_audit__id_bias30_60") and hence
+    # into the auto-generated matrix; renaming now would create a mismatch
+    # between an artifact and the command that reproduces it. Trust the
+    # `cell_config` block in run_meta, never this string -- which is the rule
+    # the whole provenance scheme exists to enforce.
     ("id_bias30_60", {}),
     ("bias0_30", {"max_heading_bias_deg": 30.0}),
     ("bias60_90", {"max_heading_bias_deg": 90.0}),
