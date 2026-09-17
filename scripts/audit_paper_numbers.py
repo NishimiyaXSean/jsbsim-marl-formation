@@ -135,28 +135,38 @@ def main():
     # obligations switch on automatically: the measured value must appear in
     # the draft, and the {{EXPERT_CLR}} placeholder must be gone.
     expert_clr_pct = None
-    clr_name = "E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json"
-    clr_path = os.path.join(EV, clr_name)
-    if os.path.exists(clr_path):
+    clr_values = {}  # tag -> expert CLR in percent, only for completed runs
+    clr_artifacts = (
+        ("d=0", "E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json"),
+        ("d=0.3", "E3_paired_bc_vs_expert_d03_n400_s20000_v2_clr.json"),
+    )
+    for tag, clr_name in clr_artifacts:
+        clr_path = os.path.join(EV, clr_name)
+        if not os.path.exists(clr_path):
+            add("E3-CLR %s expert CLR" % tag,
+                "ABSENT (run in flight or not started)", clr_name)
+            continue
         d = load(clr_name)
         done = bool(d.get("run_meta", {}).get("complete", False))
-        expert_clr_pct = 100.0 * float(d["expert"]["clr"])
-        add("E3-CLR d=0 expert CLR",
-            "%.2f%% (%d/%d)" % (expert_clr_pct, d["expert"]["clr_fire_commands"],
+        value = 100.0 * float(d["expert"]["clr"])
+        add("E3-CLR %s expert CLR" % tag,
+            "%.2f%% (%d/%d)" % (value, d["expert"]["clr_fire_commands"],
                                 d["expert"]["clr_allowed_steps"]), clr_name)
-        add("E3-CLR d=0 BC CLR",
+        add("E3-CLR %s BC CLR" % tag,
             "%.2f%% (%d/%d)" % (100.0 * d["bc"]["clr"], d["bc"]["clr_fire_commands"],
                                 d["bc"]["clr_allowed_steps"]), clr_name)
-        add("E3-CLR d=0 run state",
+        add("E3-CLR %s run state" % tag,
             "complete" if done else "IN FLIGHT (%s/%s episodes)"
             % (d.get("run_meta", {}).get("episodes_completed", "?"),
                d.get("run_meta", {}).get("n_episodes", "?")), clr_name)
         if not done:
-            expert_clr_pct = None
             print("note: %s exists but is not complete; the CLR it reports is "
                   "partial and must not be cited yet." % clr_name)
-    else:
-        add("E3-CLR d=0 expert CLR", "ABSENT (run in flight or not started)", clr_name)
+        else:
+            clr_values[tag] = value
+            if tag == "d=0":
+                # d=0 is the leg the abstract quotes.
+                expert_clr_pct = value
 
     # --- environment-threshold sanity (should match Appendix B) -------------
     sys.path.insert(0, ROOT)
@@ -202,12 +212,15 @@ def main():
     if expert_clr_pct is not None:
         # The CLR run is complete, so the draft must now carry its value and
         # must no longer carry any placeholder for it.
-        checks.append(("%.2f%%" % expert_clr_pct, "E3-CLR expert CLR in text"))
+        checks.append(("%.2f%%" % expert_clr_pct, "E3-CLR d=0 expert CLR in text"))
         checks.append(("{{EXPERT_CLR",
                        "TRAP: must be ABSENT (placeholder left unfilled)"))
     else:
         checks.append(("{{EXPERT_CLR",
                        "placeholder still expected (CLR run incomplete)"))
+    if "d=0.3" in clr_values:
+        checks.append(("%.2f%%" % clr_values["d=0.3"],
+                       "E3-CLR d=0.3 expert CLR in text"))
 
     # Both must-be-ABSENT traps are also *described* in the draft (Appendix D
     # and the section 9 notes), so a naive substring count reports a false
