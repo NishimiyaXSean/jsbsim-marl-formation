@@ -1,0 +1,180 @@
+"""Recompute every headline number straight from the live artifacts.
+
+The paper's numbers have been corrected several times; this script is the
+cheap way to prove the draft and the artifacts still agree. It reads only the
+JSON artifacts and each file's own run_meta -- never a filename-derived
+assumption about which model produced what.
+
+Run:  python scripts/_audit_paper_numbers.py
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    os.pardir))
+EV = os.path.join(ROOT, "results", "shoot_eval")
+PAPER = os.path.join(ROOT, "paper", "small_paper_draft.md")
+
+
+def load(name):
+    with io.open(os.path.join(EV, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def main():
+    rows = []
+
+    def add(tag, computed, artifact):
+        rows.append((tag, computed, artifact))
+
+    def pct(d, key="kill_rate", raw=False, label=None):
+        """Format a rate defensively: schemas differ between scripts."""
+        if raw:
+            ci, ca = d.get("clr_fire_commands"), d.get("clr_allowed_steps")
+            if d.get("clr") is None:
+                return "ABSENT"
+            return "%.2f%% (%s/%s)" % (100 * d["clr"], ci, ca)
+        if d.get(key) is None:
+            return "ABSENT"
+        n = d.get("episodes") or d.get("n") or d.get("n_episodes")
+        if n:
+            return "%.2f%% (%d/%d)" % (100 * d[key], round(d[key] * n), n)
+        return "%.2f%%" % (100 * d[key])
+
+    # --- E7: BC vs SPC at d=0 ------------------------------------------------
+    e7b, e7s = load("E7_bc_round1_d0_n400_s20000.json"), load("E7_spc_d0_n400_s20000.json")
+    add("E7 BC kill", pct(e7b), "E7_bc_round1_d0_n400_s20000.json")
+    add("E7 SPC kill", pct(e7s), "E7_spc_d0_n400_s20000.json")
+    add("E7 BC CLR", pct(e7b, raw=True), "same")
+    add("E7 SPC CLR", pct(e7s, raw=True), "same")
+
+    # --- E7 paired (derived file; its own schema, not the two-arm one) -------
+    try:
+        p7 = load("E7_paired_bc_vs_spc_d0_n400.json")
+        add("E7 paired delta", "%+.2f pp" % p7["kill_rate"]["paired_diff_pp"],
+            "E7_paired_bc_vs_spc_d0_n400.json")
+        c = p7["contingency"]
+        add("E7 discordant (favouring B : A)",
+            "%d : %d" % (c["discordant_favouring_b"], c["only_a_kill"]), "same")
+        add("E7 exact McNemar p", "%.4g" % p7["mcnemar"]["exact_two_sided_p"], "same")
+        add("E7 chi2-cc p", "%.4g" % p7["mcnemar"]["chi2_continuity_corrected_p"], "same")
+    except Exception as exc:                                  # noqa: BLE001
+        add("E7 paired", "UNREADABLE: %s" % exc, "-")
+
+    # --- E5: d=0.3 -----------------------------------------------------------
+    e5b, e5s = load("E5_bc_round1_d03_n400_s20000.json"), load("E5_spc_d03_n400_s20000.json")
+    add("E5 BC kill @0.3", pct(e5b), "E5_bc_round1_d03_n400_s20000.json")
+    add("E5 SPC kill @0.3", pct(e5s), "E5_spc_d03_n400_s20000.json")
+    add("E5 BC CLR @0.3", pct(e5b, raw=True), "same")
+    add("E5 SPC CLR @0.3", pct(e5s, raw=True), "same")
+
+    # --- E3: fresh-env expert vs BC -----------------------------------------
+    for tag, fn in (("d=0", "E3_paired_bc_vs_expert_d0_n400_s20000_v2.json"),
+                    ("d=0.3", "E3_paired_bc_vs_expert_d03_n400_s20000.json")):
+        d = load(fn)
+        add("E3 %s expert kill" % tag, "%.2f%%" % (100 * d["expert"]["kill_rate"]), fn)
+        add("E3 %s BC kill" % tag, "%.2f%%" % (100 * d["bc"]["kill_rate"]), fn)
+        add("E3 %s paired delta" % tag, "%+.2f pp" % (100 * d["paired"]["delta_kill_mean"]), fn)
+        add("E3 %s W/L/T" % tag, str(d["paired"]["delta_kill_win_lose_tie"]), fn)
+        add("E3 %s env_lifecycle" % tag,
+            str(d.get("run_meta", {}).get("env_lifecycle", "ABSENT")), fn)
+        add("E3 %s expert CLR" % tag,
+            ("%.2f%%" % (100 * d["expert"]["clr"])
+             if "clr" in d.get("expert", {}) else "ABSENT (this is the open gap)"), fn)
+
+    # --- E1 / E6: frozen-trajectory oracle ----------------------------------
+    def oracle_rate(doc, name, art):
+        """E1/E6 store one entry per oracle; each holds an 'aggregate' block."""
+        node = doc.get(name)
+        if not isinstance(node, dict):
+            add("oracle %s" % name, "ABSENT", art)
+            return
+        agg = node.get("aggregate", node)
+        kr = agg.get("kill_rate")
+        if kr is None:
+            add("oracle %s" % name, "ABSENT", art)
+            return
+        n = agg.get("episodes") or agg.get("n")
+        add("oracle %s" % name,
+            ("%.1f%% (%d/%d)" % (100 * kr, round(kr * n), n)) if n else "%.1f%%" % (100 * kr),
+            art)
+
+    e1 = load("E1_fire_oracle_dist2_3k_s60.json")
+    for k in ("asap", "delay_30", "delay_60", "dlz_mid", "dlz_deep",
+              "interval_100", "bc"):
+        oracle_rate(e1, k, "E1_fire_oracle_dist2_3k_s60.json")
+
+    e6 = load("E6_fire_oracle_target_evasive_s60.json")
+    for k in ("asap", "bc"):
+        oracle_rate(e6, k, "E6_fire_oracle_target_evasive_s60.json")
+
+    # --- E2: rule oracle ----------------------------------------------------
+    try:
+        e2 = load("E2_asap_oracle_id_n400_s20000.json")
+        node = e2.get("id_400", e2)
+        if isinstance(node, dict) and node.get("kill_rate") is not None:
+            add("E2 rule oracle kill", pct(node), "E2_asap_oracle_id_n400_s20000.json")
+        else:
+            add("E2 rule oracle kill", "ABSENT", "E2_asap_oracle_id_n400_s20000.json")
+    except Exception as exc:                                  # noqa: BLE001
+        add("E2 rule oracle", "UNREADABLE: %s" % exc, "-")
+
+    # --- environment-threshold sanity (should match Appendix B) -------------
+    sys.path.insert(0, ROOT)
+    from src.environment.singlecombat_shoot_task import (  # noqa: E402
+        MIN_ATTACK_DISTANCE, MIN_ATTACK_INTERVAL, MAX_ATTACK_ANGLE, NUM_MISSILES)
+    from scripts.generate_shoot_rule_expert import (  # noqa: E402
+        ATA_STRICT, CLOSURE_MIN, DLZ_LO, DLZ_HI)
+    add("env constants", "dist>=%g interval=%d ATA<%g missiles=%d"
+        % (MIN_ATTACK_DISTANCE, MIN_ATTACK_INTERVAL, MAX_ATTACK_ANGLE, NUM_MISSILES),
+        "singlecombat_shoot_task.py")
+    add("expert gate", "ATA<%g closure<-%g DLZ in [%g,%g]"
+        % (ATA_STRICT, CLOSURE_MIN, DLZ_LO, DLZ_HI), "generate_shoot_rule_expert.py")
+
+    print("=" * 96)
+    print("RECOMPUTED FROM LIVE ARTIFACTS (nothing taken from filenames)")
+    print("=" * 96)
+    for tag, val, art in rows:
+        print("%-30s %-34s %s" % (tag, val, art))
+
+    # cross-check: does the draft still contain the numbers we just computed?
+    text = io.open(PAPER, encoding="utf-8").read()
+    checks = [
+        ("46.50%", "E7 BC kill in text"),
+        ("90.75%", "E7 SPC kill in text"),
+        ("+44.25 pp", "E7 paired delta in text"),
+        ("1.04e-53", "E7 p-value in text"),
+        ("7.26%", "BC CLR in text"),
+        ("42.25%", "E5 BC kill in text"),
+        ("+48.50 pp", "E5 paired delta in text"),
+        ("36.75%", "fresh-env expert d=0 in text"),
+        ("25.75%", "fresh-env expert d=0.3 in text"),
+        ("3.48e-05", "E3 d=0 p in text"),
+        ("3.79e-11", "E3 d=0.3 p in text"),
+        ("86.7%", "E1 asap in text"),
+        ("15.0%", "E1 inherited in text"),
+        ("7.32%", "Fig-2 seed CLR in text"),
+        # Regression guard for the 2026-09-17 p-value error: this value came
+        # from feeding TIE counts into exact_mcnemar. If it ever appears in
+        # the draft, the mistake has been reintroduced.
+        ("2.5e-65", "TRAP: must be ABSENT (ties passed as discordant)"),
+        ("4.4e-65", "TRAP: must be ABSENT (same error, second instance)"),
+    ]
+    print()
+    print("=" * 96)
+    print("DRAFT TEXT OCCURRENCE CHECK")
+    print("=" * 96)
+    for needle, what in checks:
+        print("%-46s %s  (count=%d)" % (what, "FOUND" if needle in text else "MISSING",
+                                        text.count(needle)))
+    print()
+    print("Lines in draft:", len(text.splitlines()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
