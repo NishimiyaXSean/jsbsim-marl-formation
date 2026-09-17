@@ -65,6 +65,12 @@ def exact_mcnemar(b: int, c: int) -> float:
 
     Under H0 a discordant pair favours either arm with probability 1/2, so
     p = 2 * P(X <= min(b, c)) with X ~ Binomial(b + c, 1/2).
+
+    ``b`` and ``c`` are the DISCORDANT counts ONLY (paired wins for each arm).
+    Ties are not passed in and do not enter the test. Passing a tie count here
+    silently produces a wildly over-significant p-value -- e.g. a 63/24/313
+    win/lose/tie table is p=3.5e-05, but feeding (313, 24) by mistake gives
+    2.5e-65. Use mcnemar_from_contingency() when you have the full table.
     """
     n = b + c
     if n == 0:
@@ -72,6 +78,30 @@ def exact_mcnemar(b: int, c: int) -> float:
     k = min(b, c)
     tail = sum(math.comb(n, i) for i in range(0, k + 1)) / (2.0 ** n)
     return min(1.0, 2.0 * tail)
+
+
+def mcnemar_from_contingency(both: int, neither: int,
+                             only_a: int, only_b: int) -> dict:
+    """Compute the paired test from a full 2x2 table, ignoring ties.
+
+    Preferred entry point: it cannot confuse a tie count for a discordant one.
+    Returns the discordant counts, the paired difference in rates and the
+    exact/chi-square p-values.
+    """
+    n = both + neither + only_a + only_b
+    if n == 0:
+        raise ValueError("empty contingency table")
+    return {
+        "n": n,
+        "both": both, "neither": neither,
+        "only_a": only_a, "only_b": only_b,
+        "discordant": only_a + only_b,
+        "rate_a": (both + only_a) / n,
+        "rate_b": (both + only_b) / n,
+        "paired_diff_pp": (only_b - only_a) / n * 100.0,
+        "exact_two_sided_p": exact_mcnemar(only_a, only_b),
+        "chi2_continuity_corrected_p": chi2_mcnemar(only_a, only_b),
+    }
 
 
 def chi2_mcnemar(b: int, c: int) -> float:
