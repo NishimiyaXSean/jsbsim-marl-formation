@@ -27,8 +27,11 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Non-evaluation artifacts that live in the same directory.
-_SKIP_SUFFIX = ("_paired_", "matrix_")
+# Non-evaluation artifacts that live in the same directory, and files that were
+# deliberately retired. "EXCLUDED" matters: reused-env expert runs disagree with
+# the fresh-env protocol every other arm uses, so their numbers must never drift
+# back into an auto-generated table by accident.
+_SKIP_SUFFIX = ("_paired_", "matrix_", "EXCLUDED")
 
 
 def _pct(v):
@@ -47,6 +50,10 @@ def load_rows(paths):
     rows, skipped, legacy = [], [], []
     for p in sorted(paths):
         base = os.path.basename(p)
+        if "EXCLUDED" in base:
+            skipped.append((base, "marked EXCLUDED (measured under a protocol that "
+                                  "is not comparable to the fresh-env arms)"))
+            continue
         if any(s in base for s in _SKIP_SUFFIX):
             skipped.append((base, "derived comparison / matrix file, not a single-arm eval"))
             continue
