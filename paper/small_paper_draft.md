@@ -498,11 +498,12 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 | Step | Command (WSL Ubuntu shell) | Cost | Status |
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
-| **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
+| **E5** | same two commands with `--difficulty 0.3`, plus the expert arm via `eval_paired_bc_vs_expert.py --difficulty 0.3` | ≈3.4 h total | **DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm 25.75% (fresh env, in the E3 d=0.3 pair) |
 | **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` + matched d=0 cell `id_bias30_60` | ≈50 min | **DONE** — matched 2×2: gap **+40.0 → +50.0 pp**; replicates the §4.6 widening by an independent method |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
 | **E2** | `eval_asap_baseline.py --mode id --id-seeds 400 --start-seed 20000` | ≈1 h | **DONE** — rule oracle 90.75%, exactly matching SPC; required adding `--start-seed` (the script previously could only run seeds 0..N-1) |
-| **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |
+| **E3** | `eval_paired_bc_vs_expert.py --seeds 400 --start-seed 20000 --difficulty {0,0.3}` | ≈1.7 h per difficulty | **DONE** — d=0 expert **36.75%** vs BC 46.50% (+9.75 pp, p=3.48e-05) · d=0.3 expert **25.75%** vs BC 42.25% (+16.50 pp, p=3.79e-11). This is the only fresh-env expert evaluation, and the only pair carrying `env_lifecycle` |
+| **E3-CLR** | the same command after the CLR patch | ≈1.7 h | **IN FLIGHT** — `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json`, d=0. Supplies the CLR table's expert row and the abstract's `{{EXPERT_CLR}}`. d=0.3 deliberately queued behind it |
 | **E4** | already covered by E7's `spc_distilled` arm | — | folded into E7 |
 
 **E6 interface check — DONE 2026-09-17 (zero GPU spend).** Three findings that change how the command must be written:
