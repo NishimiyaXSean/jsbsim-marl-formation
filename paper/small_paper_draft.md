@@ -75,23 +75,27 @@ Observation（CLR 异常低）
 
 ### 2.1 Imitation learning and expert demonstration
 
-- 行为克隆的经典脉络：ALVINN [Pomerleau 1989, verify]、大规模 BC [Bojarski et al. 2016, verify]、以及 distribution shift 与 compounding error 的标准治疗 DAgger [Ross et al. 2011, verify]。
-- **核心句**：*Existing IL methods usually assume the demonstrations are informative and near-optimal; the learner's objective is fidelity to the expert.*
-- 我们的 gap：*what if the expert itself carries a designed-in conservative bias?* 已有 suboptimal-demonstration 工作（如 preference-based reward learning 一系 T-REX [Brown et al. 2019, verify]、imitation from suboptimal data）多把「次优」当**标量质量**处理；我们把次优**定位到一个可命名的决策门**并给出针对性修正。
-- 2 篇待补：IL 里「专家缺陷被继承」的明确讨论（若存在，必须引并说明差异）。
+- **BC and its standard pathology.** Cloning a demonstrated policy by supervised learning goes back to ALVINN (Pomerleau, NIPS 1:305-313, 1989 [verify year]) and was scaled to end-to-end driving by Bojarski et al. (arXiv:1604.07316, 2016). The canonical account of its failure mode is DAgger (Ross, Gordon & Bagnell, AISTATS 2011), which attributes the failure to **distribution shift / compounding error** between the learner's and the expert's state visitation.
+- **Core sentence.** *Existing IL methods usually assume the demonstrations are informative and near-optimal; the learner's objective is fidelity to the expert.*
+- **The literature that does relax optimality relaxes it as a scalar.** T-REX learns a reward from ranked suboptimal demonstrations (Brown, Goo, Nagarajan & Niekum, ICML 2019, pp. 783-792); LERP models suboptimality as reward noise (Huo, Wang & Xu, AAAI 2023, pp. 7953-7961); IRLEED models a demonstrator's suboptimality as *reward bias plus action variance* (Beliaev & Pedarsani, arXiv:2402.01886, 2024); IL-from-imperfection reweights supplementary suboptimal data (Li, Xu, Qin, Yu & Luo, NeurIPS 2023). In every case suboptimality is a **scalar quality** to be estimated, ranked, or down-weighted.
+- **Our gap.** *What if the expert's suboptimality is not scalar but structural - a single, nameable decision gate that the environment does not require?* A scalar quality cannot recover it: the defect is invisible in task-level success statistics (§4.2) and costly only in closed loop. We do not down-weight the expert; we **localize** the gate and correct exactly it.
 
 ### 2.2 Policy distillation and model editing
 
-- Policy distillation [Rusu et al. 2015, verify]、Actor-Learner/Atari distillation [Parisotto et al., verify]、teacher-student 范式 [Hinton et al. 2015, verify]。
-- Parameter-efficient adaptation：LoRA [Hu et al. 2021, verify] 等——改少数参数、保其余冻结。
-- Model editing [Meng et al. 2022 (ROME), verify]：定位并编辑模型中承载特定事实/行为的少数参数。
-- **核心句**：*Existing approaches transfer or modify policies globally; we study localized correction of a single decision dimension, and use the freezing itself as a causal identification device.* —— SPC 与 distillation 的区别务必写清：目标**不是逼近 teacher**，而是**有选择地偏离 teacher 的一个 head**；冻结不是工程便利，是识别策略。
+- Knowledge distillation into a student (Hinton, Vinyals & Dean, arXiv:1503.02531, 2015), policy distillation (Rusu et al., arXiv:1511.06295, 2015 [verify venue]), and Actor-Mimic (Parisotto, Ba & Salakhutdinov, ICLR 2016, arXiv:1511.06342) all **transfer or compress a policy globally**, with fidelity to the teacher as the objective.
+- Parameter-efficient adaptation (LoRA; Hu et al., arXiv:2106.09685, 2021) and model editing (ROME; Meng, Wang, Pfaff & Yang, NeurIPS 2022, arXiv:2202.05262) do modify a small subspace while freezing the remainder - but they edit **learned knowledge** and evaluate by task success, not by attributing a residual to one behavioural dimension.
+- **Core sentence.** *Existing approaches transfer or modify policies globally; we study localized correction of a single decision dimension, and we use the freezing itself as a causal identification device.* The distinction from distillation is precise: SPC's objective is **not** to approach the teacher but to **selectively depart** from it on one head. Freezing is not an engineering convenience here - it is the identification strategy (§4.4).
 
 ### 2.3 Autonomous air combat decision-making
 
-- JSBSim 系空战仿真 [JSBSim, verify]；BFM/机动决策的分层方法 [Pope et al. 2021, verify]；BC+RL 混合 [Pang et al. 2024, verify]。
-- **约束**：这一节不超过半页。它是场景定位，不是贡献定位 —— reviewer 应该从 §2.1/§2.2 进入本文，而不是把它归类为「又一篇空战 RL」。
+- **Closest neighbours, stated plainly.** Li et al. (Neurocomputing 584:127591, 2024) learn a within-visual-range 6-DOF combat policy whose top layer decides autopilot commands **and missile launch**, with BC and PPO cross-coordinated. Li et al. (ACM TAAS 21(1):6:1-6:20, 2026) learn a "pursuit-lock-launch" policy with TD3 + BC and an adaptive imitation weight in Harfang3D. Both clone a launch decision from demonstrations in a WVR missile-engagement setting.
+- **Where we differ - two ways, both load-bearing.** (i) They treat the expert as a **bootstrap to be surpassed**; we treat it as an **object of diagnosis**, and we keep the maneuver provably frozen so the residual is attributed to the launch head rather than to aggregate learning. (ii) Their success criterion is aggregate task success; we add a **conditional** criterion (CLR) that exposes failures aggregate success hides. Notably, Li et al. (2026) present selective firing as a virtue - their policy "fires only when a hit was highly probable rather than spamming launches" - the **opposite prior** to the one this paper tests, and in our regime the measurement goes the other way (§4.3).
+- Background only, kept short: approximate dynamic programming for air combat (McGrew, How, Williams & Roy, JGCD 33(5):1641-1654, 2010); hierarchical maximum-entropy RL for an F-16 in within-visual-range combat (Pope et al., ICUAS 2021, pp. 275-284, arXiv:2105.00990); short-range UAV maneuver decisions via deep RL (Yang, Zhang, Shi, Hu & Wu, IEEE Access 8:363-378, 2020). JSBSim is the open-source flight-dynamics model underneath all of these.
+- **Constraint.** This subsection stays under half a page. It is scene-setting, not contribution positioning: a reviewer should enter this paper through §2.1/§2.2, not file it as another air-combat RL paper.
 
+> **Citation status (checked 2026-09-17 against the live record, not from memory).** Verified: Pomerleau (NIPS 1:305-313, year still to confirm), Ross/Gordon/Bagnell (AISTATS 2011), Bojarski (arXiv:1604.07316), Brown et al. (ICML 2019 pp. 783-792), Huo/Wang/Xu (AAAI 2023 pp. 7953-7961), Beliaev/Pedarsani (arXiv:2402.01886), Li Z. et al. (NeurIPS 2023), Parisotto/Ba/Salakhutdinov (ICLR 2016, arXiv:1511.06342), McGrew et al. (JGCD 33(5):1641-1654), Pope et al. (ICUAS 2021 pp. 275-284), Yang et al. (IEEE Access 8:363-378), Li L. et al. (Neurocomputing 584:127591, 2024), Li S. et al. (ACM TAAS 21(1):6, 2026). **Still to confirm: Rusu et al. venue (arXiv:1511.06295), Pomerleau year, Hinton/LoRA/ROME page numbers.**
+>
+> **Two citation errors were caught in this pass.** (1) The earlier placeholder "Pang et al. 2024" does not exist; the work actually intended - BC + PPO for WVR 6-DOF air combat - is Li, Zhang, Qian, Zhao & Wang, Neurocomputing 584:127591 (2024). (2) "Actor-Learner Distillation" is a misnomer; the correct title is Actor-Mimic (Parisotto, Ba & Salakhutdinov, ICLR 2016).
 ---
 
 ## 3. Method (1.5 pages)
