@@ -137,13 +137,39 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rollout-episodes", type=int, default=300)
     parser.add_argument("--epochs", type=int, default=15)
-    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--eval-seeds", type=int, default=60)
     parser.add_argument("--weights", default="data/expert/shoot_bc_round1_baseline.pth")
-    parser.add_argument("--out-weights", default="data/expert/shoot_bc_asap_distilled.pth")
+    parser.add_argument("--out-weights", default=None)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--smoke", action="store_true")
+    # Ablation A6 (2026-09-17): train ALL parameters on the SAME objective,
+    # same data, same loss. Answers "does the correction have to be local?".
+    # Default False, so the frozen SPC artifact -- and every number the paper
+    # attributes to it -- is bit-identical to before this flag existed.
+    parser.add_argument("--full-network", action="store_true",
+                        help="ablation: optimise every parameter instead of "
+                             "the fire head alone")
+    parser.add_argument("--log-json", default="logs/p2a_distill.json",
+                        help="gates+comparison dump; override for ablation "
+                             "runs so the SPC record is not clobbered")
     args = parser.parse_args()
+
+    if args.full_network:
+        if args.out_weights is None:
+            args.out_weights = "data/expert/_ablation_fullnet_fire_asap.pth"
+        if args.lr is None:
+            args.lr = 1e-4   # a full network needs a smaller step than a head
+        if os.path.abspath(args.out_weights) == os.path.abspath(
+                "data/expert/shoot_bc_asap_distilled.pth"):
+            raise SystemExit(
+                "refusing to overwrite the SPC artifact with an ablation run; "
+                "pass a distinct --out-weights")
+    else:
+        if args.out_weights is None:
+            args.out_weights = "data/expert/shoot_bc_asap_distilled.pth"
+        if args.lr is None:
+            args.lr = 1e-2
 
     if args.smoke:
         args.rollout_episodes = 30
@@ -192,10 +218,22 @@ def main():
     distilled.load_state_dict(bc_sd)
     for name, p in distilled.named_parameters():
         p.requires_grad_(False)
-    for p in distilled.action_heads[3].parameters():
-        p.requires_grad_(True)
+    if args.full_network:
+        for p in distilled.parameters():
+            p.requires_grad_(True)
+        print("[ablation A6] full-network fine-tune: ALL parameters trainable "
+              "(encoder + every head), lr=%g" % args.lr)
+        print("              the hdg/spd identity gates below are EXPECTED TO "
+              "FAIL -- that failure IS the measurement, not a defect.")
+        params = distilled.parameters()
+        mode = "full-network"
+    else:
+        for p in distilled.action_heads[3].parameters():
+            p.requires_grad_(True)
+        params = distilled.action_heads[3].parameters()
+        mode = "fire-head-only"
     distilled.eval()
-    opt = torch.optim.Adam(distilled.action_heads[3].parameters(), lr=args.lr)
+    opt = torch.optim.Adam(params, lr=args.lr)
     xs = torch.tensor(obs[tr_m][:, :30], device=device)
     xv = torch.tensor(obs[va_m][:, :30], device=device)
     # positive-only distillation: allowed steps -> fire=1. The disallowed
@@ -206,9 +244,23 @@ def main():
     xv_a = xv[allowed_va]
     yv_a = torch.ones(len(xv_a), dtype=torch.long, device=device)
 
+    # In full-network mode the encoder is being trained too, so the whole
+    # module -- not just the fire head -- must follow train/eval mode.
+    def set_train():
+        if args.full_network:
+            distilled.train()
+        else:
+            distilled.action_heads[3].train()
+
+    def set_eval():
+        if args.full_network:
+            distilled.eval()
+        else:
+            distilled.action_heads[3].eval()
+
     best = None
     for epoch in range(args.epochs):
-        distilled.action_heads[3].train()
+        set_train()
         idxs = np.random.default_rng(epoch).permutation(len(xs_a))
         bs = 512
         tot = 0.0
@@ -222,7 +274,7 @@ def main():
             loss.backward()
             opt.step()
             tot += loss.item() * len(i)
-        distilled.action_heads[3].eval()
+        set_eval()
         with torch.no_grad():
             feat_v = distilled.encoder(xv_a)
             pred = distilled.action_heads[3](feat_v).argmax(1)
@@ -329,20 +381,34 @@ def main():
                and comp["distilled"]["dist2_3k"]["lost_rate"] == 0
                and comp["distilled"]["dist2_3k"]["bad_total"] == 0)
     print(f"[p2a] VERDICT: {'PASS' if verdict else 'FAIL'}")
+    if args.full_network:
+        print("[ablation A6] this FAIL is the expected outcome: the identity "
+              "gates are measured, not asserted, in full-network mode. The "
+              "load-bearing numbers are maneuvers' deviation above and the "
+              "kill/CLR comparison below.")
 
     os.makedirs(os.path.dirname(args.out_weights) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(args.log_json) or ".", exist_ok=True)
     torch.save({
         "state_dict": {k: v for k, v in distilled.state_dict().items()},
         "meta": {"base": args.weights, "lr": args.lr,
                  "epochs": args.epochs, "rollout_episodes": args.rollout_episodes,
-                 "best_val_allowed_acc": best[0], "verdict": verdict},
+                 "best_val_allowed_acc": best[0], "verdict": verdict,
+                 "training_mode": mode, "full_network": bool(args.full_network)},
         "gates": gates,
         "comparison": comp,
     }, args.out_weights)
     print(f"[p2a] saved: {args.out_weights}")
-    with open("logs/p2a_distill.json", "w", encoding="utf-8") as f:
+    with open(args.log_json, "w", encoding="utf-8") as f:
         json.dump({"gates": gates, "comparison": comp,
+                   "training_mode": mode,
+                   "full_network": bool(args.full_network),
+                   "hierarchical_maneuver_deviation": {
+                       "hdg_spd_logits_max_diff": hdg_spd_diff,
+                       "hdg_spd_sequence_identical": seq_ok,
+                   },
                    "best_val_allowed_acc": best[0]}, f, indent=2)
+    print(f"[p2a] log: {args.log_json}")
 
 
 if __name__ == "__main__":
