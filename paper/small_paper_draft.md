@@ -414,9 +414,11 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **Table 2** | CLR diagnosis：Expert / BC / SPC × (allowed steps, fire decisions, CLR) | **C1** | §4.2；**expert 行待 E3 CLR 跑补齐**，BC/SPC 已有 |
 | **Table 3** | Causal intervention A：frozen BC trajectory 上的 fire-policy 枚举（inherited vs mask-permissive 及 5 个选择性策略） | **C3** | §4.3，E1 已入库 |
 | **Table 4** | SPC performance：BC vs SPC，d=0 与 d=0.3，kill / CLR / 配对检验 | **C2 + C3** | §4.4–4.6，E7/E5 已入库 |
-| **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | 待画 |
+| **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | `results/shoot_eval/framework_fig1.{png,pdf}`（**已产出**；expert CLR 格暂为 `pending`，待 E3 CLR run 完成后重渲染即自动填入） |
 | **Figure 2** | **Mechanism visualization**（不是普通轨迹图）：同一 seed、同一机动轨迹（已实测 max deviation = 0 m），Panel A = 距离/ATA 与决策点，Panel B = mask / BC fire / SPC fire 三行时间轴 | **C3** | `results/shoot_eval/mechanism_seed20007_d00.{png,json}`（**已产出并入库**，seed 20007：BC 3/41 合法步、超时；SPC 4/4、击杀） |
-| **Figure 3** | Difficulty robustness：d=0 vs d=0.3 的 kill rate 与 gap | C3 稳健性 | 待画 |
+| **Figure 3** | Difficulty robustness：d=0 vs d=0.3 的 kill rate 与 gap | C3 稳健性 | `results/shoot_eval/robustness_fig3.{png,pdf}`（**已产出并入库**：三策略 × 两难度柱状图，带 Wilson 95% CI，并标注配对 gap **+44.25 pp** / **+48.50 pp**） |
+
+> **Figure 1 与 Figure 3 的生成纪律**：两图都由 `scripts/make_paper_figures.py` 从 `results/shoot_eval/` 的活产物**读数**绘制（kill rate 取 `termination_reasons.target_killed` / `kill_rate`，配对 gap 取 `kill_rate.paired_diff_pp`），脚本内**不写任何数字常量** ⇒ 图与文中的数字不可能各自漂移。Figure 3 中 expert / BC 的两条腿来自 E3 与 E7/E5，全部为 fresh env、同 seeds、同 U(0,60)。缺失的专家 CLR 会渲染为 `pending` 并在 stderr 报警，脚本**不会**用其它口径的数字顶替（这正是 §4.4 的教训）。
 
 > **Figure 2 的定位**：它不展示「飞得多漂亮」，只展示 *same engagement geometry, same maneuver trajectory, different launch decision*。因为机动头被冻结，BC 与 SPC 的轨迹**逐位相同**（脚本实测 max position deviation = 0.000e+00 m），所以图里只有**一条**轨迹 —— 这比画两条更能说明问题。选种子时须在 caption 中声明是**示例性单局**，聚合证据在 Table 3/4。
 
@@ -434,8 +436,9 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **E5: SPC kill @ d=0.3** | **363/400 = 90.75%** (Wilson [87.51, 93.21]) | `results/shoot_eval/E5_spc_d03_n400_s20000.json` |
 | **E5: paired diff / p / discordant @ d=0.3** | **+48.50 pp / 7.97e-59 / 194:0** | `results/shoot_eval/E5_paired_bc_vs_spc_d03_n400.json` |
 | **E5: SPC invariance check** | 368/400 episode lengths differ, 382/400 same kill, 18 flips split 9:9 | computed from `E7_spc_*` vs `E5_spc_*` `episodes_detail` |
-| **Matched expert @ d=0** | **129/400 = 32.25%**, CLR 6.04% (1119/18521) | `results/shoot_eval/E5_expert_d0_n400_s20000.json` |
-| **Matched expert @ d=0.3** | **101/400 = 25.25%**, CLR 5.43% (1071/19736) | `results/shoot_eval/E5_expert_d03_n400_s20000.json` |
+| ~~Matched expert @ d=0 / d=0.3 (**reused env**)~~ | ~~32.25% / 25.25%~~, ~~CLR 6.04% / 5.43%~~ | **EXCLUDED** — reused-env path; artifacts renamed `EXCLUDED_reused_env_expert_*` (§4.4 note). **Never cite.** |
+| **Matched expert @ d=0 (fresh env, E3)** | **147/400 = 36.75%**, CLR {{EXPERT_CLR_D0}} | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v2.json` + `_clr.json` |
+| **Matched expert @ d=0.3 (fresh env, E3)** | **103/400 = 25.75%**, CLR {{EXPERT_CLR_D03}} | `results/shoot_eval/E3_paired_bc_vs_expert_d03_n400_s20000.json` |
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
@@ -532,7 +535,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [ ] E5 expert arm at d=0.3 (running) — unpaired reference only
 - [ ] d=0 vs d=0.3 comparison write-up (§4.6) — SPC invariant, gap widens
 - [x] Regenerate the paper's evidence artifacts — E1 (oracle, reproducibility-verified), E2 (rule oracle), E3 (paired BC vs expert, both difficulties) all done
-- [ ] **Produce a fresh-env expert CLR** — `eval_paired_bc_vs_expert.py` does not compute CLR, so the CLR table's expert row is currently an open gap. Do not substitute the reused-env value.
+- [ ] **Produce a fresh-env expert CLR** — `eval_paired_bc_vs_expert.py` does not compute CLR, so the CLR table's expert row is currently an open gap. Do not substitute the reused-env value. **In flight:** the CLR patch landed 2026-09-17 and `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` is being produced (d=0, n=400, same seeds, fresh env). When it lands: fill the abstract, the §4.2 table row, §4.6's expert row, the §6 ledger, and re-render Figure 1.
 - [ ] Decide whether to keep the reused-env path's `--validate` diagnostic at all, or have it emit a warning that it is not comparable to the other eval paths
 - [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
@@ -543,6 +546,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [x] **Related Work** — rewritten 2026-09-17 with 13 citations checked against the live record (arXiv IDs, venues, page numbers). Two errors corrected: a nonexistent "Pang et al. 2024", and "Actor-Learner Distillation" (a misnomer for Actor-Mimic). Three items still to confirm before submission: the Rusu venue, the Pomerleau year, and the Hinton/LoRA/ROME page numbers.
 - [x] **Mechanism figure** — `scripts/make_mechanism_figure.py` → `results/shoot_eval/mechanism_seed20007_d00.png` (tracked). Seed 20007: BC uses 3/41 legal steps and times out; SPC uses 4/4 and kills. The maneuver is bit-identical over 842 common steps (max deviation 0.0e+00 m). Shipped as a range/ATA-versus-time panel instead of a top view, because with a bit-identical maneuver a top view contains one line and no visible divergence.
 - [x] **Appendix A–D** — internal↔paper name map (including the retired `SHD` and the misleading `id_bias30_60` cell), the mask-versus-`fire_desired` constant-by-constant table with the strict-subset proof, the seven-arm oracle family, and the reproduction commands.
+- [x] **Figures 1 and 3** — `scripts/make_paper_figures.py` → `results/shoot_eval/framework_fig1.{png,pdf}` and `robustness_fig3.{png,pdf}` (both tracked). Every plotted value is read from the tracked E-numbered artifacts; the script holds no numeric constants, so figure and text cannot drift apart. Figure 3 carries Wilson 95% CIs and the paired +44.25 / +48.50 pp spans.
 - [ ] Acknowledge the rule expert's provenance honestly (§3.1) — it is this project's own hand-designed rule; there is no external paper to cite, and inventing one would be worse than saying so
 - [ ] Ablation A5/A6 (random-init fire head; full-network) if space permits
 - [ ] Format to AAMAS template
