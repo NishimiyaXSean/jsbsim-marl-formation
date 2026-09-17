@@ -368,7 +368,9 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
 | A5 | Fire head from random init, encoder frozen | not run | is the BC encoder necessary, or is the mask enough? |
-| A6 | Full-network distillation (unfreeze all) | not run | shows freezing is what buys clean attribution |
+| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **RUNNING** 2026-09-17 | shows that *freezing* is what buys clean attribution, not the objective |
+
+**A6 protocol (state it, because the fairness objection is obvious).** Identical objective, identical data, identical loss and identical initialisation as SPC; the **only** change is that every parameter is trainable instead of the launch head alone. Budget is set **more generously** than the fire-head-only run (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), specifically so the ablation cannot be dismissed as under-trained. Two measurements decide the question, and they are measured, not asserted: (i) **maneuver deviation** — the heading/speed logit max-diff vs the frozen BC, which the fire-head-only run holds below `1e-9` and which full-network fine-tuning is expected to move; and (ii) **kill rate and CLR under the paper's primary protocol** (d=0, U(0,60), 400 paired seeds), so the result is directly comparable to the 46.50% / 90.75% pair of §4.4. A smoke run already confirms the instrument reads what it should: fire-head-only gives logit diff `<1e-9` and identical action sequences; full-network at a 6-epoch budget gives diff **0.613**, non-identical sequences, and only 22% window utilisation — the maneuver moved *and* the fire head did not finish learning. The gates therefore report `FAIL` in A6 mode **by construction**; the failure is the measurement.
 | A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
 
 ---
