@@ -226,12 +226,17 @@ def main():
         print("              the hdg/spd identity gates below are EXPECTED TO "
               "FAIL -- that failure IS the measurement, not a defect.")
         params = distilled.parameters()
-        mode = "full-network"
+        # NOTE: must NOT be called `mode` -- the comparison loop below does
+        # `for mode in ("bc", "distilled", "rule")` and would silently
+        # overwrite it, mislabelling the saved checkpoint. (Caught by the
+        # smoke run 2026-09-17: the log said training_mode='distilled' for a
+        # full-network run.)
+        training_mode = "full-network"
     else:
         for p in distilled.action_heads[3].parameters():
             p.requires_grad_(True)
         params = distilled.action_heads[3].parameters()
-        mode = "fire-head-only"
+        training_mode = "fire-head-only"
     distilled.eval()
     opt = torch.optim.Adam(params, lr=args.lr)
     xs = torch.tensor(obs[tr_m][:, :30], device=device)
@@ -394,14 +399,15 @@ def main():
         "meta": {"base": args.weights, "lr": args.lr,
                  "epochs": args.epochs, "rollout_episodes": args.rollout_episodes,
                  "best_val_allowed_acc": best[0], "verdict": verdict,
-                 "training_mode": mode, "full_network": bool(args.full_network)},
+                 "training_mode": training_mode,
+                 "full_network": bool(args.full_network)},
         "gates": gates,
         "comparison": comp,
     }, args.out_weights)
     print(f"[p2a] saved: {args.out_weights}")
     with open(args.log_json, "w", encoding="utf-8") as f:
         json.dump({"gates": gates, "comparison": comp,
-                   "training_mode": mode,
+                   "training_mode": training_mode,
                    "full_network": bool(args.full_network),
                    "hierarchical_maneuver_deviation": {
                        "hdg_spd_logits_max_diff": hdg_spd_diff,
