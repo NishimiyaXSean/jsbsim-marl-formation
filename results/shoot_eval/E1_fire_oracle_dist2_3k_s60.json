@@ -1,0 +1,184 @@
+{
+  "run_meta": {
+    "model_id": "oracle_audit__dist2_3k",
+    "checkpoint": "data/expert/shoot_bc_round1_baseline.pth",
+    "checkpoint_sha256": "aad05b459619bdb7745ac8da24ba4833f9b50d2719697eec00fa5531f1d17a60",
+    "seed_range": [
+      0,
+      59
+    ],
+    "n_episodes": 60,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "9ab3215",
+    "script": "scripts/fire_oracle_audit.py",
+    "timestamp_utc": "2026-09-17T06:39:46Z",
+    "artifact_kind": "oracle_enumeration_on_frozen_trajectory",
+    "cell": "dist2_3k",
+    "cell_config": {
+      "chase_dist_min": 2000.0,
+      "chase_dist_max": 3000.0
+    },
+    "oracles": [
+      "asap",
+      "delay_30",
+      "delay_60",
+      "dlz_mid",
+      "dlz_deep",
+      "interval_100",
+      "bc"
+    ],
+    "note": "trajectory frozen from --weights; only the fire policy varies",
+    "complete": true
+  },
+  "asap": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.8666666666666667,
+      "launches_per_episode": 3.85,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.8666666666666667,
+      "first_fire_median": 67.0,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 4.0,
+      "first_to_fourth_median": 743.5,
+      "blockers": {
+        "episode_end_in_window": 8
+      },
+      "reasons": {
+        "target_killed": 52,
+        "timeout": 8
+      }
+    }
+  },
+  "delay_30": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.38333333333333336,
+      "launches_per_episode": 3.25,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.38333333333333336,
+      "first_fire_median": 693.5,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 32.0,
+      "first_to_fourth_median": 749.0,
+      "blockers": {
+        "episode_end_in_window": 37
+      },
+      "reasons": {
+        "target_killed": 23,
+        "timeout": 37
+      }
+    }
+  },
+  "delay_60": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.1,
+      "launches_per_episode": 2.783333333333333,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.1,
+      "first_fire_median": 744.5,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 36.0,
+      "first_to_fourth_median": 730.0,
+      "blockers": {
+        "episode_end_in_window": 48,
+        "window_never_reopened": 6
+      },
+      "reasons": {
+        "target_killed": 6,
+        "timeout": 54
+      }
+    }
+  },
+  "dlz_mid": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.0,
+      "launches_per_episode": 1.2666666666666666,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.0,
+      "first_fire_median": 750.0,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 54.5,
+      "first_to_fourth_median": null,
+      "blockers": {
+        "episode_end_in_window": 59,
+        "window_never_reopened": 1
+      },
+      "reasons": {
+        "timeout": 60
+      }
+    }
+  },
+  "dlz_deep": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.0,
+      "launches_per_episode": 1.1166666666666667,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.0,
+      "first_fire_median": 732.5,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 57.0,
+      "first_to_fourth_median": null,
+      "blockers": {
+        "episode_end_in_window": 58,
+        "window_never_reopened": 2
+      },
+      "reasons": {
+        "timeout": 60
+      }
+    }
+  },
+  "interval_100": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.0,
+      "launches_per_episode": 1.95,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.0,
+      "first_fire_median": 67.0,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 37.0,
+      "first_to_fourth_median": null,
+      "blockers": {
+        "episode_end_in_window": 60
+      },
+      "reasons": {
+        "timeout": 60
+      }
+    }
+  },
+  "bc": {
+    "aggregate": {
+      "n": 60,
+      "lost_rate": 0.0,
+      "kill_rate": 0.15,
+      "launches_per_episode": 2.3666666666666667,
+      "hit_rate": 1.0,
+      "reach_4_launches_rate": 0.15,
+      "first_fire_median": 739.0,
+      "first_allowed_median": 67.0,
+      "allowed_total_median": 33.0,
+      "first_to_fourth_median": 778.0,
+      "blockers": {
+        "episode_end_in_window": 50,
+        "window_never_reopened": 1
+      },
+      "reasons": {
+        "target_killed": 9,
+        "timeout": 51
+      }
+    }
+  }
+}
