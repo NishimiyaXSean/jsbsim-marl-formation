@@ -245,6 +245,7 @@ def main():
         wez_reach = 0
         fired_total = 0
         allowed_total = 0
+        hits_total = 0
         kills = 0
         ata_p90s = []
         wez_firsts = []
@@ -259,6 +260,7 @@ def main():
                 wez_firsts.append(r['wez_first'])
             fired_total += r['fired']
             allowed_total += r['allowed']
+            hits_total += r['hits']
             if r['reason'] == 'target_killed':
                 kills += 1
             ata_p90s.append(r['ata_p90'])
@@ -286,6 +288,7 @@ def main():
         if wez_firsts:
             print(f'  first WEZ time: median={np.median(wez_firsts)*0.2:.1f}s')
         print(f'  launches: {fired_total} ({fired_total/n_ep:.2f}/ep)')
+        print(f'  hits: {hits_total} ({hits_total/max(fired_total,1):.2f}/launch)')
         print(f'  CLR (fire | allowed): {clr*100:.2f}% '
               f'({fired_total}/{allowed_total} allowed steps)')
         print(f'  ATA p90: median across eps = {np.median(ata_p90s):.1f} deg')
@@ -300,6 +303,11 @@ def main():
                 action_mode='argmax',
                 script='scripts/generate_shoot_rule_expert.py --validate',
             )
+            # This path only ever writes after the final episode, so the result
+            # is complete by construction. Declare it explicitly so downstream
+            # tooling (scripts/collect_matrix.py) does not have to guess.
+            meta['complete'] = True
+            meta['episodes_completed'] = n_ep
             out = {
                 'run_meta': meta,
                 'policy': 'discrete_rule_expert',
@@ -310,6 +318,8 @@ def main():
                 'kill_rate': kills / max(n_ep, 1),
                 'wez_reach_rate': wez_reach / max(n_ep, 1),
                 'launches_per_episode': fired_total / max(n_ep, 1),
+                'hit_rate': hits_total / max(fired_total, 1),
+                'hits': hits_total,
                 'clr': clr,
                 'clr_allowed_steps': allowed_total,
                 'clr_fire_commands': fired_total,
