@@ -293,7 +293,7 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 >
 > **⚠ Superseded numbers.** The docs-attested Phase-1 pair **43.2% → 91.2% = +48.0 pp** (500 seeds, *old* geometry U(30,60)) is **replaced** by the measured **46.50% → 90.75% = +44.25 pp** (400 seeds, U(0,60)). The old pair was not self-consistent: its BC figure came from a different geometry generation than its CLR figure. E7 puts kill rate, CLR, and geometry on **one** seed set. Cite 46.50 / 90.75 / +44.25 in the paper.
 >
-> Still **docs-only and to be regenerated if used**: the rule-expert ID kill rate (35.8%) and the ASAP rule-oracle ID kill rate (90.6%) — `paired_bc_vs_expert_500.json` / `asap_baseline.json` are gone. The SPC-vs-oracle comparison (90.75% vs 90.6%) currently spans two evaluations and should be re-measured on one seed set before being asserted in print.
+> **Both former docs-only numbers have now been replaced by fresh-env measurements.** The rule-expert ID kill rate is **36.75%** (E3 paired, fresh env, seeds 20000–20399) — *not* the docs' 35.8%, and *not* the reused-env 32.25%. The rule-oracle ID kill rate is **90.75%** (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (same policy by construction, §4.4). The originals (`paired_bc_vs_expert_500.json`, `asap_baseline.json`) remain lost — the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
 
 **SPC vs the rule oracle on one seed set (E2, seeds 20000–20399, n=400).** Resolved: `eval_asap_baseline.py` had no `--start-seed`, so the oracle could only ever run seeds `0..N-1` and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set.
 
@@ -461,7 +461,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 
 | Metric | Value | Doc source | Regenerating script |
 |---|---|---|---|
-| ~~Expert ID kill~~ | ~~35.8%~~ → **use 32.25%** (matched, E5) | superseded | — |
+| ~~Expert ID kill~~ | ~~35.8%~~ → **use 36.75%** (fresh-env, E3 paired) — **not** the reused-env 32.25% | superseded | — |
 | ~~BC ID kill~~ | ~~43.2%~~ → **use 46.50%** (E7) | superseded | — |
 | ~~ASAP rule oracle ID kill~~ | ~~90.6%~~ → **use 90.75%** (E2, matched) | superseded | — |
 | ~~SPC ID kill~~ | ~~91.2%~~ → **use 90.75%** (E7) | superseded | — |
