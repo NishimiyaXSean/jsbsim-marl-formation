@@ -208,13 +208,29 @@ def main():
     else:
         checks.append(("{{EXPERT_CLR",
                        "placeholder still expected (CLR run incomplete)"))
+
+    # Both must-be-ABSENT traps are also *described* in the draft (Appendix D
+    # and the section 9 notes), so a naive substring count reports a false
+    # positive. Ignore hits on lines that are self-evidently talking about the
+    # trap rather than asserting the number.
+    TRAP_CONTEXT = ("bogus", "guard", "must be ABSENT", "must-be-absent",
+                    "TRAP", "feeding tie counts", "placeholder")
+    lines = text.splitlines()
+
+    def count_in_claim_context(needle):
+        hits = 0
+        for line in lines:
+            if needle in line and not any(c in line for c in TRAP_CONTEXT):
+                hits += 1
+        return hits
     print()
     print("=" * 96)
     print("DRAFT TEXT OCCURRENCE CHECK")
     print("=" * 96)
     for needle, what in checks:
-        print("%-46s %s  (count=%d)" % (what, "FOUND" if needle in text else "MISSING",
-                                        text.count(needle)))
+        hits = (count_in_claim_context(needle) if what.startswith("TRAP")
+                else text.count(needle))
+        print("%-46s %s  (count=%d)" % (what, "FOUND" if hits else "MISSING", hits))
     print()
     print("Lines in draft:", len(text.splitlines()))
     return 0

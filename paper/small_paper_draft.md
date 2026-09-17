@@ -27,7 +27,7 @@
 
 ## Abstract (~170 words)
 
-Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert commands launch at only {{EXPERT_CLR}} of permitted steps; BC reproduces that preference at **7.26%** (400 episodes, fresh env per episode). The cause is a launch-quality gate the expert applies *on top of* the environment's legality condition — a conservative engagement preference the environment does not require, not a deficit in the imitation, which is behaving as intended. Two interventions isolate its cost. **(A)** Holding the BC maneuver trajectory frozen and enumerating fire policies on top of it, a mask-permissive policy (launch whenever the environment-level launch mask permits) achieves **86.7%** kills where the inherited launch policy achieves **15.0%**, and every range- or delay-selective alternative is worse; the maneuver is fixed by construction, so the gap is attributable to the launch decision alone. **(B)** We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.50% to 90.75%** (**+44.25 pp**, exact McNemar **p = 1.04e-53**); SPC's CLR of **100.00%** is true by construction, not a finding. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC is unchanged at **90.75%** while the baseline falls to **42.25%**, widening the gap to **+48.50 pp** with all 194 discordant seeds again favouring the correction. We do not claim that the mask-permissive policy is optimal in general; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
+Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert commands launch at only **6.07%** of permitted steps and BC lands in the same band at **7.26%** (400 episodes, fresh env per episode, identical seeds). The cause is a launch-quality gate the expert applies *on top of* the environment's legality condition — a conservative engagement preference the environment does not require, not a deficit in the imitation, which is behaving as intended. Two interventions isolate its cost. **(A)** Holding the BC maneuver trajectory frozen and enumerating fire policies on top of it, a mask-permissive policy (launch whenever the environment-level launch mask permits) achieves **86.7%** kills where the inherited launch policy achieves **15.0%**, and every range- or delay-selective alternative is worse; the maneuver is fixed by construction, so the gap is attributable to the launch decision alone. **(B)** We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.50% to 90.75%** (**+44.25 pp**, exact McNemar **p = 1.04e-53**); SPC's CLR of **100.00%** is true by construction, not a finding. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC is unchanged at **90.75%** while the baseline falls to **42.25%**, widening the gap to **+48.50 pp** with all 194 discordant seeds again favouring the correction. We do not claim that the mask-permissive policy is optimal in general; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
@@ -132,14 +132,17 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | DLZ position | legality only | depth ∈ **[0.25, 0.75]** | refuses deep-in-DLZ (closer) and far-edge shots |
 | Output | — | `fire = allowed AND desired` | cooldown/inventory handled by mask |
 
-**Measured (d=0, deterministic, 200 episodes, seed 20000+, current geometry):**
+**Measured — two independent bases, one answer.** The rows are of different kinds and must not be pooled; the first is the paper's authoritative figure and the last two are corroboration.
 
-| Quantity | Value |
-|---|---|
-| Expert CLR (`action[:,3]` on allowed steps, from `data/expert/shoot_rule_expert.npz`) | **5.96%** (560 / 9395) |
-| BC CLR (launch-head argmax on allowed steps, 200 rollouts) | **7.37%** (614 / 8327) |
-| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ the expert's behaviour on legal steps is fully determined by its own gate |
-| Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back |
+| Quantity | Value | Basis |
+|---|---|---|
+| **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` — same seeds, same protocol, same env lifecycle as every other number in this paper |
+| Expert CLR (`action[:,3]` on allowed steps, read off the demonstration dataset) | 5.96% (560 / 9395) | `data/expert/shoot_rule_expert.npz`, 200 episodes |
+| BC CLR (launch-head argmax on allowed steps, 200 rollouts) | 7.37% (614 / 8327) | `results/health_check/fire_hesitancy.json` (2026-09-16, so U(0,60)) |
+| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ the expert's behaviour on legal steps is fully determined by its own gate | same dataset |
+| Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back | same dataset |
+
+> **⚠ Geometry caveat on the corroboration rows (caught 2026-09-17).** `shoot_rule_expert.npz` has mtime **2026-09-13 20:22**, which *predates* commit `fb48155` (2026-09-14 09:06) that changed the heading-bias range from `U(30,60)` to `U(0,60)`. The demonstration dataset is therefore an **old-geometry** artifact, and its 5.96% is *not* the same measurement basis as the paper's U(0,60) figures. The BC 7.37% row comes from `results/health_check/fire_hesitancy.json` generated 2026-09-16, i.e. *after* the change, so the two corroboration rows are **geometry-mixed**. This is why neither is allowed to carry a headline claim: the authoritative expert number is the re-measured **6.07%**, and the older rows are quoted only to show that the low figure is stable across bases, geometries and decade-old seed sets. Do not average them, and do not present 5.96% alongside 7.26% as if they were one matched comparison.
 
 ⇒ The conservatism is **entirely attributable to the designed gate**, not to the environment and not to BC's fitting error.
 
@@ -176,22 +179,26 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 
 ### 4.2 Diagnosis result — CLR
 
-| Policy | Allowed steps | Launch commands | **CLR** |
-|---|---|---|---|
-| Rule expert (200 ep diagnostic) | 9395 | 560 | 5.96% |
-| ~~Rule expert (400 ep, d=0)~~ | ~~18521~~ | ~~1119~~ | ~~6.04%~~ — **excluded, reused-env path** |
-| ~~Rule expert (400 ep, d=0.3)~~ | ~~19736~~ | ~~1071~~ | ~~5.43%~~ — **excluded, reused-env path** |
-| BC round1 (200 ep diagnostic) | 8327 | 614 | 7.37% |
-| BC round1 (E7 seed set, 400 ep, d=0) | 16839 | 1223 | **7.26%** |
-| BC round1 (E5 seed set, 400 ep, d=0.3) | 17169 | 1194 | **6.95%** |
-| **SPC (E7 seed set, 400 ep, d=0)** | 1560 | 1560 | **100.00%** |
-| SPC (E5 seed set, 400 ep, d=0.3) | 1577 | 1563 | **99.11%** |
-| Rule oracle (fire whenever the mask permits) | — | all allowed | 100% (by construction) |
+| Policy | Basis (all U(0,60) unless noted) | Allowed steps | Launch commands | **CLR** |
+|---|---|---|---|---|
+| **Rule expert** | **E3 seed set, 400 ep, d=0, fresh env** | **18639** | **1131** | **6.07%** |
+| **BC round1** | E7 seed set, 400 ep, d=0, fresh env | 16839 | 1223 | **7.26%** |
+| **BC round1** | E5 seed set, 400 ep, d=0.3, fresh env | 17169 | 1194 | **6.95%** |
+| **SPC** | E7 seed set, 400 ep, d=0, fresh env | 1560 | 1560 | **100.00%** |
+| SPC | E5 seed set, 400 ep, d=0.3, fresh env | 1577 | 1563 | **99.11%** |
+| Rule oracle (fire whenever the mask permits) | by construction | — | all allowed | 100% (by construction) |
+| *Expert, 200-ep demonstration dataset* | *old geometry U(30,60) — corroboration only* | *9395* | *560* | *5.96%* |
+| *BC round1, 200 rollouts* | *health-check diagnostic* | *8327* | *614* | *7.37%* |
+| ~~Rule expert 400 ep d=0 / d=0.3~~ | ~~reused env — **excluded**~~ | ~~18521 / 19736~~ | ~~1119 / 1071~~ | ~~6.04% / 5.43%~~ |
 
-**BC and SPC rows are safe**: both come from `eval_bc_1v1.py`, which builds a fresh env per episode. **The expert CLR rows are excluded** — they come from the reused-env path (§4.4 note). Producing a comparable expert CLR requires the paired script to compute CLR, which it does not; that is an open gap, not a measurement to substitute. The claim "expert is the most launch-conservative, then BC, then SPC" therefore currently rests on one excluded leg and must be re-derived before it is asserted.
+**Every un-struck row now comes from one protocol** — fresh env per episode, seeds 20000–20399, geometry U(0,60), deterministic argmax — and the expert and BC rows are produced by the *same run* (`eval_paired_bc_vs_expert.py`, CLR support added 2026-09-17), so their difference is paired by construction. The italic corroboration rows are a different basis and are quoted only where labelled (§3.2). The struck rows come from the reused-env path and are excluded for the reason given in §4.4.
+
+**Cross-check that the new run agrees with the rest of the paper:** the same artifact reproduces the E3 kill numbers bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit (1223/16839). So adding CLR instrumentation changed nothing measurable about the policy — the new field is additive, and the table is self-consistent.
+
+**The conservatism ordering can now be asserted.** On one protocol: expert **6.07%** < BC **7.26%** ≪ SPC **100.00%**. Earlier drafts deliberately withheld this sentence because its expert leg came from the excluded reused-env path; that reason is gone. Caveat (b) still applies — the denominators differ by construction, so this is an ordering of *tendencies*, not of fractions of one shared opportunity set.
 
 Two readings:
-1. Expert and BC agree closely across two independent evaluations (5.96% vs 7.37% / 7.26%), so the conservatism is a **stable property**, not sampling noise. BC is not more conservative than the teacher in any meaningful sense — it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
+1. **Expert and BC agree closely on every basis available**, so the conservatism is a **stable property**, not sampling noise: 6.07% vs 7.26% on the matched 400-seed set, and 5.96% vs 7.37% on the earlier diagnostics. BC is not more conservative than the teacher in any meaningful sense — it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
 2. **Neither figure alone proves suboptimality.** A low CLR diagnoses *conservatism* only; whether that conservatism is *costly* is established separately (§4.3, §4.4).
 
 > **⚠ Two caveats that must appear in the paper (both are reviewer-attack surfaces).**
@@ -329,7 +336,7 @@ Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a
 
 | Arm | d=0 kill | d=0.3 kill | Δ | d=0 CLR | d=0.3 CLR |
 |---|---|---|---|---|---|
-| Rule expert (fresh env) | **36.75%** (147/400) | **25.75%** (103/400) | **−11.00 pp** | *not available* | *not available* |
+| Rule expert (fresh env) | **36.75%** (147/400) | **25.75%** (103/400) | **−11.00 pp** | **6.07%** | *not measured* |
 | BC round1 | 46.50% | **42.25%** (169/400) | −4.25 pp | 7.26% | **6.95%** |
 | **SPC** | 90.75% | **90.75%** (363/400) | **0.00** | 100.00% | **99.11%** |
 | **BC − expert margin** | +9.75 pp | **+16.50 pp** | **+6.75 pp** | — | — |
@@ -411,10 +418,10 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | # | 内容 | 服务贡献 | 数据来源 / 状态 |
 |---|---|---|---|
 | **Table 1** | Setup：任务、观测/动作空间、三个策略、评测协议（d=0、deterministic argmax、U(0,60)、fresh env/episode） | 全部 | §3.1，**可写** |
-| **Table 2** | CLR diagnosis：Expert / BC / SPC × (allowed steps, fire decisions, CLR) | **C1** | §4.2；**expert 行待 E3 CLR 跑补齐**，BC/SPC 已有 |
+| **Table 2** | CLR diagnosis：Expert / BC / SPC × (allowed steps, fire decisions, CLR) | **C1** | §4.2，**完整** —— expert **6.07%**（fresh env, E3 v3 clr）/ BC **7.26%** / SPC **100.00%**，同 seeds、同 env 生命周期 |
 | **Table 3** | Causal intervention A：frozen BC trajectory 上的 fire-policy 枚举（inherited vs mask-permissive 及 5 个选择性策略） | **C3** | §4.3，E1 已入库 |
 | **Table 4** | SPC performance：BC vs SPC，d=0 与 d=0.3，kill / CLR / 配对检验 | **C2 + C3** | §4.4–4.6，E7/E5 已入库 |
-| **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | `results/shoot_eval/framework_fig1.{png,pdf}`（**已产出**；expert CLR 格暂为 `pending`，待 E3 CLR run 完成后重渲染即自动填入） |
+| **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | `results/shoot_eval/framework_fig1.{png,pdf}`（**已产出且数值已填齐**：expert 6.07% / BC 7.26%） |
 | **Figure 2** | **Mechanism visualization**（不是普通轨迹图）：同一 seed、同一机动轨迹（已实测 max deviation = 0 m），Panel A = 距离/ATA 与决策点，Panel B = mask / BC fire / SPC fire 三行时间轴 | **C3** | `results/shoot_eval/mechanism_seed20007_d00.{png,json}`（**已产出并入库**，seed 20007：BC 3/41 合法步、超时；SPC 4/4、击杀） |
 | **Figure 3** | Difficulty robustness：d=0 vs d=0.3 的 kill rate 与 gap | C3 稳健性 | `results/shoot_eval/robustness_fig3.{png,pdf}`（**已产出并入库**：三策略 × 两难度柱状图，带 Wilson 95% CI，并标注配对 gap **+44.25 pp** / **+48.50 pp**） |
 
@@ -437,8 +444,8 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **E5: paired diff / p / discordant @ d=0.3** | **+48.50 pp / 7.97e-59 / 194:0** | `results/shoot_eval/E5_paired_bc_vs_spc_d03_n400.json` |
 | **E5: SPC invariance check** | 368/400 episode lengths differ, 382/400 same kill, 18 flips split 9:9 | computed from `E7_spc_*` vs `E5_spc_*` `episodes_detail` |
 | ~~Matched expert @ d=0 / d=0.3 (**reused env**)~~ | ~~32.25% / 25.25%~~, ~~CLR 6.04% / 5.43%~~ | **EXCLUDED** — reused-env path; artifacts renamed `EXCLUDED_reused_env_expert_*` (§4.4 note). **Never cite.** |
-| **Matched expert @ d=0 (fresh env, E3)** | **147/400 = 36.75%**, CLR {{EXPERT_CLR_D0}} | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v2.json` + `_clr.json` |
-| **Matched expert @ d=0.3 (fresh env, E3)** | **103/400 = 25.75%**, CLR {{EXPERT_CLR_D03}} | `results/shoot_eval/E3_paired_bc_vs_expert_d03_n400_s20000.json` |
+| **Matched expert @ d=0, fresh env (E3)** | **147/400 = 36.75%**, CLR **6.07%** (1131/18639) | `results/shoot_eval/E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` — reproduces the v2 kill numbers bit-for-bit and BC's CLR to the digit |
+| **Matched expert @ d=0.3 (fresh env, E3)** | **103/400 = 25.75%**, CLR **not yet measured** (queued behind d=0) | `results/shoot_eval/E3_paired_bc_vs_expert_d03_n400_s20000.json` |
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
@@ -447,8 +454,8 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | **Evasion cost by policy** | expert **−11.00 pp** > BC **−4.25 pp** > SPC **0.00 pp** (all fresh-env, one protocol) | derived from the E3 pair + `E7`/`E5` |
 | **Env-lifecycle confound (expert)** | reused-env expert **32.25%** vs fresh-env expert **36.75%** on identical seeds; per-seed kill vectors differ | `tests/check_expert_path_consistency.sh` |
 | **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
-| Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
-| BC CLR | 7.37% (614/8327) | same |
+| Expert CLR (corroboration only) | 5.96% (560/9395) | recomputable from `data/expert/shoot_rule_expert.npz` — ⚠ **old geometry U(30,60)**: the npz mtime 2026-09-13 20:22 predates `fb48155` (2026-09-14 09:06) |
+| BC CLR (corroboration only) | 7.37% (614/8327) | `results/health_check/fire_hesitancy.json` (2026-09-16 ⇒ U(0,60)). **The two corroboration rows are geometry-mixed — never present them as one matched pair** |
 | Expert `fire_desired` ≡ `action[:,3]` on allowed steps | 560 = 560 | same |
 | SPC @ U(0,60), n=100 s42 | 91/100 | `results/shoot_eval/eval_2x2_base_geoNew_s42.json` |
 | SPC @ U(30,60), n=100 s42 | 87/100 | `results/shoot_eval/eval_2x2_base_geoOld_s42.json` (**= `eval_distilled_d0_s42.json`**) |
@@ -503,7 +510,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
 | **E2** | `eval_asap_baseline.py --mode id --id-seeds 400 --start-seed 20000` | ≈1 h | **DONE** — rule oracle 90.75%, exactly matching SPC; required adding `--start-seed` (the script previously could only run seeds 0..N-1) |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 400 --start-seed 20000 --difficulty {0,0.3}` | ≈1.7 h per difficulty | **DONE** — d=0 expert **36.75%** vs BC 46.50% (+9.75 pp, p=3.48e-05) · d=0.3 expert **25.75%** vs BC 42.25% (+16.50 pp, p=3.79e-11). This is the only fresh-env expert evaluation, and the only pair carrying `env_lifecycle` |
-| **E3-CLR** | the same command after the CLR patch | ≈1.7 h | **IN FLIGHT** — `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json`, d=0. Supplies the CLR table's expert row and the abstract's `{{EXPERT_CLR}}`. d=0.3 deliberately queued behind it |
+| **E3-CLR** | the same command with `--model-id paired_bc_vs_expert_d0_clr` after the CLR patch | ≈1.7 h | **DONE** — `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json`: expert **6.07%** (1131/18639) and BC **7.26%** (1223/16839) at d=0, with the kill side reproducing v2 exactly. Fills the CLR table's expert row and the abstract. d=0.3 queued behind it |
 | **E4** | already covered by E7's `spc_distilled` arm | — | folded into E7 |
 
 **E6 interface check — DONE 2026-09-17 (zero GPU spend).** Three findings that change how the command must be written:
@@ -536,7 +543,8 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [x] **Expert arm at d=0.3** — done as the fresh-env paired arm inside `E3_paired_bc_vs_expert_d03_n400_s20000.json` (**25.75%**), which supersedes the reused-env `E5_expert_d03` figure as the citable number
 - [x] **d=0 vs d=0.3 comparison write-up (§4.6)** — SPC invariant at 90.75%, gap widens **+44.25 → +48.50 pp**; five findings written up
 - [x] Regenerate the paper's evidence artifacts — E1 (oracle, reproducibility-verified), E2 (rule oracle), E3 (paired BC vs expert, both difficulties) all done
-- [ ] **Produce a fresh-env expert CLR** — `eval_paired_bc_vs_expert.py` does not compute CLR, so the CLR table's expert row is currently an open gap. Do not substitute the reused-env value. **In flight:** the CLR patch landed 2026-09-17 and `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` is being produced (d=0, n=400, same seeds, fresh env). When it lands: fill the abstract, the §4.2 table row, §4.6's expert row, the §6 ledger, and re-render Figure 1.
+- [x] **Produce a fresh-env expert CLR** — **DONE 2026-09-17**: `eval_paired_bc_vs_expert.py` now computes CLR, and `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` gives **6.07%** (1131/18639) at d=0 on the same 400 seeds, same protocol and same env lifecycle as every other number. The same artifact reproduces the v2 kill numbers bit-for-bit (expert 36.75%, BC 46.50%, +9.75 pp, W/L/T 63/24/313) and BC's CLR to the digit, so the instrumentation is additive. Filled into the abstract, §4.2, §4.6, §6 and Figure 1. The **conservatism ordering (expert 6.07% < BC 7.26% ≪ SPC 100%) is now assertable**; it was withheld until this leg existed. **Remaining: d=0.3**, deliberately queued behind d=0.
+- [ ] Know the geometry of every quoted number — **a 2026-09-17 audit found the two "200-episode diagnostic" rows were labelled `current geometry` and were not**: `shoot_rule_expert.npz` predates `fb48155`, so the expert's 5.96% is U(30,60) while the BC 7.37% beside it is U(0,60). Because the two rows sat in the same table and read as a matched pair, the paper was one edit away from quoting a geometry-mixed comparison. Both rows are now relabelled as corroboration-only, and the authoritative expert figure is the re-measured 6.07%. Apply the same question to any *future* number before it enters a table.
 - [x] Decide whether to keep the reused-env path's `--validate` diagnostic at all — **decided 2026-09-17: keep it, but fence it.** It is still the cheapest rule-behaviour check, so it stays; it now (i) prints a five-line lifecycle banner at the top of its output, (ii) warns in its `--help` text, (iii) writes `env_lifecycle='reused across episodes (… NOT comparable to fresh-env arms)'` into `run_meta`, and (iv) its artifacts are renamed `EXCLUDED_reused_env_expert_*` so `collect_matrix.py` skips them. Delegating the exclusion to a filename a human must remember was the original failure mode; the fence is now mechanical.
 - [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
@@ -667,6 +675,6 @@ python scripts/collect_matrix.py --glob 'results/shoot_eval/E*_*.json' \
 python scripts/audit_paper_numbers.py           # recompute every headline number
 ```
 
-`make_paper_figures.py` reads every plotted value from the tracked `E*_*.json` artifacts and holds **no numeric constants**, so Figures 1 and 3 cannot drift away from the text; the abstract's `{{EXPERT_CLR}}` placeholder is rendered as `pending` until the CLR artifact lands. `audit_paper_numbers.py` recomputes the headline numbers straight from the artifacts and then checks that the draft still quotes them — including two must-be-absent guards: the placeholder (once the CLR run completes) and the bogus `2.5e-65` p-value produced by feeding tie counts into `exact_mcnemar`.
+`make_paper_figures.py` reads every plotted value from the tracked `E*_*.json` artifacts and holds **no numeric constants**, so Figures 1 and 3 cannot drift away from the text; if an artifact is missing the figure renders `pending` and warns rather than substituting a value from another basis. `audit_paper_numbers.py` recomputes the headline numbers straight from the artifacts and then checks that the draft still quotes them, including two must-be-absent guards: the abstract's expert-CLR placeholder (once the CLR run completes) and the bogus `2.5e-65` p-value produced by feeding tie counts into `exact_mcnemar`. Both guards are themselves documented in the draft, so the checker ignores occurrences sitting inside a line that is explicitly talking about the trap.
 
 `collect_matrix.py` reads **only** each file's `run_meta` — never filenames — and skips any artifact whose name is marked `EXCLUDED_`, so retired evidence cannot silently re-enter the table.

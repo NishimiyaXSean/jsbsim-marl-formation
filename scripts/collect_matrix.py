@@ -101,6 +101,77 @@ def load_rows(paths):
     return rows, skipped, legacy
 
 
+def load_expert_arms(paths):
+    """Harvest the rule-expert arm out of the paired two-arm artifacts.
+
+    WHY THIS EXISTS
+    ---------------
+    ``eval_paired_bc_vs_expert.py`` writes both arms into one file
+    (``d["expert"]`` / ``d["bc"]``), so the single-arm reader above cannot see
+    them and skips the file as a "derived comparison". The rule expert is
+    measurable through **no** single-arm path that carries its own run_meta,
+    which meant the paper's central comparison was the one table whose expert
+    row still had to be copied by hand -- exactly the failure mode this script
+    exists to remove. Only the expert arm is taken here; the BC arm is already
+    present from E7/E5 and duplicating it would create a false identity clash.
+    """
+    out, skipped = [], []
+    for p in sorted(paths):
+        base = os.path.basename(p)
+        if "EXCLUDED" in base:
+            # Already reported (with the fuller reason) by load_rows.
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            skipped.append((base, f"unreadable: {e}"))
+            continue
+        m = d.get("run_meta") or {}
+        if m.get("artifact_kind") != "paired_two_arm_eval":
+            continue  # single-arm artifact: already handled by load_rows
+        arm = d.get("expert")
+        if m.get("complete") is False:
+            skipped.append((base, f"incomplete ({m.get('episodes_completed')} "
+                                  f"episodes) -> not admissible as evidence"))
+            continue
+        if not isinstance(arm, dict) or arm.get("kill_rate") is None:
+            skipped.append((base, "paired file carries no usable expert arm"))
+            continue
+        out.append({
+            "file": base,
+            "model_id": "rule_expert (fresh env)",
+            "difficulty": m.get("difficulty"),
+            "geometry": m.get("geometry"),
+            "action_mode": m.get("action_mode"),
+            "n": arm.get("n"),
+            "kill": arm.get("kill_rate"),
+            # Present only in the runs that instrumented CLR (2026-09-17 on).
+            "clr": arm.get("clr"),
+            "launches": arm.get("launches_per_episode"),
+            "hit": arm.get("hit_rate"),
+            "lost": arm.get("lost_rate"),
+            "sha8": "n/a",
+            "has_ckpt": False,
+            "key": ("rule_expert (fresh env)", m.get("difficulty"),
+                    m.get("geometry"), m.get("action_mode")),
+        })
+    return out, skipped
+
+
+def pick_best(matches):
+    """Prefer the row that carries the most information; report the alternates.
+
+    The same (model, difficulty, geometry, mode) identity can legitimately
+    appear in several files -- E3 d=0 exists both with and without CLR
+    instrumentation. Preferring the CLR-carrying run keeps the table from
+    silently losing a column, and the alternates are printed rather than
+    dropped so the choice is visible.
+    """
+    ordered = sorted(matches, key=lambda r: (r["clr"] is None, r["file"]))
+    return ordered[0], ordered[1:]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--glob", default="results/shoot_eval/E*_*.json")
@@ -112,6 +183,13 @@ def main():
         print(f"[matrix] no files matched {args.glob!r}")
         return
     rows, skipped, legacy = load_rows(paths)
+    expert_rows, expert_skipped = load_expert_arms(paths)
+    # Both readers visit the same directory, so a file can be skipped twice.
+    # Report each reason once, in first-seen order.
+    for entry in expert_skipped:
+        if entry not in skipped:
+            skipped.append(entry)
+    rows += expert_rows
     if not rows:
         print("[matrix] no admissible rows")
     else:
@@ -134,7 +212,12 @@ def main():
                          if r["difficulty"] == diff and r["model_id"] == mi]
                 if not match:
                     continue
-                r = match[-1]
+                r, alternates = pick_best(match)
+                if alternates:
+                    alt_note = ", ".join(a["file"] for a in alternates)
+                    print(f"[matrix] note: {r['file']} chosen over {alt_note} "
+                          f"for {mi} @ difficulty={diff} (same identity; the "
+                          f"chosen row carries the CLR column if a run has it)")
                 sha_cell = f"`{r['sha8']}`" if r["has_ckpt"] else "n/a (rule-based)"
                 lines.append(
                     f"| {mi} | {r['file']} | {diff} | {_int(r['n'])} | "
