@@ -34,6 +34,7 @@ warnings.filterwarnings("ignore")
 from scripts.stress_eval import (
     run_one_stressed, aggregate, DISTURBANCES, LEVELS)
 from scripts.eval_scenario_matrix import CELLS
+from scripts.eval_meta import build_run_meta
 from scripts.train_shoot_bc import BCShootPolicy
 
 STRESS_REPS = [
@@ -49,6 +50,11 @@ def main():
     parser.add_argument("--id-seeds", type=int, default=500)
     parser.add_argument("--seeds-per-cell", type=int, default=50)
     parser.add_argument("--stress-seeds", type=int, default=60)
+    parser.add_argument("--start-seed", type=int, default=0,
+                        help="First seed; block k uses start_seed..start_seed+n-1. "
+                             "Pass 20000 to align with the E5/E7 seed set so the "
+                             "rule oracle can be compared against a trained policy "
+                             "seed-by-seed (default 0 preserves old behaviour).")
     parser.add_argument("--weights", default="data/expert/shoot_bc_round1_baseline.pth")
     parser.add_argument("--out", default="results/shoot_eval/asap_baseline.json")
     parser.add_argument("--device", default="auto")
@@ -66,16 +72,18 @@ def main():
     def run_block(key, task_cfg, dist, n_seeds):
         recs = [run_one_stressed("bc", model, device, s, dist,
                                  task_cfg=task_cfg, fire_mode="asap")
-                for s in range(n_seeds)]
+                for s in range(args.start_seed, args.start_seed + n_seeds)]
         agg = aggregate(recs)
-        results[key] = {"aggregate": agg, "n": n_seeds}
+        results[key] = {"aggregate": agg, "n": n_seeds, "task_cfg": dict(task_cfg)}
         print(f"[{key:<18s}] lost={agg['lost_rate']*100:4.1f}%  "
               f"kill={agg['kill_rate']*100:5.1f}%  "
               f"launches={agg['launches_per_episode']:.2f}/ep  "
               f"hits={agg['hit_rate']*100:4.1f}%  quality={agg['quality']}")
 
     if args.mode in ("id", "all"):
-        run_block("id_500", {}, None, args.id_seeds)
+        # Key carries the actual seed count: it used to be hardcoded "id_500"
+        # while --id-seeds could be anything, so the label could lie.
+        run_block(f"id_{args.id_seeds}", {}, None, args.id_seeds)
     if args.mode in ("cells", "all"):
         for label, cfg in CELLS:
             run_block(f"cell_{label}", cfg, None, args.seeds_per_cell)
@@ -86,8 +94,30 @@ def main():
             run_block(f"stress_{lv}_{name}", {}, dist, args.stress_seeds)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    # Provenance block (2026-09-17): without it this file could not be matched
+    # against a trained policy's evaluation, which is exactly what the paper
+    # needs (rule oracle vs SPC on one seed set).
+    meta = build_run_meta(
+        model_id="asap_rule_oracle",
+        checkpoint=args.weights,
+        first_seed=args.start_seed,
+        episodes=args.id_seeds,
+        difficulty=0.0,
+        min_heading_bias_deg=None,
+        action_mode="argmax",
+        script="scripts/eval_asap_baseline.py",
+        extra={
+            "artifact_kind": "rule_oracle_baseline",
+            "mode": args.mode,
+            "note": "fire=mask; heading/speed manoeuvre frozen from --weights",
+            "blocks": {k: {"n": v["n"], "task_cfg": v["task_cfg"]}
+                       for k, v in results.items()},
+        },
+    )
+    meta["complete"] = True
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({k: v["aggregate"] for k, v in results.items()}, f, indent=2)
+        json.dump({"run_meta": meta,
+                   **{k: v["aggregate"] for k, v in results.items()}}, f, indent=2)
     print(f"[saved] {args.out}")
 
 
