@@ -363,11 +363,17 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 |---|---|---|---|
 | **E7** | `eval_bc_1v1.py --weights <round1> --model-id bc_round1 --episodes 400 --seed 20000 --difficulty 0` and the same with `<asap_distilled>` / `--model-id spc_distilled`, then `paired_mcnemar.py --a ... --b ...` | ≈1.8 h | **DONE** — 46.50% vs 90.75%, **+44.25 pp**, exact McNemar **p=1.04e-53**, discordant **177:0** |
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈2–3 h | pending E7 |
-| **E6** | `fire_oracle_audit.py --cell target_evasive ...` | ≈1 h | **interface unverified** — Sean's call: dry-run/接口确认 only, do not spend GPU time yet |
+| **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds N --oracles asap,bc` | see cost note | **interface VERIFIED (2026-09-17), not yet run** |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈1 h | pending |
 | **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |
 | **E4** | already covered by E7's `spc_distilled` arm | — | folded into E7 |
+
+**E6 interface check — DONE 2026-09-17 (zero GPU spend).** Three findings that change how the command must be written:
+1. **`fire_oracle_audit.py` has no `--difficulty` flag.** Verified against `--help`: the real flags are `--cell --seeds --start-seed --oracles --weights --out --device`. Passing `--difficulty 0.3` fails with `error: unrecognized arguments`. Difficulty is supplied **only** through the cell config.
+2. **`--cell target_evasive` is valid** and resolves to `{'difficulty_level': 0.3}`. It works because the script does a label lookup over `CELLS` (`eval_scenario_matrix.py`), so any of the 13 labels is accepted.
+3. **Cost is much higher than the ≈1 h first assumed.** The script loops oracles × seeds, and all 7 oracles × 400 seeds = 2800 rollouts ≈ 8 h. The paper needs only the reference pair, so scope it: `--oracles asap,bc` → 800 rollouts ≈ 2.2 h at n=400; or `--seeds 60` to match the original `dist2_3k` audit ≈ 20 min.
+   Also note the frozen trajectory comes from `--weights` (default BC round1), so an E6 run at d=0.3 freezes **BC's d=0.3** maneuver — which is the correct comparator for §4.3 at d=0.3, but it is *not* SPC's trajectory.
 
 **Scope decision (Sean):** only artifacts that enter the paper or its supplement get regenerated. Scenario-matrix and stress suites are dropped unless a reviewer asks.
 
