@@ -1,0 +1,57 @@
+{
+  "run_meta": {
+    "model_id": "asap_rule_oracle",
+    "checkpoint": "data/expert/shoot_bc_round1_baseline.pth",
+    "checkpoint_sha256": "aad05b459619bdb7745ac8da24ba4833f9b50d2719697eec00fa5531f1d17a60",
+    "seed_range": [
+      20000,
+      20399
+    ],
+    "n_episodes": 400,
+    "geometry": "heading_bias U(0,60)",
+    "min_heading_bias_deg": null,
+    "difficulty": 0.0,
+    "action_mode": "argmax",
+    "git_head": "a0d2e02",
+    "script": "scripts/eval_asap_baseline.py",
+    "timestamp_utc": "2026-09-17T08:01:57Z",
+    "artifact_kind": "rule_oracle_baseline",
+    "mode": "id",
+    "note": "fire=mask; heading/speed manoeuvre frozen from --weights",
+    "blocks": {
+      "id_400": {
+        "n": 400,
+        "task_cfg": {}
+      }
+    },
+    "complete": true
+  },
+  "id_400": {
+    "n": 400,
+    "lost": 0,
+    "lost_rate": 0.0,
+    "lost_wilson_95_upper": 0.009512640599680667,
+    "kill_rate": 0.9075,
+    "launches_per_episode": 3.9,
+    "hit_rate": 1.0,
+    "wez_reach_rate": 1.0,
+    "time_to_wez_median": 64.0,
+    "first_fire_median": 71.0,
+    "max_ata_mean": 176.2099567636136,
+    "closure_neg_frac_mean": 0.6709259196624998,
+    "closure_neg_streak_max_mean": 354.7125,
+    "danger_entered_rate": 0.0,
+    "danger_streak_max_mean": 0.0,
+    "recovery_rate_given_danger": null,
+    "delay_mismatch_mean": 0.0,
+    "quality": {
+      "bad": 0,
+      "good": 639,
+      "premium": 921
+    },
+    "reasons": {
+      "target_killed": 363,
+      "timeout": 37
+    }
+  }
+}

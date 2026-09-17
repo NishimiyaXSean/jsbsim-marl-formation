@@ -262,6 +262,19 @@ Three things follow:
 >
 > Still **docs-only and to be regenerated if used**: the rule-expert ID kill rate (35.8%) and the ASAP rule-oracle ID kill rate (90.6%) — `paired_bc_vs_expert_500.json` / `asap_baseline.json` are gone. The SPC-vs-oracle comparison (90.75% vs 90.6%) currently spans two evaluations and should be re-measured on one seed set before being asserted in print.
 
+**SPC vs the rule oracle on one seed set (E2, seeds 20000–20399, n=400).** Resolved: `eval_asap_baseline.py` had no `--start-seed`, so the oracle could only ever run seeds `0..N-1` and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set.
+
+| Arm | Kill | Launches/ep | Hit | lost | Termination reasons |
+|---|---|---|---|---|---|
+| Rule oracle (`asap`: frozen BC maneuver + fire on every legal step) | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
+| **SPC** | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
+
+**Identical on every reported metric.** Identities verified from `run_meta`: the oracle arm loaded `sha256 aad05b45…` (BC round1 — the *frozen maneuver* source, correct), SPC loaded `36d79bd9…`.
+
+> **⚠ Interpret this as a completeness check, not as independent validation.** The two are the *same policy by construction*: the oracle is "frozen BC maneuver + fire on every legal step", and SPC is "bit-identical frozen maneuver heads + a launch head whose measured CLR is 100.00%", i.e. it also fires on every legal step. Identity is therefore *expected*, not evidence of agreement between independent methods. What it does establish is that SPC captures the **entire** oracle gap — 46.50% → 90.75%, i.e. 100% of it — rather than some fraction. The genuinely independent replication in this paper is §4.3(E6) vs §4.4/§4.6, where the identification strategies differ in kind (off-policy enumeration vs within-policy intervention).
+>
+> Caveat: `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above is argued from construction rather than a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
+
 ### 4.5 Robustness A — widened initial-geometry (heading bias)
 
 Compressed to one subsection per scope decision: **this is a benchmark-change + retraining robustness check, NOT a second contribution.**
@@ -306,7 +319,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | # | Ablation | Status | Purpose |
 |---|---|---|---|
 | A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | **DONE** (E1 regenerated, tracked) | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
-| A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | done, JSON lost → re-run | learned head matches the ceiling ⇒ not a hand-coded hack |
+| A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
 | A5 | Fire head from random init, encoder frozen | not run | is the BC encoder necessary, or is the mask enough? |
@@ -363,6 +376,7 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 | Full 3×2 matrix | auto-generated from `run_meta` | `scripts/collect_matrix.py` → `results/shoot_eval/matrix_E1_E5_E7.md` |
 | **E1: fire-oracle enumeration, dist2_3k** | asap **86.7%** / delay_30 38.3% / delay_60 10.0% / dlz_mid 0.0% / dlz_deep 0.0% / interval_100 0.0% / frozen BC **15.0%** | `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` |
 | **E1: reachability audit** | legal window median **4.0 steps/ep**, first-legal median 67, 1st→4th median 743.5, 8/60 end with window open | same |
+| **E2: rule oracle vs SPC, same seeds** | both **363/400 = 90.75%**, launches 3.90, hit 1.0000, lost 0, reasons identical | `results/shoot_eval/E2_asap_oracle_id_n400_s20000.json` vs `E7_spc_*` |
 | **E6: oracle envelope, matched 2×2** | d=0: asap **93.3%** vs inherited **53.3%**; d=0.3: **96.7%** vs **46.7%** ⇒ gap **+40.0 → +50.0 pp**; window median 4.0/42.0 at both | `E6_default_d0_s60.json` + `E6_fire_oracle_target_evasive_s60.json` |
 | Expert CLR | 5.96% (560/9395) | `results/health_check/fire_hesitancy.json`; recomputable from `data/expert/shoot_rule_expert.npz` |
 | BC CLR | 7.37% (614/8327) | same |
@@ -380,12 +394,12 @@ Four findings:1. **The correction is robust, and its benefit grows under evasion
 |---|---|---|---|
 | ~~Expert ID kill~~ | ~~35.8%~~ → **use 32.25%** (matched, E5) | superseded | — |
 | ~~BC ID kill~~ | ~~43.2%~~ → **use 46.50%** (E7) | superseded | — |
-| ASAP rule oracle ID kill | 90.6% | same | `eval_asap_baseline.py` |
+| ~~ASAP rule oracle ID kill~~ | ~~90.6%~~ → **use 90.75%** (E2, matched) | superseded | — |
 | ~~SPC ID kill~~ | ~~91.2%~~ → **use 90.75%** (E7) | superseded | — |
 | ~~Fire-policy oracle table (§4.3)~~ | ~~asap 73.3% … BC 6.7%~~ → **superseded by E1** (old geometry U(30,60)) | `docs/plan_bc_rule_expert.md` | — |
 | dist2_3k: BC / ASAP / SPC | 6.7% / 74% / 77% | `docs/summary_phase1.md` §2 | `eval_scenario_matrix.py` |
 
-**Not yet measured:** d=0.3 statistics for any policy (E5); SPC vs rule oracle on a single shared seed set; multi-seed-family extrapolation (seeds 42–441 and 20000–20399 are each a single family; see §4.5 caveat 1).
+**Not yet measured:** multi-seed-family extrapolation (seeds 42–441 and 20000–20399 are each a single family; see §4.5 caveat 1); a seed-by-seed oracle-vs-SPC match (blocked by E2 writing aggregates only).
 
 ---
 
@@ -415,7 +429,7 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 | **E5** | same two commands with `--difficulty 0.3`, plus `generate_shoot_rule_expert.py --validate --difficulty 0.3` | ≈3.4 h total | **BC+SPC DONE** — 42.25% vs 90.75%, **+48.50 pp**, p=7.97e-59, discordant **194:0**; expert arm running |
 | **E6** | `fire_oracle_audit.py --cell target_evasive --start-seed 20000 --seeds 60 --oracles asap,bc` + matched d=0 cell `id_bias30_60` | ≈50 min | **DONE** — matched 2×2: gap **+40.0 → +50.0 pp**; replicates the §4.6 widening by an independent method |
 | **E1** | `fire_oracle_audit.py --cell dist2_3k --seeds 60 --oracles all` | ≈2.2 h | **DONE** — asap **86.7%** vs inherited **15.0%**; all selective policies worse (§4.3). Re-running once more to attach `run_meta` |
-| **E2** | `eval_asap_baseline.py --mode all` | ≈30 min | pending |
+| **E2** | `eval_asap_baseline.py --mode id --id-seeds 400 --start-seed 20000` | ≈1 h | **DONE** — rule oracle 90.75%, exactly matching SPC; required adding `--start-seed` (the script previously could only run seeds 0..N-1) |
 | **E3** | `eval_paired_bc_vs_expert.py --seeds 500` | ≈1–2 h | pending |
 | **E4** | already covered by E7's `spc_distilled` arm | — | folded into E7 |
 
@@ -448,11 +462,11 @@ Implemented in `scripts/eval_meta.py` (`build_run_meta`) and emitted as a top-le
 - [x] **E5**: d=0.3 for BC / SPC on the shared seed set — **DONE**: 42.25% vs 90.75%, +48.50 pp, p=7.97e-59, discordant 194:0
 - [ ] E5 expert arm at d=0.3 (running) — unpaired reference only
 - [ ] d=0 vs d=0.3 comparison write-up (§4.6) — SPC invariant, gap widens
-- [ ] Regenerate the lost JSON artifacts that enter the paper (E1 oracle, E2 rule-oracle, E3 paired baseline)
+- [x] Regenerate the paper's evidence artifacts — E1 (oracle, reproducibility-verified) and E2 (rule oracle) done; E3 running
 - [x] Reconcile BC's CLR geometry with BC's kill-rate geometry — E7 does this (both now U(0,60), seeds 20000–20399)
 - [x] `run_meta` identity block + `paired_mcnemar.py` identity guards (2026-09-16)
 - [x] Expert seed-pairing patch (`run_one(seed=...)`) — previously impossible
-- [ ] **Re-measure the SPC-vs-rule-oracle comparison on one seed set** (currently 90.75% vs the docs-only 90.6% from a different evaluation)
+- [x] **Re-measure SPC vs the rule oracle on one seed set** — done: exactly equal (90.75% both); framed as a completeness check, not independent validation
 
 **Content**
 - [ ] **Related Work §2.2 is a stub** — needs 5–10 *real* citations on imitation from suboptimal demonstrations / expert conservatism. Do not submit with placeholders.
