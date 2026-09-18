@@ -27,7 +27,7 @@
 
 ## Abstract (~170 words)
 
-Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth imitating. We test that assumption on a JSBSim F-16 within-visual-range (WVR) 1v1 missile-engagement benchmark. We introduce the **Conditional Launch Rate (CLR)** — the probability that a policy commands launch at a step where the environment permits it, `P(a_fire=1 | m_fire=1)` — and show that the hand-designed rule expert commands launch at only **6.07%** of permitted steps and BC lands in the same band at **7.26%** (400 episodes, fresh env per episode, identical seeds). The cause is a launch-quality gate the expert applies *on top of* the environment's legality condition — a conservative engagement preference the environment does not require, not a deficit in the imitation, which is behaving as intended. Two interventions isolate its cost. **(A)** Holding the BC maneuver trajectory frozen and enumerating fire policies on top of it, a mask-permissive policy (launch whenever the environment-level launch mask permits) achieves **86.7%** kills where the inherited launch policy achieves **15.0%**, and every range- or delay-selective alternative is worse; the maneuver is fixed by construction, so the gap is attributable to the launch decision alone. **(B)** We then apply **Surgical Policy Correction (SPC)**, which re-trains *only* the launch head while every other parameter stays bit-identical (heading/speed logits `max diff < 1e-9`). Under a matched d=0, deterministic-argmax evaluation on **400 paired seeds**, replacing the conservative launch decision alone raises the kill rate from **46.50% to 90.75%** (**+44.25 pp**, exact McNemar **p = 1.04e-53**); SPC's CLR of **100.00%** is true by construction, not a finding. The pairing is uniform, not merely significant: of 177 discordant seeds, **all 177 favour the correction and none favour the original**. Under an evading target (`difficulty_level = 0.3`) the benefit grows rather than decays: SPC is unchanged at **90.75%** while the baseline falls to **42.25%**, widening the gap to **+48.50 pp** with all 194 discordant seeds again favouring the correction. We do not claim that the mask-permissive policy is optimal in general; we claim that a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime.
+Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth copying. On a JSBSim F-16 within-visual-range 1v1 missile-engagement benchmark we test that assumption and find it fails in a specific, measurable way: the hand-designed expert launches on only **6%** of the steps its environment permits, and BC reproduces that restraint faithfully — a restrictive launch preference encoded in the expert rule, not an imitation defect. We introduce the **Conditional Launch Rate (CLR)** to quantify it, and **Surgical Policy Correction (SPC)**, a localized intervention that retrains *only* the launch head while every other parameter — and therefore the entire maneuver policy — stays bit-identical. Correcting that single decision dimension recovers oracle-level performance: **46.50% → 90.75%** kill rate on 400 paired seeds (**+44.25 pp**, exact McNemar **p = 1.04e-53**, all 177 discordant seeds favouring the correction), the same level a frozen-trajectory oracle reaches in the hardest close-range cell (**15.0% → 86.7%**). Under an evading target the benefit grows rather than decays (**+48.50 pp**). The failure was localized to one discrete decision dimension, and correcting only that dimension recovered oracle performance while preserving the original maneuver.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
@@ -48,13 +48,14 @@ Behavior cloning (BC) from rule-based experts is a standard bootstrap for air-co
 - In interactive settings (opponent/evader present), a locally reasonable restriction — "only launch when the shot is high quality" — changes the entire engagement trajectory, so its cost is not locally observable.
 - BC propagates the bias faithfully, so downstream RL or evaluation inherits it as a *floor*, not a *fluctuation*.
 - Existing BC evaluation reports aggregate task success only; it does not attribute the residual to a specific decision head.
+- **Terminology, fixed once (2026-09-18):** we say **restrictive launch preference** when describing the *mechanism* — the expert's designer would call that gate *precision*, and locally it is; we reserve **expert-induced decision bias** for the *measured, globally costly consequence* of inheriting it. The claim is never "the designer was wrong", it is "the preference is unvalidated in the closed loop and imitation propagates it".
 
 ### 1.3 Contributions
 
 > 结构按 Sean 2026-09-17 定型。**第一贡献是诊断，不是性能提升**；叙事主线：*专家含有一个隐藏的、局部但灾难性的决策偏差；BC 忠实复制它；一个局部策略修正即可在不改变机动策略的前提下恢复性能。* 措辞纪律：不说 "expert 很差"，说 *the expert contains a conservative engagement preference that is not required by the environment constraints*（环境允许 ≠ 专家愿意 —— 这正是机制所在）。
 
 1. **C1 — Diagnosis: expert-induced conservative bias, quantified.** 我们引入 **Conditional Launch Rate（CLR）**，`P(a_fire=1 | m_fire=1)` —— 一个无需 oracle、可迁移到任何「离散提交型决策」（发射 / 交接 / 急停 / 变道）的指标 —— 并发现规则专家在环境允许发射的步上只发射约 6%，BC 忠实复现该偏好（约 7%）。我们把原因定位到一个**设计出来的**发射质量门：它严格地比环境合法性掩码更严（§3.2）。这不是专家「能力不足」，而是专家携带了一个**环境并不要求的保守偏好**。⚠ 数字来源纪律：C1 的 expert CLR 必须**只**采用 fresh-env 测量（E3 CLR run，进行中）；reused-env 的 6.04%/5.43% 已剔除，不得回流。
-2. **C2 — Surgical Policy Correction: isolating the behavioral dimension responsible.** SPC 重训**单个二值动作头**使其对齐环境合法性策略，**冻结其余一切参数**，并以 logit 与动作序列双门验证冻结的逐比特性（§3.3）。方法论要点不是「只训一个 head」这个实现细节，而是 **isolate the behavioral dimension responsible for the failure**：轨迹保持不变、修正局部化。没有这个隔离，「你只是 fine-tune」的质疑就无法反驳。
+2. **C2 — Surgical Policy Correction: a localized *intervention* on the decision dimension the diagnosis identifies.** SPC modifies **only the single binary launch head** so that it fires whenever the environment permits, while **every other parameter — and therefore the entire maneuver policy — is provably preserved**（heading/speed logits 与动作序列双门逐比特验证，§3.3）。措辞纪律（2026-09-18 Sean）：说 **intervention**，不说 fine-tune/training —— A5/A6（§4.7）表明收益来自**允许哪些参数动**，而不是能动多少、也不管那个头从哪初始化。「只训一个 head」是实现细节，不是贡献；贡献是 *isolate the behavioral dimension responsible for the failure*：轨迹保持不变、修正局部化。没有这个隔离，「你只是 fine-tune」的质疑就无法反驳。
 3. **C3 — Causal validation: two interventions, one conclusion.** 两个互补的因果论证（§4.3, §4.4）：
    - **Intervention A（frozen-trajectory oracle replacement）**：15.0% → 86.7% —— *the fire decision alone can explain the performance gap*；
    - **Intervention B（SPC training）**：46.50% → 90.75%（配对，177:0，p≈1e-53）—— *the correction can be internalized into the policy*。
@@ -353,7 +354,16 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 
 > **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json`, `E5_paired_bc_vs_spc_d03_n400.json`, and the two CLR runs `E3_paired_bc_vs_expert_{d0_n400_s20000_v3,d03_n400_s20000_v2}_clr.json`. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 2 reports.
 
-### 4.7 Ablation ladder (ordered by the decided priority)
+### 4.7 Ablations: why *surgical*?
+
+> **2026-09-18 Sean：A5/A6 都留正文，但 A6 为主、A5 压缩** —— A6 回答的是"冻结是否只是工程便利"（C2 真正依赖它），A5 只回答"初始化是否有影响"。
+
+Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 2), ask whether the locality of the correction is doing real work or is an arbitrary design choice. The answer is that the locality *is* the mechanism:
+
+| Intervention | Result (400 seeds, d=0) | What it tests |
+|---|---|---|
+| **A6 — full-network fine-tune** (everything trainable) | 77.50% kill, **−13.25 pp vs SPC** (exact McNemar **p = 1.33e-11**), maneuver logits move by **8.51** | is *freezing* merely an engineering convenience? → **no: it is the identification** |
+| **A5 — random-init launch head, encoder frozen** | 90.75% kill, **0 discordant seeds vs SPC**, maneuver deviation **exactly 0.00e+00** | does the correction depend on warm-starting from BC's launch head? → **no** |
 
 | # | Ablation | Status | Purpose |
 |---|---|---|---|
@@ -364,31 +374,6 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 | A5 | **Fire head from random init, encoder frozen** | **DONE** 2026-09-18 (400-seed primary protocol) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
 | A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
 | — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
-
-**A5 — does the correction need BC's launch head as a starting point?** Implemented 2026-09-18 via `--random-fire-head`: SPC's freeze pattern is kept exactly (encoder and every maneuver head frozen at θ_BC) and *only* the fire head is discarded and rebuilt from `nn.Linear.reset_parameters()` — the constructor's own initialisation, so it is a genuine random init (weight std 0.049, bias std 0.044) rather than a hand-rolled approximation of one. This isolates the question a reviewer will ask next: **is SPC's success carried by the objective and the mask, or by having started near BC's already-reasonable head?**
-
-The full run answers it, and answers it decisively. Training on 300 rollout episodes (392091 transitions, 11976 allowed steps), the random fire head reaches **train recall 100.00% and validation recall 100.00% in its first epoch** (fire-CE 0.0413) and triggers the early stop — a head initialised with no knowledge of launching learns the mask-permissive behaviour essentially immediately, because the frozen encoder already carries the observation features the decision needs. Throughout, the identity gates report **`hdg/spd logits diff = 0.00e+00`** — not merely below tolerance but *exactly* zero — with identical action sequences and `VERDICT: PASS`.
-
-| Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) | identity gates |
-|---|---|---|---|---|
-| BC (inherited launch policy) | 40.0% | 15.0% | 7% | — |
-| A5 (random-init fire head) | 95.0% | 86.7% | 100% | `0.00e+00` (PASS) |
-| mask-permissive rule oracle | **95.0%** | **86.7%** | 100% | n/a (rule) |
-
-**A5 reproduces the mask-permissive rule oracle exactly, on the same seeds, while holding the maneuver bit-identical.** So SPC's benefit is *not* a warm-start effect: the inherited launch head contributes nothing a randomly initialised head cannot learn within one epoch from the frozen features. The correction is robust to where the launch head starts — the load-bearing ingredients are the objective, the mask, and the frozen maneuver, in that order.
-
-⚠ That table is **60 seeds** and carries the ±10 pp spread documented for A6b. The 400-seed primary-protocol evaluation is authoritative and came in stronger still:
-
-| Arm (400 seeds, d=0) | Kill rate | CLR | vs SPC (paired) |
-|---|---|---|---|
-| **A5 — random-init fire head** | **90.75%** (363/400) | **99.94%** (1560/1561) | **+0.00 pp, discordant 0** (both kill 363, neither 37, only-SPC 0, only-A5 0) |
-| **SPC — launch head only** | **90.75%** (363/400) | **100.00%** (1560/1560) | — |
-
-**Discordant zero, not merely equal means.** The two arms kill the *same* 363 seeds: the per-seed kill vector is identical across all 400, so A5 and SPC are behaviourally indistinguishable on this benchmark despite starting from unrelated launch heads. The CLR denominators differ by a single step (1561 vs 1560) — the only trace of the different initialisation anywhere in the evaluation, and it costs nothing.
-
-**What a zero-discordant count does and does not mean.** It is *not* a formal equivalence test: McNemar with zero discordant cells returns p = 1.0, which is the absence of detected difference, not a proof of equality, and we do not run a TOST here. What it does license is the weaker and sufficient statement — on 400 seeds and this benchmark we observe **no difference whatsoever** between a randomly initialised launch head and the inherited-and-retrained one, whereas the full-network arm differs on 67 seeds. Any equivalence claim stronger than that would need a pre-registered margin.
-
-**What the A5/A6 pair establishes together.** Unfreezing everything *hurts* significantly (+13.25 pp for SPC, p = 1.33e-11) and destroys the attribution; re-initialising the one head that is supposed to change makes *no measurable difference at all* (0 discordant seeds, exact zero maneuver deviation). The value of the intervention therefore lies entirely in **which parameters are allowed to move** — not in how many, and not in where the moving head began.
 
 **A6 protocol, in one line** (the fairness objection is obvious, so state it up front): identical objective, data, loss and initialisation as SPC — the only change is that every parameter is trainable, at a deliberately **more generous** budget than the fire-head-only run. The results follow.
 
@@ -412,6 +397,12 @@ The full run answers it, and answers it decisively. Training on 300 rollout epis
 | **SPC — launch head only** | **90.75%** (363/400) | **100.00%** | — |
 
 **The reading is that freezing is doing real work, on both axes at once.** Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains **significantly worse than the surgical correction on identical seeds** (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), *and* it pays for that with an 8.51-logit change to the maneuver — i.e. it is less effective **and** no longer attributable. So the paper's central claim does not rest on a lucky locality choice: unfreezing is available, it is better resourced, and it loses.
+
+**A5 (the control).** One line of implementation: keep SPC's freeze pattern exactly — encoder and every maneuver head frozen at θ_BC — and rebuild *only* the fire head from `nn.Linear.reset_parameters()`, the constructor's own initialisation (weight std 0.049), so the sole difference from SPC is where the moving head starts. Trained on the same 300-episode rollout set (392091 transitions, 11976 allowed steps), the random head reaches **train and validation allowed-window recall of 100.00% in its first epoch** (fire-CE 0.0413) and early-stops; the identity gates report **`hdg/spd logits diff = 0.00e+00`** — *exactly* zero, not merely under tolerance — with identical action sequences. At the primary protocol it scores **90.75% (363/400)**, CLR **99.94%**, and the paired test against SPC reports **zero discordant seeds**: both arms kill the same 363, miss the same 37, and neither has a seed the other does not. The 60-seed screening set, which additionally carries the mask-permissive oracle arm, agrees (A5 95.0% / 86.7% = rule oracle exactly, window utilisation 100%; BC 40.0% / 15.0%).
+
+**What zero discordance does and does not license.** It is *not* an equivalence test: McNemar with no discordant cells returns p = 1.0, the absence of a detected difference rather than a proof of equality, and no TOST is run here. The supportable statement is that A5 and SPC are **behaviourally indistinguishable under the evaluated metric** — on 400 seeds and this benchmark the per-seed kill vector is identical, the only trace of the different initialisation being one extra legal step (1561 vs 1560). We do not claim *identical* or *equivalent* policies; no action-logit comparison is made, and a stronger equivalence claim would require a pre-registered margin.
+
+**What the pair establishes.** Unfreezing everything *hurts* significantly and destroys the attribution; re-initialising the one head that is supposed to move makes no measurable difference at all. The observed benefit is therefore attributable to **the choice of editable parameters** — which decision dimension is allowed to change — rather than to the amount of trainable parameters or the initialisation of the launch head.
 
 **A6b — the screening set, kept because it carries a third arm.** The ablation script's own 60-seed evaluation runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed run above does not:
 
@@ -449,6 +440,9 @@ A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95
 - Integrate into the hierarchical tactical architecture planned for the thesis.
 
 ### 5.4 Claim statement (exact wording to use)
+
+> **The sentence the paper exists to support (2026-09-18):** *the failure was localized to a single discrete decision dimension, and correcting only that dimension recovered oracle-level performance while preserving the original maneuver policy.* Everything below is scoping, not hedging — this sentence is the claim, the qualifiers are what keep it honest.
+>
 > We do **not** claim that the mask-permissive policy is optimal in general. We claim that **a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime**: with the maneuver policy provably frozen (`max logit diff < 1e-9`, identical action sequences), correcting the launch head alone raises the kill rate from 46.50% to 90.75% on 400 paired seeds (+44.25 pp, exact McNemar p = 1.04e-53, with all 177 discordant seeds favouring the correction and none favouring the original), and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by the mask-permissive policy within the enumerated fire-policy family.
 
 ---
