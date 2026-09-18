@@ -203,6 +203,26 @@ def main():
             a6_train_name)
         add("A6 training mode", str(d.get("training_mode")), a6_train_name)
 
+    # --- ablation A5: random-init fire head, encoder frozen ------------------
+    a5_name = "ablation_A5_random_fire_head_train.json"
+    if os.path.exists(os.path.join(EV, a5_name)):
+        d = load(a5_name)
+        mode = str(d.get("training_mode"))
+        dev = d["gates"]["hdg_spd_logits_max_diff"]
+        add("A5 training mode", mode, a5_name)
+        add("A5 maneuver deviation", "%.2e (must be 0 in A5 mode)" % dev, a5_name)
+        add("A5 val allowed-window acc", "%.4f" % d["best_val_allowed_acc"],
+            a5_name)
+        # In A5 the freeze pattern is SPC's, so the identity gates must still
+        # pass. If the script ever reports a non-zero deviation here, the
+        # ablation is no longer measuring what it claims to measure.
+        if dev != 0.0:
+            print("WARNING: A5 reports a non-zero maneuver deviation (%.3e). "
+                  "A5 is supposed to keep SPC's freeze pattern, so this means "
+                  "the ablation is not isolating initialisation." % dev)
+    else:
+        add("A5 random-init fire head", "ABSENT (in flight or not run)", a5_name)
+
     # --- environment-threshold sanity (should match Appendix B) -------------
     sys.path.insert(0, ROOT)
     from src.environment.singlecombat_shoot_task import (  # noqa: E402

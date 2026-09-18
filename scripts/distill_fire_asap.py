@@ -150,11 +150,36 @@ def main():
     parser.add_argument("--full-network", action="store_true",
                         help="ablation: optimise every parameter instead of "
                              "the fire head alone")
+    # Ablation A5 (2026-09-18): keep SPC's structure exactly -- encoder and
+    # every maneuver head frozen -- but DISCARD the inherited fire head and
+    # re-initialise it with the constructor's own scheme before training.
+    # Answers "does the correction depend on warm-starting from BC's launch
+    # head, or is the objective + mask alone sufficient?".
+    parser.add_argument("--random-fire-head", action="store_true",
+                        help="ablation A5: re-initialise the fire head "
+                             "randomly (encoder and maneuver heads stay "
+                             "frozen at BC); answers whether the correction "
+                             "depends on the inherited initialisation")
     parser.add_argument("--log-json", default="logs/p2a_distill.json",
                         help="gates+comparison dump; override for ablation "
                              "runs so the SPC record is not clobbered")
     args = parser.parse_args()
 
+    if args.full_network and args.random_fire_head:
+        raise SystemExit(
+            "--full-network and --random-fire-head are different ablations "
+            "(A6 vs A5); pick one. A5 keeps the SPC freeze pattern and only "
+            "changes the fire head's initialisation.")
+    if args.random_fire_head:
+        if args.out_weights is None:
+            args.out_weights = "data/expert/_ablation_A5_random_fire_head.pth"
+        if args.lr is None:
+            args.lr = 1e-2   # same step as the fire-head-only SPC run
+        if os.path.abspath(args.out_weights) == os.path.abspath(
+                "data/expert/shoot_bc_asap_distilled.pth"):
+            raise SystemExit(
+                "refusing to overwrite the SPC artifact with an ablation run; "
+                "pass a distinct --out-weights")
     if args.full_network:
         if args.out_weights is None:
             args.out_weights = "data/expert/_ablation_fullnet_fire_asap.pth"
@@ -165,7 +190,8 @@ def main():
             raise SystemExit(
                 "refusing to overwrite the SPC artifact with an ablation run; "
                 "pass a distinct --out-weights")
-    else:
+    elif not args.random_fire_head:
+        # Plain SPC run: the frozen artifact the paper's numbers describe.
         if args.out_weights is None:
             args.out_weights = "data/expert/shoot_bc_asap_distilled.pth"
         if args.lr is None:
@@ -233,10 +259,29 @@ def main():
         # full-network run.)
         training_mode = "full-network"
     else:
+        if args.random_fire_head:
+            # Ablation A5: throw away the inherited launch head and rebuild it
+            # from the constructor's own initialisation, so the ONLY difference
+            # from SPC is where the fire head starts. reset_parameters() is
+            # literally what nn.Linear does at construction, so this is a
+            # genuine random init rather than a hand-rolled approximation of
+            # one. The encoder and every maneuver head stay frozen at BC, so
+            # the identity gates SHOULD still pass here (unlike A6).
+            head = distilled.action_heads[3]
+            head.reset_parameters()
+            with torch.no_grad():
+                w = head.weight.detach()
+                print("[ablation A5] fire head re-initialised: "
+                      "weight shape=%s mean=%+.4f std=%.4f | bias mean=%+.4f "
+                      "std=%.4f (SPC inherits BC's instead)"
+                      % (tuple(w.shape), float(w.mean()), float(w.std()),
+                         float(head.bias.detach().mean()),
+                         float(head.bias.detach().std())))
         for p in distilled.action_heads[3].parameters():
             p.requires_grad_(True)
         params = distilled.action_heads[3].parameters()
-        training_mode = "fire-head-only"
+        training_mode = ("fire-head-only-random-init" if args.random_fire_head
+                         else "fire-head-only")
     distilled.eval()
     opt = torch.optim.Adam(params, lr=args.lr)
     xs = torch.tensor(obs[tr_m][:, :30], device=device)
@@ -400,7 +445,8 @@ def main():
                  "epochs": args.epochs, "rollout_episodes": args.rollout_episodes,
                  "best_val_allowed_acc": best[0], "verdict": verdict,
                  "training_mode": training_mode,
-                 "full_network": bool(args.full_network)},
+                 "full_network": bool(args.full_network),
+                 "random_fire_head": bool(args.random_fire_head)},
         "gates": gates,
         "comparison": comp,
     }, args.out_weights)
@@ -409,6 +455,7 @@ def main():
         json.dump({"gates": gates, "comparison": comp,
                    "training_mode": training_mode,
                    "full_network": bool(args.full_network),
+                   "random_fire_head": bool(args.random_fire_head),
                    "hierarchical_maneuver_deviation": {
                        "hdg_spd_logits_max_diff": hdg_spd_diff,
                        "hdg_spd_sequence_identical": seq_ok,
