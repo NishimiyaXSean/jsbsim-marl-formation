@@ -1,6 +1,6 @@
 # Small Paper Draft v2 — 2026-09-16
 
-> **⚠ v1 → v2 重大更正（2026-09-16）**
+> *(internal, delete before submission)* **v1 → v2 重大更正（2026-09-16）**
 > v1 的核心表格把三个不同的实验混为一谈。经逐文件核对 `results/shoot_eval/*.json`：
 > - `eval_distilled_d0_s42.json` 与 `eval_2x2_base_geoOld_s42.json` 是**同一次运行**（weights 与 seed 完全相同）→ 87% 是 **SPC 模型在旧几何 U(30,60) 下**的击杀率，**不是 BC**。
 > - `eval_geomA_d0_s42.json` 的 weights 是 `shoot_bc_asap_geomA.pth`（**另一个重训模型**）→ 95% 是 **geomA 重训模型在新几何下**的击杀率，**不是 fire-head 修正的收益**。
@@ -27,7 +27,7 @@
 
 ## Abstract (~170 words)
 
-Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth copying. On a JSBSim F-16 within-visual-range 1v1 missile-engagement benchmark we test that assumption and find it fails in a specific, measurable way: the hand-designed expert launches on only **6%** of the steps its environment permits, and BC reproduces that restraint faithfully — a restrictive launch preference encoded in the expert rule, not an imitation defect. We introduce the **Conditional Launch Rate (CLR)** to quantify it, and **Surgical Policy Correction (SPC)**, a localized intervention that retrains *only* the launch head while every other parameter — and therefore the entire maneuver policy — stays bit-identical. Correcting that single decision dimension recovers the performance of an oracle that fires whenever the environment permits launch: **46.50% → 90.75%** kill rate on 400 paired seeds (**+44.25 pp**, exact McNemar **p = 1.04e-53**, all 177 discordant seeds favouring the correction), matching the level a frozen-trajectory intervention reaches in the hardest close-range cell (**15.0% → 86.7%**). Under an evading target the benefit grows rather than decays (**+48.50 pp**). The failure was localized to one discrete decision dimension, and correcting only that dimension recovered oracle-level performance while preserving the original maneuver — the oracle being a reference defined by the environment's launch mask, not a claimed optimum.
+Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-combat policies, under the implicit assumption that the expert's decisions are worth copying. On a JSBSim F-16 within-visual-range 1v1 missile-engagement benchmark we test that assumption and find it fails in a specific, measurable way: the hand-designed expert launches on only **6%** of the steps its environment permits, and BC reproduces that restraint faithfully — a restrictive launch preference encoded in the expert rule, not an imitation defect. We introduce the **Conditional Launch Rate (CLR)** to quantify it, and **Surgical Policy Correction (SPC)**, a localized intervention that retrains *only* the launch head while every other parameter — and therefore the entire maneuver policy — stays bit-identical. Correcting that single decision dimension recovers the performance of an oracle that fires whenever the environment permits launch: **46.50% → 90.75%** kill rate on 400 paired seeds (**+44.25 pp**, exact McNemar **p = 1.04e-53**, all 177 discordant seeds favouring the correction), matching the level a frozen-trajectory intervention reaches in the hardest close-range cell (**15.0% → 86.7%**). Under an evading target the benefit grows rather than decays (**+48.50 pp**). The measured failure mode was localized to one discrete decision dimension, and correcting only that dimension recovered oracle-level performance while preserving the original maneuver — the oracle being a reference defined by the environment's launch mask, not a claimed optimum.
 
 > **措辞纪律（Sean 2026-09-16 要求）**：不得写 "SPC improves performance by 48 pp" 这类泛化句式。必须始终绑定四个限定：**matched setting / d=0 / deterministic argmax / isolated intervention**。否则 reviewer 的第一反应是「为什么只改一个 head 能提升这么多？」—— 答案正是「因为轨迹冻结，所以差异只能来自这个 head」，但这个因果必须自己讲出来，不能被追问。
 >
@@ -48,17 +48,18 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 - In interactive settings (opponent/evader present), a locally reasonable restriction — "only launch when the shot is high quality" — changes the entire engagement trajectory, so its cost is not locally observable.
 - BC propagates the bias faithfully, so downstream RL or evaluation inherits it as a *floor*, not a *fluctuation*.
 - Existing BC evaluation reports aggregate task success only; it does not attribute the residual to a specific decision head.
-- **Terminology, fixed once (2026-09-18):** we say **restrictive launch preference** when describing the *mechanism* — the expert's designer would call that gate *precision*, and locally it is; we reserve **expert-induced decision bias** for the *measured, globally costly consequence* of inheriting it. The claim is never "the designer was wrong", it is "the preference is unvalidated in the closed loop and imitation propagates it".
+- **Terminology, fixed once (2026-09-18):** we say **restrictive launch preference** when describing the *mechanism* — the expert's designer would call that gate *precision*, and locally it is; we reserve **expert-induced decision bias** for the *measured, globally costly consequence* of inheriting it. We do not assume the expert rule is erroneous in isolation; we test whether its preference remains beneficial under closed-loop interaction, which is a different question.
 
 ### 1.3 Contributions
 
-> 结构按 Sean 2026-09-17 定型。**第一贡献是诊断，不是性能提升**；叙事主线：*专家含有一个隐藏的、局部但灾难性的决策偏差；BC 忠实复制它；一个局部策略修正即可在不改变机动策略的前提下恢复性能。* 措辞纪律：不说 "expert 很差"，说 *the expert contains a conservative engagement preference that is not required by the environment constraints*（环境允许 ≠ 专家愿意 —— 这正是机制所在）。
+> *(internal, delete before submission)* 结构按 Sean 2026-09-17 定型。**第一贡献是诊断，不是性能提升**；叙事主线：*专家含有一个隐藏的、局部但灾难性的决策偏差；BC 忠实复制它；一个局部策略修正即可在不改变机动策略的前提下恢复性能。* 措辞纪律：不说 "expert 很差"，说 *the expert contains a restrictive launch preference that is not required by the environment constraints*（环境允许 ≠ 专家愿意 —— 这正是机制所在）。
 
-1. **C1 — Diagnosis: expert-induced conservative bias, quantified.** 我们引入 **Conditional Launch Rate（CLR）**，`P(a_fire=1 | m_fire=1)` —— 一个无需 oracle、可迁移到任何「离散提交型决策」（发射 / 交接 / 急停 / 变道）的指标 —— 并发现规则专家在环境允许发射的步上只发射约 6%，BC 忠实复现该偏好（约 7%）。我们把原因定位到一个**设计出来的**发射质量门：它严格地比环境合法性掩码更严（§3.2）。这不是专家「能力不足」，而是专家携带了一个**环境并不要求的保守偏好**。⚠ 数字来源纪律：C1 的 expert CLR 必须**只**采用 fresh-env 测量（E3 CLR run，进行中）；reused-env 的 6.04%/5.43% 已剔除，不得回流。
-2. **C2 — Surgical Policy Correction: a localized *intervention* on the decision dimension the diagnosis identifies.** SPC modifies **only the single binary launch head** so that it fires whenever the environment permits, while **every other parameter — and therefore the entire maneuver policy — is provably preserved**（heading/speed logits 与动作序列双门逐比特验证，§3.3）。措辞纪律（2026-09-18 Sean）：说 **intervention**，不说 fine-tune/training —— A5/A6（§4.7）表明收益来自**允许哪些参数动**，而不是能动多少、也不管那个头从哪初始化。「只训一个 head」是实现细节，不是贡献；贡献是 *isolate the behavioral dimension responsible for the failure*：轨迹保持不变、修正局部化。没有这个隔离，「你只是 fine-tune」的质疑就无法反驳。
-3. **C3 — Causal and locality validation: two interventions, one conclusion.** 两个互补的因果论证（§4.3, §4.4），加上 A5/A6 对「locality 才是关键」的验证（§4.7）：
-   - **Intervention A（frozen-trajectory oracle replacement）**：15.0% → 86.7% —— *the fire decision alone can explain the performance gap*；
-   - **Intervention B（SPC training）**：46.50% → 90.75%（配对，177:0，p≈1e-53）—— *the correction can be internalized into the policy*。
+1. **C1 — Diagnosis: expert-induced decision bias, quantified.** 我们引入 **Conditional Launch Rate（CLR）**，`P(a_fire=1 | m_fire=1)` —— 一个无需 oracle、可迁移到任何「离散提交型决策」（发射 / 交接 / 急停 / 变道）的指标 —— 并发现规则专家在环境允许发射的步上只发射约 6%，BC 忠实复现该偏好（约 7%）。我们把原因定位到一个**设计出来的**发射质量门：它严格地比环境合法性掩码更严（§3.2）。这不是专家「能力不足」，而是专家携带了一个**环境并不要求的 restrictive launch preference**，其闭环代价就是本文所测的 decision bias。
+2. **C2 — Surgical Policy Correction: a localized *intervention* on the decision dimension the diagnosis identifies.** SPC modifies **only the single binary launch head** so that it fires whenever the environment permits, while **every other parameter — and therefore the entire maneuver policy — is provably preserved**（heading/speed logits 与动作序列双门逐比特验证，§3.3）。贡献不是「只训一个 head」这个实现细节，而是 *isolating the behavioural dimension responsible for the failure*：机动逐位不变，因此残余差异只能归因于发射决策。A5/A6（§4.7）进一步表明，收益来自**允许哪些参数动**，而不是能动多少、也不取决于该头从何处初始化。
+   > *(internal, delete before submission)* 措辞纪律：说 **intervention**，不说 fine-tune/training。
+3. **C3 — Causal and locality validation: two interventions, one conclusion.** 两个互补的因果论证（§4.3, §4.4），加上 A5/A6 对「locality 才是关键」的验证（§4.7）。**注意两个干预的尺度不同，引用时必须各自绑定**：
+   - **Intervention A（cell-specific frozen-trajectory enumeration，`dist2_3k`，60 seeds）**：15.0% → 86.7% —— *the launch decision alone can explain the performance gap*；
+   - **Intervention B（primary 400-seed policy intervention，seeds 20000–20399）**：46.50% → 90.75%（配对，177:0，p≈1e-53）—— *the correction can be internalized into the policy*。
    - 效果在规避目标下保持并扩大（+44.25 → +48.50 pp），且被一套独立的识别方法复现（§4.3 E6 matched 2×2：+40.0 → +50.0 pp）。
 
 **叙事结构**（正文按此展开，比普通 ablation 高一层）：
@@ -72,7 +73,7 @@ Observation（CLR 异常低）
 
 ## 2. Related Work (1 page)
 
-> 结构按 Sean 2026-09-17 拍板：**三个关键词，不堆 RL 文献**。本文不是 air-combat RL 论文，related work 必须服务三个贡献（诊断 / 局部修正 / 因果验证），不要让 §2 变成 MARL 综述。所有引用标注 `[verify]` 的须在投稿前核对真实性 —— **宁可留空也不编造**。
+> *(internal, delete before submission)* 结构按 Sean 2026-09-17 拍板：**三个关键词，不堆 RL 文献**。本文不是 air-combat RL 论文，related work 必须服务三个贡献（诊断 / 局部修正 / 因果验证），不要让 §2 变成 MARL 综述。
 
 ### 2.1 Imitation learning and expert demonstration
 
@@ -133,19 +134,15 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | DLZ position | legality only | depth ∈ **[0.25, 0.75]** | refuses deep-in-DLZ (closer) and far-edge shots |
 | Output | — | `fire = allowed AND desired` | cooldown/inventory handled by mask |
 
-**Measured — two independent bases, one answer.** The rows are of different kinds and must not be pooled; the first is the paper's authoritative figure and the last two are corroboration.
+**Measured — the gate fully determines the expert's behaviour on legal steps.**
 
 | Quantity | Value | Basis |
 |---|---|---|
-| **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` — same seeds, same protocol, same env lifecycle as every other number in this paper |
-| Expert CLR (`action[:,3]` on allowed steps, read off the demonstration dataset) | 5.96% (560 / 9395) | `data/expert/shoot_rule_expert.npz`, 200 episodes |
-| BC CLR (launch-head argmax on allowed steps, 200 rollouts) | 7.37% (614 / 8327) | `results/health_check/fire_hesitancy.json` (2026-09-16, so U(0,60)) |
-| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ the expert's behaviour on legal steps is fully determined by its own gate | same dataset |
+| **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` |
+| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ nothing except the gate explains what the expert does when launch is legal | `data/expert/shoot_rule_expert.npz` |
 | Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back | same dataset |
 
-> **⚠ Geometry caveat on the corroboration rows (caught 2026-09-17).** `shoot_rule_expert.npz` has mtime **2026-09-13 20:22**, which *predates* commit `fb48155` (2026-09-14 09:06) that changed the heading-bias range from `U(30,60)` to `U(0,60)`. The demonstration dataset is therefore an **old-geometry** artifact, and its 5.96% is *not* the same measurement basis as the paper's U(0,60) figures. The BC 7.37% row comes from `results/health_check/fire_hesitancy.json` generated 2026-09-16, i.e. *after* the change, so the two corroboration rows are **geometry-mixed**. This is why neither is allowed to carry a headline claim: the authoritative expert number is the re-measured **6.07%**, and the older rows are quoted only to show that the low figure is stable across bases, geometries and decade-old seed sets. Do not average them, and do not present 5.96% alongside 7.26% as if they were one matched comparison.
-
-⇒ The conservatism is **entirely attributable to the designed gate**, not to the environment and not to BC's fitting error.
+⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error. (Two independent corroborating measurements, taken on a different basis, and their geometry caveat are in Appendix E.2.)
 
 ### 3.3 C2 — Surgical Policy Correction (SPC)
 - **Input**: frozen BC θ_BC; BC rollouts collected over `R` episodes.
@@ -208,18 +205,18 @@ Two caveats travel with this table. **(a)** SPC's 100.00% is true *by constructi
 | `interval_100` | 0.0% | *0.0%* | 1.95 | 0.0% |
 | **frozen BC (inherited)** | **15.0%** | *6.7%* | 2.37 | 15.0% |
 
-> **⚠ Geometry generation matters — never mix these two columns.** The italic column is the 2026-08-06 run recorded in `docs/plan_bc_rule_expert.md`, executed under the *pre-`fb48155`* geometry U(30,60). The measured column is today's default U(0,60). `delay_60` (10.0%) and `dlz_mid` (0.0%) reproduce **exactly**, which shows the script's behaviour is unchanged; `asap` moves 73.3% → 86.7% purely because the benchmark got easier (§4.5), where the same-weights geometry change alone was worth ≈ +4.5 pp. **Cite only the measured column, always with its geometry attached.**
+> The italic column is the earlier 2026-08-06 audit, executed on the pre-widening geometry `U(30,60)`; the measured column is the current default `U(0,60)`. That two of the seven arms reproduce exactly (`delay_60` 10.0%, `dlz_mid` 0.0%) while `asap` moves from 73.3% to 86.7% indicates that the *script's* behaviour is unchanged and that the benchmark itself became easier by ≈ +4.5 pp (§4.5). Only the measured column is cited, always with its geometry attached.
 
 **Reachability audit (asap arm, measured):** median first-legal step **67** (13.4 s); **cumulative legal-window length ≈ 4 steps per episode** (median 4.0) — i.e. roughly one legal step per DLZ transit; median step-1 → step-4 launch **743.5** (149 s); 52/60 killed, 8 timeouts, **8 of which ended with the window still open** (`blockers = {episode_end_in_window: 8}`). The "≈4 legal steps per episode" figure is the load-bearing structural fact and it reproduces the 2026-08-06 audit.
 
 **Reading:**
 - The scenario is **not infeasible** — the environment permits a 4-launch salvo in 86.7% of episodes, and `asap` realizes 86.7% kills.
 - The bottleneck is the launch policy: the inherited policy uses **2.37 of 3.85** available windows, because most windows have DLZ depth < 0.25 and are rejected by `fire_desired`.
-- **Every** selective alternative is worse than the mask-permissive policy, and by a wide margin (best rival `delay_30` at 38.3%). Within this family, on this trajectory class, launching on every mask-permitted step dominates.
-- Note what this does and does not show: it establishes suboptimality **conditional on the frozen maneuver**. It does not establish that the mask-permissive policy is optimal for arbitrary maneuvers of arbitrary policies. (§4.4 supplies the within-policy counterpart.)
+- **Every** selective alternative is worse than the mask-permissive policy, and by a wide margin (best rival `delay_30` at 38.3%). Within the enumerated family and on this trajectory class, the mask-permissive policy **achieves the highest kill rate**; the comparison is confined to that family and is not a claim about fire policies in general.
+- Note what this does and does not show: it establishes that the inherited launch policy is **dominated within the enumerated family, conditional on the frozen maneuver**. It does not establish that the mask-permissive policy is optimal for arbitrary maneuvers of arbitrary policies. (§4.4 supplies the within-policy counterpart.)
 - **Terminology discipline.** The mask-permissive policy is *not* "always fire": it fires only on steps where the environment-level launch mask is 1. The correction removes a gate the expert added *on top of* the environment's legality condition; it does not relax the environment's condition itself.
 
-> **Artifact status:** verified against the live artifact `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json` (tracked in git, carries `run_meta` with `cell_config`, geometry, difficulty, seed range and the frozen checkpoint's sha256). The old JSON is genuinely gone; the docs column above is all that survived of it, which is exactly why the regenerated file is now version-controlled.
+> **Provenance.** The measured column comes from `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json`, which is version-controlled and carries `run_meta` with the cell configuration, geometry, difficulty, seed range and the frozen checkpoint's SHA-256. The 2026-08-06 artifact no longer exists; the italic column is all that survived of it, which is why the regenerated file is tracked rather than regenerated on demand.
 
 **Same enumeration under an evading target — matched 2×2 (E6, seeds 20000–20059, n=60).**
 
@@ -283,7 +280,7 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 
 > **Artifact status.** E7 is **verified against live artifacts** (`results/shoot_eval/E7_{bc_round1,spc}_d0_n400_s20000.json`, `E7_paired_bc_vs_spc_d0_n400.json`).
 >
-> **⚠ Superseded numbers.** The docs-attested Phase-1 pair **43.2% → 91.2% = +48.0 pp** (500 seeds, *old* geometry U(30,60)) is **replaced** by the measured **46.50% → 90.75% = +44.25 pp** (400 seeds, U(0,60)). The old pair was not self-consistent: its BC figure came from a different geometry generation than its CLR figure. E7 puts kill rate, CLR, and geometry on **one** seed set. Cite 46.50 / 90.75 / +44.25 in the paper.
+> *(internal, delete before submission)* **Superseded numbers.** The docs-attested Phase-1 pair **43.2% → 91.2% = +48.0 pp** (500 seeds, *old* geometry U(30,60)) is **replaced** by the measured **46.50% → 90.75% = +44.25 pp** (400 seeds, U(0,60)). The old pair was not self-consistent: its BC figure came from a different geometry generation than its CLR figure. E7 puts kill rate, CLR, and geometry on **one** seed set. Cite 46.50 / 90.75 / +44.25.
 >
 > **Both former docs-only numbers have now been replaced by fresh-env measurements.** The rule-expert ID kill rate is **36.75%** (E3 paired, fresh env, seeds 20000–20399) — *not* the docs' 35.8%, and *not* the reused-env 32.25%. The rule-oracle ID kill rate is **90.75%** (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (same policy by construction, §4.4). The originals (`paired_bc_vs_expert_500.json`, `asap_baseline.json`) remain lost — the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
 
@@ -296,13 +293,13 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 
 **Identical on every reported metric.** Identities verified from `run_meta`: the oracle arm loaded `sha256 aad05b45…` (BC round1 — the *frozen maneuver* source, correct), SPC loaded `36d79bd9…`.
 
-> **⚠ Interpret this as a completeness check, not as independent validation.** The two are the *same policy by construction*: the oracle is "frozen BC maneuver + fire on every legal step", and SPC is "bit-identical frozen maneuver heads + a launch head whose measured CLR is 100.00%", i.e. it also fires on every legal step. Identity is therefore *expected*, not evidence of agreement between independent methods. What it does establish is that SPC captures the **entire** oracle gap — 46.50% → 90.75%, i.e. 100% of it — rather than some fraction. The genuinely independent replication in this paper is §4.3(E6) vs §4.4/§4.6, where the identification strategies differ in kind (off-policy enumeration vs within-policy intervention).
+> **This is a completeness check, not independent validation.** The two are the *same policy by construction*: the oracle is "frozen BC maneuver + fire on every legal step", and SPC is "bit-identical frozen maneuver heads + a launch head whose measured CLR is 100.00%", which also fires on every legal step. Their agreement is therefore expected rather than evidence that two independent methods concur. What it does establish is that SPC captures the **entire** oracle gap — 46.50% → 90.75%, i.e. 100% of it — rather than some fraction. The independent replication in this paper is §4.3(E6) against §4.4/§4.6, where the identification strategies differ in kind (off-policy enumeration versus within-policy intervention).
 >
-> Caveat: `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above is argued from construction rather than a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
+> One limitation: `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above follows from construction rather than from a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
 
 ### 4.5 Robustness check 1 — widened initial geometry (heading bias) — *a benchmark check, not a contribution*
 
-> Both robustness subsections (4.5, 4.6) are secondary: they test that the correction survives benchmark changes, and neither carries contribution weight. 2026-09-18 Sean: "NOT a second contribution" — 这个判断现在落到版面结构上。
+> *(internal, delete before submission)* Both robustness subsections (4.5, 4.6) are secondary and carry no contribution weight — 2026-09-18 Sean: "NOT a second contribution", 这个判断现在落到版面结构上。
 
 Compressed to one subsection per scope decision: **this is a benchmark-change + retraining robustness check, NOT a second contribution.**
 
@@ -317,7 +314,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 - **Caveats to state in the paper:** single seed family (seeds 42–441); d=0 only; Bonferroni α=0.0125 would put p=0.0146 just outside; JSBSim physics is not cross-machine reproducible.
 - **Framing rule:** never present 87→95 as the effect of the launch-head correction. The launch-head correction is §4.4.
 
-### 4.6 Robustness check 2 — target evasion (`difficulty_level = 0.3`) — **DONE (E5)**
+### 4.6 Robustness check 2 — target evasion (`difficulty_level = 0.3`)
 
 Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a dive to `−800·d` m (floor 2000 m). Identical protocol to §4.4 — d=0 vs d=0.3 differ **only** in `--difficulty`, same seeds 20000–20399, same code path, identity recorded in each file's `run_meta`.
 
@@ -351,16 +348,16 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 
 **Five findings:**
 1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
-2. **The conservatism is structural, not scenario-specific — and now measured on both policies.** BC's CLR barely moves (**7.26% → 6.95%**), and the expert's moves just as little (**6.07% → 5.40%**): the designed gate suppresses launches to the same degree whether or not the target manoeuvres. So the teacher's conservatism is not "caution that pays off when the target turns" — it is a fixed property of the predicate, and the imitation inherits it as a fixed property too.
-3. **The identical aggregate is not an artefact — it was verified explicitly.** 363 kills at both difficulties looked like a bug, so it was tested: **368/400 episodes change length** (so `difficulty=0.3` is definitely applied) and **382/400 seeds keep the same kill outcome, with 18 flips split perfectly 9 gained / 9 lost**. The match is a genuine near-cancellation, not a no-op. Report this check in the paper — a reviewer will ask.
-4. **Evasion cost is ordered by how conservative the launch policy is — now confirmed on one protocol.** Expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**. All three legs now come from fresh-env evaluations on the same seeds, so the ordering is no longer an artefact of mixing episode-construction protocols (the earlier estimate used an incomparable reused-env expert leg and suggested −7.00 pp; the corrected figure is larger and the ordering holds). The per-seed flips explain the mechanism directly: the expert loses 73 seeds and gains only 29, while BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. Still a single seed family, so state it as a well-supported ordering rather than a law.
+2. **The restrictive preference is structural, not scenario-specific — and measured on both policies.** BC's CLR barely moves (**7.26% → 6.95%**), and the expert's moves just as little (**6.07% → 5.40%**): the designed gate suppresses launches to the same degree whether or not the target manoeuvres. The teacher's restriction is therefore not caution that pays off when the target turns — it is a fixed property of the predicate, and the imitation inherits it as one too.
+3. **The identical aggregate is not an artefact — the difficulty change was verified to take effect.** 363 kills at both difficulties admits a trivial explanation, so it was tested directly: **368/400 episodes change length** (so `difficulty=0.3` is applied) and **382/400 seeds keep the same kill outcome, with 18 flips split 9 gained / 9 lost**. The match is a genuine near-cancellation rather than a no-op.
+4. **Evasion cost is ordered by how restrictive the launch policy is.** Expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**, all three legs on fresh-env evaluations over the same seeds. The per-seed flips indicate the mechanism: the expert loses 73 seeds and gains 29, while BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. The ordering rests on a single seed family, so it is reported as a well-supported ordering rather than a law.
 5. **The imitation gap itself widens under evasion.** BC's paired margin over the expert goes from **+9.75 pp** (d=0) to **+16.50 pp** (d=0.3), i.e. it more than doubles. This is a new observation and a useful one: the value of imitating-then-correcting this expert is *larger* in the harder regime, which is the opposite of the usual expectation that a stronger expert is needed as the problem gets harder.
 
 > **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json`, `E5_paired_bc_vs_spc_d03_n400.json`, and the two CLR runs `E3_paired_bc_vs_expert_{d0_n400_s20000_v3,d03_n400_s20000_v2}_clr.json`. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 4 reports.
 
 ### 4.7 Ablations: why *surgical*?
 
-> **2026-09-18 Sean：A5/A6 都留正文，但 A6 为主、A5 压缩** —— A6 回答的是"冻结是否只是工程便利"（C2 真正依赖它），A5 只回答"初始化是否有影响"。
+> *(internal, delete before submission)* **2026-09-18 Sean：A5/A6 都留正文，但 A6 为主、A5 压缩** —— A6 回答的是"冻结是否只是工程便利"（C2 真正依赖它），A5 只回答"初始化是否有影响"。
 
 Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), ask whether the locality of the correction is doing real work or is an arbitrary design choice. The results indicate that **locality is the key factor enabling an attributable correction**:
 
@@ -371,6 +368,7 @@ Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), a
 
 | # | Ablation | Status | Purpose |
 |---|---|---|---|
+| — | *(internal status tracker, delete before submission: the paper reports A5/A6 in the text and A1–A4 in their own sections)* | | |
 | A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | **DONE** (E1 regenerated, tracked) | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
@@ -379,7 +377,7 @@ Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), a
 | A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
 | — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
 
-**A6 protocol, in one line** (the fairness objection is obvious, so state it up front): identical objective, data, loss and initialisation as SPC — the only change is that every parameter is trainable, at a deliberately **more generous** budget than the fire-head-only run. The results follow.
+**A6 — full-network fine-tuning on the same objective.** Identical objective, data, loss and initialisation as SPC; the only change is that every parameter is trainable rather than the launch head alone, at a deliberately **more generous** budget (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), so that a negative result cannot be attributed to under-training.
 
 **A6 result — the maneuver moves, and the correction is still worse than doing nothing clever.** Both pre-registered measurements came back on 2026-09-18.
 
@@ -400,7 +398,7 @@ Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), a
 | **A6 — full-network fine-tune** | **77.50%** (310/400) | **99.67%** | **−13.25 pp**, discordant 67 (60 SPC / 7 A6), exact McNemar **p = 1.33e-11** |
 | **SPC — launch head only** | **90.75%** (363/400) | **100.00%** | — |
 
-**The reading is that freezing is doing real work, on both axes at once.** Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains **significantly worse than the surgical correction on identical seeds** (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), *and* it pays for that with an 8.51-logit change to the maneuver — i.e. it is less effective **and** no longer attributable. So the paper's central claim does not rest on a lucky locality choice: unfreezing is available, it is better resourced, and it loses.
+**The reading is that freezing is doing real work, on both axes at once.** Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains **significantly worse than the localized intervention on identical seeds** (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), *and* it pays for that with an 8.51-logit change to the maneuver — it is less effective **and** no longer attributable. These results indicate that allowing unrestricted parameter updates weakens attribution and does not recover the performance achieved by the localized intervention.
 
 **A5 (the control).** Keep SPC's freeze pattern exactly — encoder and every maneuver head frozen at θ_BC — and rebuild *only* the fire head from `nn.Linear.reset_parameters()`, the constructor's own initialisation, so the sole difference from SPC is where the moving head starts. Trained on the same 300-episode rollout set, the random head reaches **100% allowed-window recall in its first epoch** and early-stops, with the identity gates reporting **exactly zero** maneuver deviation. At the primary protocol it scores **90.75% (363/400)**, and the paired test against SPC reports **zero discordant seeds**: both arms kill the same 363 seeds. Training detail and the 60-seed screening comparison are in Appendix E.
 
@@ -416,7 +414,7 @@ Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), a
 | A6 — full-network fine-tune | 81.7% | 66.7% | 98.3% |
 | mask-permissive rule oracle | **95.0%** | **86.7%** | 100% |
 
-A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95.0%). ⚠ These are **60 seeds**, so they carry roughly ±10 pp of small-sample spread (the same 60 seeds give BC 40.0% where n=400 gives 46.50%) and must **not** be quoted next to the 400-seed figures as one comparison. They are here for the third arm only.
+A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95.0%). The screening set is **60 seeds** and therefore carries roughly ±10 pp of small-sample spread — the same seeds give BC 40.0% where n=400 gives 46.50% — so these figures are quoted only for the third arm and never alongside the 400-seed numbers as one comparison.
 | A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
 
 ---
