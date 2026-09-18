@@ -141,7 +141,9 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` |
 | Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ nothing except the gate explains what the expert does when launch is legal | `data/expert/shoot_rule_expert.npz` |
 
-⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error. (Two independent corroborating measurements, taken on a different basis, the gate's behaviour on *disallowed* steps, and their geometry caveat are in Appendix E.2.)
+⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error.
+
+Two further measurements corroborate the magnitude on a different basis — expert CLR 5.96% (560/9395) read directly off the demonstration dataset, against BC 7.37% (614/8327) from a 200-rollout diagnostic. They are quoted as corroboration only, and one caveat travels with them: the dataset predates the widening of the heading-bias range, so its 5.96% is an old-geometry measurement while the 7.37% beside it is not. They are never averaged, never presented as a matched pair, and the authoritative figure remains the re-measured 6.07%. Appendix E.2 gives the timestamps and the gate's behaviour on disallowed steps.
 
 ### 3.3 C2 — Surgical Policy Correction (SPC)
 - **Input**: frozen BC θ_BC; BC rollouts collected over `R` episodes.
@@ -186,7 +188,9 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | BC round1 | 7.26% (1223/16839) | 6.95% (1194/17169) | 16839 / 17169 |
 | SPC | 100.00% (1560/1560) | 99.11% (1563/1577) | 1560 / 1577 |
 
-Two caveats travel with this table. **(a)** SPC's 100.00% is true *by construction* — its training target is "fire on every legal step" and gate G3 tests exactly that; it is not a finding. **(b)** The CLR denominator is policy-dependent: firing starts a 30-step cooldown that *removes* legality, so a policy that fires collapses its own opportunity set (SPC ≈3.9 legal steps/episode, BC ≈42). Cross-policy CLR is therefore an ordering of tendencies, not a like-for-like exploitation fraction — which is why the causal claim rests on §4.3's frozen-trajectory enumeration, where the opportunity set is held constant by construction. Earlier corroboration measurements and a dataset-geometry caveat are deferred to Appendix E.
+Two caveats travel with this table. **(a)** SPC's 100.00% is true *by construction* — its training target is "fire on every legal step" and gate G3 tests exactly that; it is not a finding. **(b)** The CLR denominator is policy-dependent: firing starts a 30-step cooldown that *removes* legality, so a policy that fires collapses its own opportunity set (SPC ≈3.9 legal steps/episode, BC ≈42). Cross-policy CLR is therefore an ordering of tendencies, not a like-for-like exploitation fraction — which is why the causal claim rests on §4.3's frozen-trajectory enumeration, where the opportunity set is held constant by construction.
+
+One cross-check on the instrument itself: adding CLR changed nothing measurable. The d=0 run that first reported CLR reproduces the kill side of the E3 pair bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit, and the d=0.3 run does the same (25.75%, 42.25%, +16.50 pp, 85/19/296). Expert and BC also agree closely on every basis measured — 6.07% vs 7.26%, 5.40% vs 6.95%, and 5.96% vs 7.37% on the older geometry-mixed diagnostics — so the restriction is a stable property rather than sampling noise, and BC is in no meaningful sense more restrictive than its teacher. Appendix E.3 states the scope limit on what CLR alone can establish.
 
 ### 4.3 C3(a) — Off-policy enumeration on a frozen trajectory (the key identification)
 
@@ -258,7 +262,7 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 
 **Paired BC vs expert on the same 400 seeds:** Δkill **+9.75 pp**, win/lose/tie **63 / 24 / 313**, exact McNemar **p = 3.48e-05** (χ²cc p = 4.62e-05); 72% of the 87 discordant seeds favour BC. Δlost = 0.00, Δlaunches = +0.23. This is the first *significance test* attached to the BC-beats-expert claim — the sealed Phase-1 record had only a bootstrap CI ([+3.8, +11.0] pp, 500 seeds, old geometry).
 
-> **Expert numbers in this paper are fresh-env measurements.** A second evaluation path that reuses one environment across episodes disagrees with it on identical seeds; that protocol, its numbers (32.25% / 25.25%) and why they are excluded are documented in Appendix E, together with the consistency gate `tests/check_expert_path_consistency.sh`.
+> **Expert numbers in this paper are fresh-env measurements.** A second evaluation path that reuses one environment across all episodes disagrees with it on identical seeds — 32.25% versus 36.75% at d=0, and a 20-seed screen shows different per-seed kill vectors rather than noise. Both paths import the same rule functions at the same commanded speed, so neither the rule nor the flight controller explains the gap; the cause is environment lifecycle, since the reused-env path builds a *single* `BaseEnv` while every other script evaluated here builds a fresh one per episode. The reused-env figures (32.25%, 25.25% at d=0.3) are therefore excluded rather than wrong: they are measured under a different episode-construction protocol, and their artifacts are renamed `EXCLUDED_reused_env_expert_*` so no table can pick them up by accident. The consistency gate is `tests/check_expert_path_consistency.sh`; Appendix E.1 lists the affected scripts and artifacts.
 
 **Paired contingency and test** (`scripts/paired_mcnemar.py`, exact McNemar, no scipy):
 
@@ -714,30 +718,28 @@ python scripts/audit_paper_numbers.py           # recompute every headline numbe
 
 ---
 
-## Appendix E. Reproducibility material (moved out of the main text, 2026-09-18 compression pass)
+## Appendix E. Reproducibility material
 
-Everything in this appendix was cut from §4 to keep the main text to the causal chain. It is reproducibility evidence, not narrative — but it is load-bearing for anyone re-running the work, so it is kept rather than deleted.
+Supporting evidence for claims made in the main text. The reasoning each item supports is stated in the main text; what follows is the raw material needed to re-run or re-check it.
 
-### E.1 The environment-lifecycle confound (moved from §4.4)
+### E.1 The environment-lifecycle confound — affected scripts and artifacts
 
-Two scripts evaluate "the expert" and they disagree on identical seeds (32.25% vs 36.75% at n=400; a 20-seed screen shows **different per-seed kill vectors**, not noise). Both import the same rule functions (`hdg_label` / `spd_label` / `fire_desired`) at the same `CMD_SPEED = 280`, and `BaseEnv.__init__` already installs `SafetyInterceptor(PIDFlightController())`, so neither the rule nor the controller explains it. The cause is **environment lifecycle**: `generate_shoot_rule_expert.py --validate` builds **one** `BaseEnv` and reuses it for all episodes, whereas `eval_paired_bc_vs_expert.py`, `eval_bc_1v1.py`, `fire_oracle_audit.py` and `eval_asap_baseline.py` all build a **fresh env per episode**. Every policy figure in this paper comes from the fresh-env path, so the fresh-env expert (**36.75%**, d=0; **25.75%**, d=0.3) is the only comparable one. The reused-env figures (**32.25% / 25.25%**) are **excluded** — they are not wrong, they are measured under a different episode-construction protocol, and mixing them would repeat exactly this confound. Their artifacts are renamed `EXCLUDED_reused_env_expert_*.json` and `collect_matrix.py` skips anything marked `EXCLUDED_`. Gate: `tests/check_expert_path_consistency.sh`.
+§4.4 states the confound and why the reused-env numbers are excluded. The specifics: both paths import the same rule functions (`hdg_label` / `spd_label` / `fire_desired`) at `CMD_SPEED = 280`, and `BaseEnv.__init__` already installs `SafetyInterceptor(PIDFlightController())`, so neither the rule nor the controller explains the disagreement. The reused-env path is `generate_shoot_rule_expert.py --validate`, which builds **one** `BaseEnv` and reuses it for every episode; the fresh-env path is used by `eval_paired_bc_vs_expert.py`, `eval_bc_1v1.py`, `fire_oracle_audit.py` and `eval_asap_baseline.py`, each of which builds a new environment per episode. Affected artifacts are renamed `EXCLUDED_reused_env_expert_*.json`, and `collect_matrix.py` skips anything marked `EXCLUDED_`. Gate: `tests/check_expert_path_consistency.sh`.
 
-### E.2 Corroborating CLR measurements and their geometry caveat (moved from §4.2)
+### E.2 Corroborating CLR: timestamps and the gate on disallowed steps
+
+§3.2 quotes the two corroborating values (expert 5.96%, BC 7.37%) and their geometry caveat; the exact provenance is:
+
+- `data/expert/shoot_rule_expert.npz`, 200 episodes, **mtime 2026-09-13 20:22** — this *predates* commit `fb48155` (2026-09-14 09:06), which changed the heading-bias range from `U(30,60)` to `U(0,60)`. Its 5.96% is therefore an **old-geometry** measurement.
+- `results/health_check/fire_hesitancy.json`, 200 rollouts, generated **2026-09-16**, i.e. after the change — so the 7.37% beside it is U(0,60). The two are **geometry-mixed** and are never averaged or presented as a matched pair.
 
 | Quantity | Value | Basis |
 |---|---|---|
-| Expert CLR (`action[:,3]` on allowed steps, read off the demonstration dataset) | 5.96% (560 / 9395) | `data/expert/shoot_rule_expert.npz`, 200 episodes |
-| BC CLR (launch-head argmax on allowed steps, 200 rollouts) | 7.37% (614 / 8327) | `results/health_check/fire_hesitancy.json` (2026-09-16, so U(0,60)) |
-| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ the expert's behaviour on legal steps is fully determined by its own gate | same dataset |
-| Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back | same dataset |
+| Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back | `data/expert/shoot_rule_expert.npz` |
 
-**⚠ Geometry caveat.** `shoot_rule_expert.npz` has mtime **2026-09-13 20:22**, which *predates* commit `fb48155` (2026-09-14 09:06) that changed the heading-bias range from `U(30,60)` to `U(0,60)`. The demonstration dataset is therefore an **old-geometry** artifact, and its 5.96% is *not* the same measurement basis as the paper's U(0,60) figures, while the BC 7.37% beside it *is* post-change — the two corroboration rows are **geometry-mixed**. They are quoted only to show that the low figure is stable across bases, geometries and seed sets; they are never averaged and never presented as a matched pair.
+### E.3 Scope reading for the CLR claim
 
-### E.3 CLR cross-checks and readings (moved from §4.2)
-
-- **Instrumentation cross-check.** The d=0 CLR run reproduces the kill side of the E3 pair bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit; the d=0.3 run does the same (25.75%, 42.25%, +16.50 pp, 85/19/296). Adding the CLR field was additive, not a behavioural change.
-- **Stability reading.** Expert and BC agree closely on every basis available — 6.07% vs 7.26% on the matched 400-seed set, 5.40% vs 6.95% under evasion, 5.96% vs 7.37% on the geometry-mixed diagnostics above. BC is not more conservative than the teacher in any meaningful sense: it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
-- **Scope reading.** Neither figure alone proves suboptimality: a low CLR diagnoses conservatism only, and whether that conservatism is *costly* is established separately (§4.3, §4.4).
+Neither CLR figure alone proves suboptimality: a low CLR diagnoses restriction only, and whether that restriction is *costly* is established separately (§4.3, §4.4). The instrumentation and stability cross-checks are in §4.2.
 
 ### E.4 Compute environment (moved from §4.1)
 
