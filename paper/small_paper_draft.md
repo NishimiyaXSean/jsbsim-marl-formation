@@ -179,27 +179,16 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 
 ### 4.2 Diagnosis result — CLR
 
-| Policy | Basis (all U(0,60) unless noted) | Allowed steps | Launch commands | **CLR** |
-|---|---|---|---|---|
-| **Rule expert** | **E3 seed set, 400 ep, d=0, fresh env** | **18639** | **1131** | **6.07%** |
-| **Rule expert** | **E3 seed set, 400 ep, d=0.3, fresh env** | **19729** | **1066** | **5.40%** |
-| **BC round1** | E7 seed set, 400 ep, d=0, fresh env | 16839 | 1223 | **7.26%** |
-| **BC round1** | E5 seed set, 400 ep, d=0.3, fresh env | 17169 | 1194 | **6.95%** |
-| **SPC** | E7 seed set, 400 ep, d=0, fresh env | 1560 | 1560 | **100.00%** |
-| SPC | E5 seed set, 400 ep, d=0.3, fresh env | 1577 | 1563 | **99.11%** |
-| Rule oracle (fire whenever the mask permits) | by construction | — | all allowed | 100% (by construction) |
-| *Expert, 200-ep demonstration dataset* | *old geometry U(30,60) — corroboration only* | *9395* | *560* | *5.96%* |
-| *BC round1, 200 rollouts* | *health-check diagnostic* | *8327* | *614* | *7.37%* |
-| ~~Rule expert 400 ep d=0 / d=0.3~~ | ~~reused env — **excluded**~~ | ~~18521 / 19736~~ | ~~1119 / 1071~~ | ~~6.04% / 5.43%~~ |
+**All of §4.2's numbers live in Table 2** (§4.6), which puts every policy on one protocol and one page: three policies × two difficulties, kill rate and CLR side by side. Keeping a second, smaller copy of the same rows here would mean the same measurement appearing twice in a 6-page paper, and — worse — two places that can drift apart. This section therefore states only what the diagnosis itself needs, and forwards.
 
-**Every un-struck row now comes from one protocol** — fresh env per episode, seeds 20000–20399, geometry U(0,60), deterministic argmax — and the expert and BC rows are produced by the *same run* (`eval_paired_bc_vs_expert.py`, CLR support added 2026-09-17), so their difference is paired by construction. The italic corroboration rows are a different basis and are quoted only where labelled (§3.2). The struck rows come from the reused-env path and are excluded for the reason given in §4.4.
+**The diagnosis.** On the matched 400-seed set at d=0, the rule expert commands launch on **6.07%** of the steps where the environment permits it (1131/18639), and BC round1 lands in the same band at **7.26%** (1223/16839). Under an evading target the two barely move: **5.40%** and **6.95%**. The conservatism is therefore a property of the designed gate, transmitted faithfully by imitation — not sampling noise, and not a scenario effect.
 
-**Cross-check that the new run agrees with the rest of the paper:** the same artifact reproduces the E3 kill numbers bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit (1223/16839). So adding CLR instrumentation changed nothing measurable about the policy — the new field is additive, and the table is self-consistent.
+**The ordering can now be asserted.** On one protocol: expert **6.07% / 5.40%** < BC **7.26% / 6.95%** ≪ SPC **100.00% / 99.11%** (d=0 / d=0.3). Earlier drafts deliberately withheld this sentence because its expert leg came from the excluded reused-env path; that reason is gone. Caveat (b) below still applies — the denominators differ by construction, so this is an ordering of *tendencies*, not of fractions of one shared opportunity set.
 
-**The conservatism ordering can now be asserted.** On one protocol: expert **6.07%** < BC **7.26%** ≪ SPC **100.00%**. Earlier drafts deliberately withheld this sentence because its expert leg came from the excluded reused-env path; that reason is gone. Caveat (b) still applies — the denominators differ by construction, so this is an ordering of *tendencies*, not of fractions of one shared opportunity set.
+**Cross-check that the CLR instrumentation changed nothing.** The d=0 CLR run reproduces the kill side of the E3 pair bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit; the d=0.3 run does the same (25.75%, 42.25%, +16.50 pp, 85/19/296). Adding the CLR field was additive, not a behavioural change.
 
 Two readings:
-1. **Expert and BC agree closely on every basis available**, so the conservatism is a **stable property**, not sampling noise: 6.07% vs 7.26% on the matched 400-seed set, and 5.96% vs 7.37% on the earlier diagnostics. BC is not more conservative than the teacher in any meaningful sense — it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
+1. **Expert and BC agree closely on every basis available**, so the conservatism is a **stable property**, not sampling noise: 6.07% vs 7.26% on the matched 400-seed set, 5.40% vs 6.95% under evasion, and 5.96% vs 7.37% on the earlier diagnostics (a different, geometry-mixed basis — §3.2). BC is not more conservative than the teacher in any meaningful sense — it reproduces the gate and adds a little variance. The bias is the teacher's; the imitation is faithful.
 2. **Neither figure alone proves suboptimality.** A low CLR diagnoses *conservatism* only; whether that conservatism is *costly* is established separately (§4.3, §4.4).
 
 > **⚠ Two caveats that must appear in the paper (both are reviewer-attack surfaces).**
@@ -264,7 +253,7 @@ Three things follow:
 
 **What the figure is for.** It is an *attribution* device, not a trajectory showcase. BC uses **3 of 41** environment-legal steps on this seed (CLR 7.32%, close to the 7.26% aggregate) and times out after 1500 steps; SPC uses **4 of 4** and kills the target at step 842. The state trace is **bit-identical** over all 842 common steps (maximum position deviation **0.0e+00 m**) — the maneuver heads are frozen — so the figure contains a *single* state trajectory and the entire difference is confined to Panel B. That is the claim: same geometry, same maneuver, different launch decision.
 
-Two caveats the caption must carry: (i) this is a **single illustrative episode**, chosen to make the mechanism legible — the aggregate evidence is Table 3 (`§4.3`) and Table 4 (`§4.4`); (ii) SPC's legal-step count (4) is smaller than BC's (41) because firing triggers the launch cooldown, which removes legality — the policy-dependent denominator documented in §4.2(b), not a defect of the figure.
+Two caveats the caption must carry: (i) this is a **single illustrative episode**, chosen to make the mechanism legible — the aggregate evidence is Table 3 (`§4.3`) and Table 2 (`§4.6`); (ii) SPC's legal-step count (4) is smaller than BC's (41) because firing triggers the launch cooldown, which removes legality — the policy-dependent denominator documented in §4.2(b), not a defect of the figure.
 
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
@@ -335,37 +324,34 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 
 Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a dive to `−800·d` m (floor 2000 m). Identical protocol to §4.4 — d=0 vs d=0.3 differ **only** in `--difficulty`, same seeds 20000–20399, same code path, identity recorded in each file's `run_meta`.
 
-| Arm | d=0 kill | d=0.3 kill | Δ | d=0 CLR | d=0.3 CLR |
-|---|---|---|---|---|---|
-| Rule expert (fresh env) | **36.75%** (147/400) | **25.75%** (103/400) | **−11.00 pp** | **6.07%** | **5.40%** |
-| BC round1 | 46.50% | **42.25%** (169/400) | −4.25 pp | 7.26% | **6.95%** |
-| **SPC** | 90.75% | **90.75%** (363/400) | **0.00** | 100.00% | **99.11%** |
-| **BC − expert margin** | +9.75 pp | **+16.50 pp** | **+6.75 pp** | — | — |
+**Table 2 — main results: three policies × two difficulties, one protocol.** Fresh env per episode, seeds 20000–20399, geometry U(0,60), deterministic masked argmax; `difficulty` is the only variable between the two columns' groups. Every row is generated by `scripts/collect_matrix.py` from each artifact's own `run_meta` — not assembled by hand — and the table is the *only* place these numbers appear.
 
-**All rows now come from one protocol**: fresh env per episode, seeds 20000–20399, geometry U(0,60), deterministic argmax, `difficulty` the only variable. Expert and BC share a run (`eval_paired_bc_vs_expert.py`), so their difference is paired by construction.
+| Policy | d=0 kill | d=0.3 kill | Δ (evasion cost) | d=0 CLR | d=0.3 CLR | CLR denominator (d=0 / d=0.3) |
+|---|---|---|---|---|---|---|
+| Rule expert (fresh env) | **36.75%** (147/400) | **25.75%** (103/400) | **−11.00 pp** | **6.07%** | **5.40%** | 18639 / 19729 |
+| BC round1 (inherited launch policy) | 46.50% | **42.25%** (169/400) | −4.25 pp | 7.26% | **6.95%** | 16839 / 17169 |
+| **SPC (corrected launch head)** | 90.75% | **90.75%** (363/400) | **0.00** | 100.00% | **99.11%** | 1560 / 1577 |
+| *Rule oracle (fire whenever the mask permits)* | *90.75%* | *—* | *—* | *100%* | *—* | *by construction* |
 
-**Paired BC-vs-expert at both difficulties** (same seeds, fresh env):
+The CLR denominator column is not decoration: it is the evidence for caveat (b) of §4.2 (firing triggers the launch cooldown, so a policy that fires destroys its own opportunity set). Read in that light the table says three things at once — the teacher is conservative, imitation transmits it, and evasion punishes it in proportion to how conservative the policy is (**expert −11.00 > BC −4.25 > SPC 0.00**).
 
-| difficulty | Δkill | W / L / T | discordant | favouring BC | exact McNemar |
-|---|---|---|---|---|---|
-| d=0 | **+9.75 pp** | 63 / 24 / 313 | 87 | 72% | **3.48e-05** |
-| d=0.3 | **+16.50 pp** | 85 / 19 / 296 | 104 | 82% | **3.79e-11** |
+**Paired tests, both against the same 400 seeds.** The expert-vs-BC comparison and the SPC-vs-BC comparison share a seed set, so both are paired by construction rather than by assumption:
 
-Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −42**. Both are loss-dominated, but the expert's net is −44 seeds against BC's −17 — the asymmetry, not just the mean, drives the ordering below.
+| Paired comparison | d=0 | d=0.3 | Test |
+|---|---|---|---|
+| **BC − expert** | **+9.75 pp** (63/24/313, discordant 87, 72% favouring BC) | **+16.50 pp** (85/19/296, discordant 104, 82% favouring BC) | exact McNemar **3.48e-05** / **3.79e-11** |
+| **SPC − BC** | **+44.25 pp** (discordant **177 : 0**) | **+48.50 pp** (discordant **194 : 0**) | exact McNemar **1.04e-53** / **7.97e-59** |
 
-**All three policies on one seed set** (seeds 20000–20399, U(0,60), deterministic argmax), so the rows are directly comparable. Source table is generated by `scripts/collect_matrix.py` from each file's own `run_meta`, not assembled by hand.
+Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −42**. Both are loss-dominated, but the expert's net is −44 seeds against BC's −17 — the asymmetry, not just the mean, drives the ordering above.
 
-**Paired test at d=0.3:** discordant **194 : 0** (once again unanimous), exact McNemar **p = 7.97e-59**. SPC launches 3.91/ep, hit rate 0.9994, `lost_target = 0`, `launch_quality.bad = 0`.
-
-Four findings:1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
+**Five findings:**
+1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
 2. **The conservatism is structural, not scenario-specific — and now measured on both policies.** BC's CLR barely moves (**7.26% → 6.95%**), and the expert's moves just as little (**6.07% → 5.40%**): the designed gate suppresses launches to the same degree whether or not the target manoeuvres. So the teacher's conservatism is not "caution that pays off when the target turns" — it is a fixed property of the predicate, and the imitation inherits it as a fixed property too.
 3. **The identical aggregate is not an artefact — it was verified explicitly.** 363 kills at both difficulties looked like a bug, so it was tested: **368/400 episodes change length** (so `difficulty=0.3` is definitely applied) and **382/400 seeds keep the same kill outcome, with 18 flips split perfectly 9 gained / 9 lost**. The match is a genuine near-cancellation, not a no-op. Report this check in the paper — a reviewer will ask.
 4. **Evasion cost is ordered by how conservative the launch policy is — now confirmed on one protocol.** Expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**. All three legs now come from fresh-env evaluations on the same seeds, so the ordering is no longer an artefact of mixing episode-construction protocols (the earlier estimate used an incomparable reused-env expert leg and suggested −7.00 pp; the corrected figure is larger and the ordering holds). The per-seed flips explain the mechanism directly: the expert loses 73 seeds and gains only 29, while BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. Still a single seed family, so state it as a well-supported ordering rather than a law.
 5. **The imitation gap itself widens under evasion.** BC's paired margin over the expert goes from **+9.75 pp** (d=0) to **+16.50 pp** (d=0.3), i.e. it more than doubles. This is a new observation and a useful one: the value of imitating-then-correcting this expert is *larger* in the harder regime, which is the opposite of the usual expectation that a stronger expert is needed as the problem gets harder.
 
-**Expert arm at d=0.3** is running (task `s4Oqks`) as an unpaired reference; it now uses the seed-pairing patch (`run_one(seed=...)`) so it can be aligned to the same seeds.
-
-> **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json` and `E5_paired_bc_vs_spc_d03_n400.json`.
+> **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json`, `E5_paired_bc_vs_spc_d03_n400.json`, and the two CLR runs `E3_paired_bc_vs_expert_{d0_n400_s20000_v3,d03_n400_s20000_v2}_clr.json`. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 2 reports.
 
 ### 4.7 Ablation ladder (ordered by the decided priority)
 
@@ -435,17 +421,18 @@ The load-bearing reading is the middle row against the bottom row, because they 
 
 ### 6.0 Figure and table plan (final structure — Sean 2026-09-17 拍板)
 
-正文固定为 **4 表 3 图**，每张都对应一个贡献，不设冗余表。
+正文固定为 **3 表 3 图**（2026-09-18 Sean 拍板：原 Table 2 与 Table 4 合并），每张都对应一个贡献，不设冗余表。
 
 | # | 内容 | 服务贡献 | 数据来源 / 状态 |
 |---|---|---|---|
 | **Table 1** | Setup：任务、观测/动作空间、三个策略、评测协议（d=0、deterministic argmax、U(0,60)、fresh env/episode） | 全部 | §3.1，**可写** |
-| **Table 2** | CLR diagnosis：Expert / BC / SPC × (allowed steps, fire decisions, CLR) | **C1** | §4.2，**完整** —— expert **6.07%**（fresh env, E3 v3 clr）/ BC **7.26%** / SPC **100.00%**，同 seeds、同 env 生命周期 |
+| **Table 2** | **主结果表（合并表）**：三策略 × 两难度，kill rate + Δ（evasion cost）+ CLR + CLR 分母 + 两组配对检验（BC−expert、SPC−BC）。位置在 §4.6 | **C1 + C2 + C3** | §4.6，**六格全部测齐**（expert 6.07/5.40、BC 7.26/6.95、SPC 100.00/99.11）；由 `collect_matrix.py` 从 `run_meta` 自动生成 |
 | **Table 3** | Causal intervention A：frozen BC trajectory 上的 fire-policy 枚举（inherited vs mask-permissive 及 5 个选择性策略） | **C3** | §4.3，E1 已入库 |
-| **Table 4** | SPC performance：BC vs SPC，d=0 与 d=0.3，kill / CLR / 配对检验 | **C2 + C3** | §4.4–4.6，E7/E5 已入库 |
 | **Figure 1** | Framework：Expert → BC → CLR diagnosis → SPC | 叙事 | `results/shoot_eval/framework_fig1.{png,pdf}`（**已产出且数值已填齐**：expert 6.07% / BC 7.26%） |
 | **Figure 2** | **Mechanism visualization**（不是普通轨迹图）：同一 seed、同一机动轨迹（已实测 max deviation = 0 m），Panel A = 距离/ATA 与决策点，Panel B = mask / BC fire / SPC fire 三行时间轴 | **C3** | `results/shoot_eval/mechanism_seed20007_d00.{png,json}`（**已产出并入库**，seed 20007：BC 3/41 合法步、超时；SPC 4/4、击杀） |
 | **Figure 3** | Difficulty robustness：d=0 vs d=0.3 的 kill rate 与 gap | C3 稳健性 | `results/shoot_eval/robustness_fig3.{png,pdf}`（**已产出并入库**：三策略 × 两难度柱状图，带 Wilson 95% CI，并标注配对 gap **+44.25 pp** / **+48.50 pp**） |
+
+> **为什么合并（2026-09-18 的决定）**：3×2 表补齐后，原 Table 2（CLR 诊断）的六行中有四行与原 Table 4 完全重复 —— 同一批测量出现在两处，既吃页数，又制造两个可以各自漂移的副本。合并后 §4.2 只保留 CLR 的**定义、诊断结论、排序断言与两条告警**，并把读者转给 Table 2；数字本身在整个论文中**只出现一次**。副作用是把 C1/C2/C3 的证据压到同一张表上，读者能一次看到「老师保守 → 模仿继承 → 修正回收」这条链，配合 CLR 分母列还能直接看出为什么跨策略比 CLR 只是描述性的。
 
 > **Figure 1 与 Figure 3 的生成纪律**：两图都由 `scripts/make_paper_figures.py` 从 `results/shoot_eval/` 的活产物**读数**绘制（kill rate 取 `termination_reasons.target_killed` / `kill_rate`，配对 gap 取 `kill_rate.paired_diff_pp`），脚本内**不写任何数字常量** ⇒ 图与文中的数字不可能各自漂移。Figure 3 中 expert / BC 的两条腿来自 E3 与 E7/E5，全部为 fresh env、同 seeds、同 U(0,60)。缺失的专家 CLR 会渲染为 `pending` 并在 stderr 报警，脚本**不会**用其它口径的数字顶替（这正是 §4.4 的教训）。
 
@@ -653,7 +640,7 @@ All seven arms are evaluated on the *same frozen maneuver trajectory* per seed (
 
 All commands are for the **WSL Ubuntu shell**, from the repository root, using the project interpreter `/home/sean/miniconda3/envs/marl_env/bin/python`. Trace JSONs, logs and `.pth` checkpoints are excluded from version control, except the `E*_*.json` and `mechanism_*` artifacts, which are tracked.
 
-Primary endpoints (`§4.4`, Table 4):
+Primary endpoints (`§4.4`, `§4.6`, Table 2):
 
 ```
 python scripts/eval_bc_1v1.py --episodes 400 --seed 20000 --difficulty 0.0 \
