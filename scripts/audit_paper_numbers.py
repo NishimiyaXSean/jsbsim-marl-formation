@@ -223,6 +223,24 @@ def main():
     else:
         add("A5 random-init fire head", "ABSENT (in flight or not run)", a5_name)
 
+    # --- ablation A5 at the primary protocol, paired against SPC ------------
+    a5_p_name = "ablation_A5_random_fire_head_d0_n400_s20000.json"
+    a5_vs_spc = "ablation_A5_vs_spc_paired_d0_n400.json"
+    if os.path.exists(os.path.join(EV, a5_p_name)):
+        d = load(a5_p_name)
+        add("A5 kill (400 seeds)", "%.2f%% (%d/%d)"
+            % (100.0 * d["kill_rate"],
+               d["termination_reasons"].get("target_killed", 0), d["episodes"]),
+            a5_p_name)
+        add("A5 CLR (400 seeds)", "%.2f%% (%d/%d)"
+            % (100.0 * d["clr"], d["clr_fire_commands"], d["clr_allowed_steps"]),
+            a5_p_name)
+    if os.path.exists(os.path.join(EV, a5_vs_spc)):
+        d = load(a5_vs_spc)
+        cont = d["contingency"]
+        add("A5 vs SPC discordant", "%d (expect 0 -> behaviourally identical)"
+            % cont["discordant_total"], a5_vs_spc)
+
     # --- environment-threshold sanity (should match Appendix B) -------------
     sys.path.insert(0, ROOT)
     from src.environment.singlecombat_shoot_task import (  # noqa: E402
@@ -283,6 +301,9 @@ def main():
         checks.append(("%.2e" % a6_p, "A6 vs SPC p-value in text"))
     if a6_dev is not None:
         checks.append(("%.2f" % a6_dev, "A6 maneuver deviation in text"))
+    if os.path.exists(os.path.join(EV, a5_p_name)):
+        checks.append(("99.94%", "A5 CLR (400 seeds) in text"))
+        checks.append(("discordant 0", "A5 vs SPC zero-discordance claim in text"))
 
     # Both must-be-ABSENT traps are also *described* in the draft (Appendix D
     # and the section 9 notes), so a naive substring count reports a false

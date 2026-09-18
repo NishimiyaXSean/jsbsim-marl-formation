@@ -361,7 +361,7 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
-| A5 | **Fire head from random init, encoder frozen** | **DONE** 2026-09-18 (train + 60-seed eval; 400-seed eval in flight) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
+| A5 | **Fire head from random init, encoder frozen** | **DONE** 2026-09-18 (400-seed primary protocol) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
 | A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
 | — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
 
@@ -372,12 +372,21 @@ The full run answers it, and answers it decisively. Training on 300 rollout epis
 | Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) | identity gates |
 |---|---|---|---|---|
 | BC (inherited launch policy) | 40.0% | 15.0% | 7% | — |
-| **A5 (random-init fire head)** | **95.0%** | **86.7%** | **100%** | **PASS** (diff `0.00e+00`) |
+| A5 (random-init fire head) | 95.0% | 86.7% | 100% | `0.00e+00` (PASS) |
 | mask-permissive rule oracle | **95.0%** | **86.7%** | 100% | n/a (rule) |
 
-**A5 reproduces the mask-permissive rule oracle exactly, on the same seeds, while holding the maneuver bit-identical.** So SPC's benefit is *not* a warm-start effect: the inherited launch head contributes nothing that a randomly initialised head cannot learn within one epoch from the frozen features. The paper's correction is therefore robust to where the launch head starts — the load-bearing ingredients are the objective, the mask, and the frozen maneuver, in that order.
+**A5 reproduces the mask-permissive rule oracle exactly, on the same seeds, while holding the maneuver bit-identical.** So SPC's benefit is *not* a warm-start effect: the inherited launch head contributes nothing a randomly initialised head cannot learn within one epoch from the frozen features. The correction is robust to where the launch head starts — the load-bearing ingredients are the objective, the mask, and the frozen maneuver, in that order.
 
-⚠ These are **60 seeds** and carry the ±10 pp small-sample spread documented for A6b; the 400-seed primary-protocol evaluation of the A5 weights is in flight and its numbers supersede these once they land.
+⚠ That table is **60 seeds** and carries the ±10 pp spread documented for A6b. The 400-seed primary-protocol evaluation is authoritative and came in stronger still:
+
+| Arm (400 seeds, d=0) | Kill rate | CLR | vs SPC (paired) |
+|---|---|---|---|
+| **A5 — random-init fire head** | **90.75%** (363/400) | **99.94%** (1560/1561) | **+0.00 pp, discordant 0** (both kill 363, neither 37, only-SPC 0, only-A5 0) |
+| **SPC — launch head only** | **90.75%** (363/400) | **100.00%** (1560/1560) | — |
+
+**Discordant zero, not merely equal means.** The two arms kill the *same* 363 seeds: the per-seed kill vector is identical across all 400, so A5 and SPC are behaviourally indistinguishable on this benchmark despite starting from unrelated launch heads. The CLR denominators differ by a single step (1561 vs 1560) — the only trace of the different initialisation anywhere in the evaluation, and it costs nothing.
+
+**What the A5/A6 pair establishes together.** Unfreezing everything *hurts* significantly (+13.25 pp for SPC, p = 1.33e-11) and destroys the attribution; re-initialising the one head that is supposed to change makes *no measurable difference at all* (0 discordant seeds, exact zero maneuver deviation). The value of the intervention therefore lies entirely in **which parameters are allowed to move**, not in how many, and not in where the moving head began.
 
 **A6 protocol, in one line** (the fairness objection is obvious, so state it up front): identical objective, data, loss and initialisation as SPC — the only change is that every parameter is trainable, at a deliberately **more generous** budget than the fire-head-only run. The results follow.
 
