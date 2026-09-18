@@ -361,13 +361,23 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
-| A5 | **Fire head from random init, encoder frozen** | **implemented; smoke PASS, full run in flight** 2026-09-18 | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
+| A5 | **Fire head from random init, encoder frozen** | **DONE** 2026-09-18 (train + 60-seed eval; 400-seed eval in flight) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
 | A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
 | — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
 
 **A5 — does the correction need BC's launch head as a starting point?** Implemented 2026-09-18 via `--random-fire-head`: SPC's freeze pattern is kept exactly (encoder and every maneuver head frozen at θ_BC) and *only* the fire head is discarded and rebuilt from `nn.Linear.reset_parameters()` — the constructor's own initialisation, so it is a genuine random init (weight std 0.049, bias std 0.044) rather than a hand-rolled approximation of one. This isolates the question a reviewer will ask next: **is SPC's success carried by the objective and the mask, or by having started near BC's already-reasonable head?**
 
-The smoke read already answers it at small scale, and answers it decisively: the random fire head reaches **100.00% validation allowed-window accuracy in its first epoch** (train recall 99.57%, fire-CE 0.978) and triggers early stop, while the identity gates still report `hdg/spd logits diff = 0.00e+00` with identical action sequences and `VERDICT: PASS`. So the correction is **not** a warm-start effect — a head that knows nothing about launching learns the mask-permissive behaviour from the frozen features within one epoch, with the maneuver bit-identical throughout. ⚠ Smoke scope is 30 rollout episodes and 6 eval seeds, so its kill figures say nothing; the full run is `--rollout-episodes 300 --epochs 15 --eval-seeds 60`, and both that result and the 400-seed primary-protocol evaluation of the resulting weights are recorded here when they land.
+The full run answers it, and answers it decisively. Training on 300 rollout episodes (392091 transitions, 11976 allowed steps), the random fire head reaches **train recall 100.00% and validation recall 100.00% in its first epoch** (fire-CE 0.0413) and triggers the early stop — a head initialised with no knowledge of launching learns the mask-permissive behaviour essentially immediately, because the frozen encoder already carries the observation features the decision needs. Throughout, the identity gates report **`hdg/spd logits diff = 0.00e+00`** — not merely below tolerance but *exactly* zero — with identical action sequences and `VERDICT: PASS`.
+
+| Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) | identity gates |
+|---|---|---|---|---|
+| BC (inherited launch policy) | 40.0% | 15.0% | 7% | — |
+| **A5 (random-init fire head)** | **95.0%** | **86.7%** | **100%** | **PASS** (diff `0.00e+00`) |
+| mask-permissive rule oracle | **95.0%** | **86.7%** | 100% | n/a (rule) |
+
+**A5 reproduces the mask-permissive rule oracle exactly, on the same seeds, while holding the maneuver bit-identical.** So SPC's benefit is *not* a warm-start effect: the inherited launch head contributes nothing that a randomly initialised head cannot learn within one epoch from the frozen features. The paper's correction is therefore robust to where the launch head starts — the load-bearing ingredients are the objective, the mask, and the frozen maneuver, in that order.
+
+⚠ These are **60 seeds** and carry the ±10 pp small-sample spread documented for A6b; the 400-seed primary-protocol evaluation of the A5 weights is in flight and its numbers supersede these once they land.
 
 **A6 protocol, in one line** (the fairness objection is obvious, so state it up front): identical objective, data, loss and initialisation as SPC — the only change is that every parameter is trainable, at a deliberately **more generous** budget than the fire-head-only run. The results follow.
 
