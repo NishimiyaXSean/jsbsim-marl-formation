@@ -140,9 +140,8 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 |---|---|---|
 | **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` |
 | Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ nothing except the gate explains what the expert does when launch is legal | `data/expert/shoot_rule_expert.npz` |
-| Expert `fire_desired` on *disallowed* steps | 4.03% (10336 / 256357) — the gate would fire outside the window too; the mask (mostly cooldown) holds it back | same dataset |
 
-⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error. (Two independent corroborating measurements, taken on a different basis, and their geometry caveat are in Appendix E.2.)
+⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error. (Two independent corroborating measurements, taken on a different basis, the gate's behaviour on *disallowed* steps, and their geometry caveat are in Appendix E.2.)
 
 ### 3.3 C2 — Surgical Policy Correction (SPC)
 - **Input**: frozen BC θ_BC; BC rollouts collected over `R` episodes.
@@ -193,7 +192,7 @@ Two caveats travel with this table. **(a)** SPC's 100.00% is true *by constructi
 
 **Design.** Take BC's heading/speed decisions as a *frozen* maneuver trajectory per seed, and enumerate a family of fire policies on top of it. Because the maneuver is fixed by construction, the maneuver policy is controlled, and differences are attributable to the launch decision.
 
-**Cell `dist2_3k`, 60 seeds, geometry U(0,60) — regenerated 2026-09-17 (E1):**
+**Table 3 — frozen-trajectory enumeration (cell `dist2_3k`).** 60 seeds, geometry U(0,60), deterministic masked argmax, maneuver frozen per seed from the BC round-1 checkpoint (E1, regenerated 2026-09-17):
 
 | Fire policy | Kill rate (measured) | *docs, old geom U(30,60)* | Launches/ep | Reach-4-launch |
 |---|---|---|---|---|
@@ -218,7 +217,7 @@ Two caveats travel with this table. **(a)** SPC's 100.00% is true *by constructi
 
 > **Provenance.** The measured column comes from `results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json`, which is version-controlled and carries `run_meta` with the cell configuration, geometry, difficulty, seed range and the frozen checkpoint's SHA-256. The 2026-08-06 artifact no longer exists; the italic column is all that survived of it, which is why the regenerated file is tracked rather than regenerated on demand.
 
-**Same enumeration under an evading target — matched 2×2 (E6, seeds 20000–20059, n=60).**
+**Same enumeration under an evading target — matched 2×2 (E6, seeds 20000–20059, n=60, geometry U(0,60), deterministic masked argmax).**
 
 `target_evasive` changes difficulty *and* nothing else if we pair it with the default cell: its config is `{difficulty_level: 0.3}` — all other parameters default (2–5 km). Its matched d=0 counterpart is therefore cell `id_bias30_60` (empty config ≡ defaults). Both cells are therefore the same scenario distribution, differing **only** in the target's evasion.
 
@@ -328,16 +327,7 @@ Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a
 
 Read against Table 2's CLR column, the table says three things at once — the teacher is restrictive, imitation transmits it, and evasion punishes it in proportion to how restrictive the policy is (**expert −11.00 > BC −4.25 > SPC 0.00**).
 
-**Paired tests, both against the same 400 seeds.** The expert-vs-BC comparison and the SPC-vs-BC comparison share a seed set, so both are paired by construction rather than by assumption:
-
-| Paired comparison | d=0 | d=0.3 | Test |
-|---|---|---|---|
-| **BC − expert** | **+9.75 pp** (63/24/313, discordant 87, 72% favouring BC) | **+16.50 pp** (85/19/296, discordant 104, 82% favouring BC) | exact McNemar **3.48e-05** / **3.79e-11** |
-| **SPC − BC** | **+44.25 pp** (discordant **177 : 0**) | **+48.50 pp** (discordant **194 : 0**) | exact McNemar **1.04e-53** / **7.97e-59** |
-
-Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −42**. Both are loss-dominated, but the expert's net is −44 seeds against BC's −17 — the asymmetry, not just the mean, drives the ordering above.
-
-**Paired tests, both against the same 400 seeds.** The expert-vs-BC comparison and the SPC-vs-BC comparison share a seed set, so both are paired by construction rather than by assumption:
+**Paired tests, both against the same 400 seeds** (primary protocol: d=0 and d=0.3, geometry U(0,60), deterministic masked argmax, fresh env per episode). The expert-vs-BC comparison and the SPC-vs-BC comparison share a seed set, so both are paired by construction rather than by assumption:
 
 | Paired comparison | d=0 | d=0.3 | Test |
 |---|---|---|---|
@@ -347,7 +337,7 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −42**. Both are loss-dominated, but the expert's net is −44 seeds against BC's −17 — the asymmetry, not just the mean, drives the ordering above.
 
 **Five findings:**
-1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the conservative launch policy, not the aggressive one.
+1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the restrictive launch policy, not the permissive one.
 2. **The restrictive preference is structural, not scenario-specific — and measured on both policies.** BC's CLR barely moves (**7.26% → 6.95%**), and the expert's moves just as little (**6.07% → 5.40%**): the designed gate suppresses launches to the same degree whether or not the target manoeuvres. The teacher's restriction is therefore not caution that pays off when the target turns — it is a fixed property of the predicate, and the imitation inherits it as one too.
 3. **The identical aggregate is not an artefact — the difficulty change was verified to take effect.** 363 kills at both difficulties admits a trivial explanation, so it was tested directly: **368/400 episodes change length** (so `difficulty=0.3` is applied) and **382/400 seeds keep the same kill outcome, with 18 flips split 9 gained / 9 lost**. The match is a genuine near-cancellation rather than a no-op.
 4. **Evasion cost is ordered by how restrictive the launch policy is.** Expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**, all three legs on fresh-env evaluations over the same seeds. The per-seed flips indicate the mechanism: the expert loses 73 seeds and gains 29, while BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. The ordering rests on a single seed family, so it is reported as a well-supported ordering rather than a law.
@@ -406,7 +396,7 @@ Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), a
 
 **What the pair establishes.** Unfreezing everything *hurts* significantly and destroys the attribution; re-initialising the one head that is supposed to move makes no measurable difference at all. The observed benefit is therefore attributable to **the choice of editable parameters** — which decision dimension is allowed to change — rather than to the amount of trainable parameters or the initialisation of the launch head.
 
-**A6b — the screening set, kept because it carries a third arm.** The ablation script's own 60-seed evaluation runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed run above does not:
+**A6b — the screening set, kept because it carries a third arm.** The ablation script's own 60-seed evaluation (geometry U(0,60), deterministic masked argmax) runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed run above does not:
 
 | Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) |
 |---|---|---|---|
