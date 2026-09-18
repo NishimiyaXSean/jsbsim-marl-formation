@@ -361,31 +361,42 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 | A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
 | A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
 | A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
-| A5 | Fire head from random init, encoder frozen | not run | is the BC encoder necessary, or is the mask enough? |
-| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (60-seed screening) | shows that *freezing* is what buys clean attribution, not the objective |
+| A5 | Fire head from random init, encoder frozen | **implemented + running** 2026-09-18 (`--random-fire-head`) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
+| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
+| — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
 
-**A6 protocol (state it, because the fairness objection is obvious).** Identical objective, identical data, identical loss and identical initialisation as SPC; the **only** change is that every parameter is trainable instead of the launch head alone. Budget is set **more generously** than the fire-head-only run (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), specifically so the ablation cannot be dismissed as under-trained. Two measurements decide the question, and they are measured, not asserted: (i) **maneuver deviation** — the heading/speed logit max-diff vs the frozen BC, which the fire-head-only run holds below `1e-9` and which full-network fine-tuning is expected to move; and (ii) **kill rate and CLR under the paper's primary protocol** (d=0, U(0,60), 400 paired seeds), so the result is directly comparable to the 46.50% / 90.75% pair of §4.4. A smoke run already confirms the instrument reads what it should: fire-head-only gives logit diff `<1e-9` and identical action sequences; full-network at a 6-epoch budget gives diff **0.613**, non-identical sequences, and only 22% window utilisation — the maneuver moved *and* the fire head did not finish learning. The gates therefore report `FAIL` in A6 mode **by construction**; the failure is the measurement.
+**A6 protocol, in one line** (the fairness objection is obvious, so state it up front): identical objective, data, loss and initialisation as SPC — the only change is that every parameter is trainable, at a deliberately **more generous** budget than the fire-head-only run. The results follow.
 
-**A6 result — the maneuver moves, and the correction is still worse than doing nothing clever.** Both pre-registered measurements came back on 2026-09-18:
+**A6 result — the maneuver moves, and the correction is still worse than doing nothing clever.** Both pre-registered measurements came back on 2026-09-18.
 
-| Measurement | SPC (fire head only) | A6 (full network) | Reading |
+*(i) Maneuver deviation.* Identical objective, identical data, identical loss, identical initialisation; the only change is that every parameter is trainable rather than the launch head alone, at a **more generous** budget (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`) so the ablation cannot be dismissed as under-trained.
+
+| Identity measurement | SPC (fire head only) | A6 (full network) | Reading |
 |---|---|---|---|
 | heading/speed logit max-diff vs θ_BC | **< 1e-9** | **8.51** | the maneuver is provably untouched under SPC and provably *changed* under A6 |
 | heading/speed action sequences identical | **yes** | **no** | same conclusion, measured behaviourally rather than in logit space |
 | launch-mask agreement | yes | yes | both reach the target behaviour on the launch head |
 | validation allowed-window accuracy | ≥ 0.995 | 0.9967 | neither arm can be dismissed as under-trained |
 
-Kill rate on the **60-seed screening set** used by the ablation script (which evaluates the `id` and `dist2_3k` cells side by side, so all three arms see the same seeds):
+*(ii) Kill rate and CLR under the paper's primary protocol* — d=0, U(0,60), the same 400 seeds as Table 2, so this is directly comparable rather than a screening number:
+
+| Arm (400 seeds, d=0) | Kill rate | CLR | vs SPC (paired) |
+|---|---|---|---|
+| BC (inherited launch policy) | 46.50% | 7.26% | — |
+| **A6 — full-network fine-tune** | **77.50%** (310/400) | **99.67%** | **−13.25 pp**, discordant 67 (60 SPC / 7 A6), exact McNemar **p = 1.33e-11** |
+| **SPC — launch head only** | **90.75%** (363/400) | **100.00%** | — |
+
+**The reading is that freezing is doing real work, on both axes at once.** Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains **significantly worse than the surgical correction on identical seeds** (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), *and* it pays for that with an 8.51-logit change to the maneuver — i.e. it is less effective **and** no longer attributable. So the paper's central claim does not rest on a lucky locality choice: unfreezing is available, it is better resourced, and it loses.
+
+**A6b — the screening set, kept because it carries a third arm.** The ablation script's own 60-seed evaluation runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed run above does not:
 
 | Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) |
 |---|---|---|---|
 | BC (inherited launch policy) | 40.0% | 15.0% | 7.2% |
-| **A6 — full-network fine-tune** | **81.7%** | **66.7%** | **98.3%** |
+| A6 — full-network fine-tune | 81.7% | 66.7% | 98.3% |
 | mask-permissive rule oracle | **95.0%** | **86.7%** | 100% |
 
-The load-bearing reading is the middle row against the bottom row, because they share one seed set: **full-network fine-tuning recovers most of the gap but is still beaten by a rule that simply fires whenever the mask permits (81.7% vs 95.0%)**, and it pays for that with an 8.51-logit maneuver change. So A6 is dominated on both axes at once — less effective, and no longer attributable. Freezing is therefore doing real work: it is what makes "the launch decision alone explains the gap" a *statement* rather than a hope.
-
-> **⚠ Two honest limits on this table.** (i) It is a **60-seed screening** result, not the paper's primary protocol: the same 60 seeds give BC 40.0% where n=400 gives 46.50%, and the rule oracle 95.0% where n=400 gives 90.75% — so the screening numbers carry roughly ±10 pp of small-sample spread and must **not** be quoted alongside the 400-seed figures as if they were one comparison. (ii) The 400-seed primary-protocol run of the A6 weights (`eval_bc_1v1.py --episodes 400 --seed 20000`, killing/CLR against the 46.50% / 90.75% pair) is **queued, not run** — deliberately deferred so the d=0.3 expert-CLR measurement gets the machine first. Until it lands, the A6 arm is a screening result and is presented as one.
+A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95.0%). ⚠ These are **60 seeds**, so they carry roughly ±10 pp of small-sample spread (the same 60 seeds give BC 40.0% where n=400 gives 46.50%) and must **not** be quoted next to the 400-seed figures as one comparison. They are here for the third arm only.
 | A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
 
 ---

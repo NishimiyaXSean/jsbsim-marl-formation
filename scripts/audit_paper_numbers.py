@@ -168,6 +168,41 @@ def main():
                 # d=0 is the leg the abstract quotes.
                 expert_clr_pct = value
 
+    # --- ablation A6: full-network fine-tune --------------------------------
+    # Two artifacts: the 400-seed primary-protocol eval of the A6 weights, and
+    # the 60-seed screening record that also carries the mask-permissive arm.
+    a6_name = "ablation_A6_fullnet_d0_n400_s20000.json"
+    a6_paired_name = "ablation_A6_vs_spc_paired_d0_n400.json"
+    a6_train_name = "ablation_A6_fullnet_train.json"
+    a6_pct = None
+    if os.path.exists(os.path.join(EV, a6_name)):
+        d = load(a6_name)
+        a6_pct = 100.0 * float(d["kill_rate"])
+        add("A6 full-network kill (400 seeds)", "%.2f%% (%d/%d)"
+            % (a6_pct, d["termination_reasons"].get("target_killed", 0),
+               d["episodes"]), a6_name)
+        add("A6 full-network CLR", "%.2f%% (%d/%d)"
+            % (100.0 * d["clr"], d["clr_fire_commands"], d["clr_allowed_steps"]),
+            a6_name)
+    else:
+        add("A6 full-network kill (400 seeds)", "ABSENT (not run yet)", a6_name)
+    a6_p = None
+    if os.path.exists(os.path.join(EV, a6_paired_name)):
+        d = load(a6_paired_name)
+        a6_p = float(d["mcnemar"]["exact_two_sided_p"])
+        add("A6 vs SPC paired delta", "%+.2f pp"
+            % float(d["kill_rate"]["paired_diff_pp"]), a6_paired_name)
+        add("A6 vs SPC discordant", str(d["contingency"]["discordant_total"]),
+            a6_paired_name)
+        add("A6 vs SPC exact p", "%.3e" % a6_p, a6_paired_name)
+    a6_dev = None
+    if os.path.exists(os.path.join(EV, a6_train_name)):
+        d = load(a6_train_name)
+        a6_dev = d["gates"]["hdg_spd_logits_max_diff"]
+        add("A6 maneuver logit deviation", "%.2f (SPC: <1e-9)" % a6_dev,
+            a6_train_name)
+        add("A6 training mode", str(d.get("training_mode")), a6_train_name)
+
     # --- environment-threshold sanity (should match Appendix B) -------------
     sys.path.insert(0, ROOT)
     from src.environment.singlecombat_shoot_task import (  # noqa: E402
@@ -221,6 +256,13 @@ def main():
     if "d=0.3" in clr_values:
         checks.append(("%.2f%%" % clr_values["d=0.3"],
                        "E3-CLR d=0.3 expert CLR in text"))
+    if a6_pct is not None:
+        checks.append(("%.2f%%" % a6_pct, "A6 kill rate in text"))
+        checks.append(("99.67%", "A6 CLR in text"))
+    if a6_p is not None:
+        checks.append(("%.2e" % a6_p, "A6 vs SPC p-value in text"))
+    if a6_dev is not None:
+        checks.append(("%.2f" % a6_dev, "A6 maneuver deviation in text"))
 
     # Both must-be-ABSENT traps are also *described* in the draft (Appendix D
     # and the section 9 notes), so a naive substring count reports a false
