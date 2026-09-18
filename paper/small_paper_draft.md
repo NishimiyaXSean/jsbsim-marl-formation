@@ -300,7 +300,9 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 >
 > Caveat: `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above is argued from construction rather than a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
 
-### 4.5 Robustness A — widened initial-geometry (heading bias)
+### 4.5 Robustness check 1 — widened initial geometry (heading bias) — *a benchmark check, not a contribution*
+
+> Both robustness subsections (4.5, 4.6) are secondary: they test that the correction survives benchmark changes, and neither carries contribution weight. 2026-09-18 Sean: "NOT a second contribution" — 这个判断现在落到版面结构上。
 
 Compressed to one subsection per scope decision: **this is a benchmark-change + retraining robustness check, NOT a second contribution.**
 
@@ -315,7 +317,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 - **Caveats to state in the paper:** single seed family (seeds 42–441); d=0 only; Bonferroni α=0.0125 would put p=0.0146 just outside; JSBSim physics is not cross-machine reproducible.
 - **Framing rule:** never present 87→95 as the effect of the launch-head correction. The launch-head correction is §4.4.
 
-### 4.6 Robustness B — target evasion (`difficulty_level = 0.3`) — **DONE (E5)**
+### 4.6 Robustness check 2 — target evasion (`difficulty_level = 0.3`) — **DONE (E5)**
 
 Target adds S-turn `±30°·d·sin(0.3t)` plus a missile-threat break-turn and a dive to `−800·d` m (floor 2000 m). Identical protocol to §4.4 — d=0 vs d=0.3 differ **only** in `--difficulty`, same seeds 20000–20399, same code path, identity recorded in each file's `run_meta`.
 
