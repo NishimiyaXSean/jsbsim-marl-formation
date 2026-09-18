@@ -16,6 +16,9 @@
 #   texlive-fonts-extra                   Libertine -- aamas.cls REQUIRES it and
 #                                         forbids substituting another typeface
 #   texlive-publishers                     acmart family, which aamas.cls derives from
+#   latexmk                                convenient multi-pass driver. NOT part of
+#                                         any texlive-* package -- omitting it is why
+#                                         the 2026-09-19 run stopped at step 3/4.
 #   poppler-utils                         pdftotext, for the post-typesetting
 #                                         number audit on the extracted PDF text
 #
@@ -35,6 +38,7 @@ PACKAGES=(
   texlive-fonts-recommended
   texlive-fonts-extra
   texlive-publishers
+  latexmk
   poppler-utils
 )
 
@@ -47,14 +51,25 @@ sudo apt-get install -y "${PACKAGES[@]}"
 
 echo
 echo "=== 3/4  verifying binaries ==="
-for bin in pdflatex latexmk pdftotext; do
+# pdflatex and pdftotext are hard requirements. latexmk is a convenience driver
+# only: the build can fall back to repeated pdflatex runs, so its absence must
+# not abort the installation (it did on 2026-09-19, which is what this branch
+# exists to prevent).
+for bin in pdflatex pdftotext; do
   if command -v "$bin" >/dev/null 2>&1; then
     printf '  %-10s %s\n' "$bin" "$(command -v "$bin")"
   else
     printf '  %-10s MISSING -- the paper cannot be built without it\n' "$bin"
+    printf '  fix: sudo apt-get install -y texlive-latex-base poppler-utils\n'
     exit 1
   fi
 done
+if command -v latexmk >/dev/null 2>&1; then
+  printf '  %-10s %s\n' latexmk "$(command -v latexmk)"
+else
+  printf '  %-10s missing (optional) -- run: sudo apt-get install -y latexmk\n' latexmk
+  printf '  the build will use repeated pdflatex runs instead.\n'
+fi
 pdflatex --version | head -n 1
 
 echo

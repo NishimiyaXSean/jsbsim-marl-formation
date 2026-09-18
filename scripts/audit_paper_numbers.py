@@ -6,11 +6,21 @@ JSON artifacts and each file's own run_meta -- never a filename-derived
 assumption about which model produced what.
 
 Run:  python scripts/audit_paper_numbers.py
+      python scripts/audit_paper_numbers.py path/to/extracted_pdf_text.txt
+
+Passing a path is how the post-typesetting check works (2026-09-19): the build
+script runs pdftotext over the compiled PDF and audits THAT text, because a
+number can survive the source and still be mangled by typesetting -- 46.50%
+becoming 46.50 \%, an exponent slipping into math font, a table cell wrapping.
 
 The E3-CLR artifact is optional on purpose: while the fresh-env expert-CLR run
 is still going, the audit stays useful, and the moment the artifact appears two
 extra obligations switch on -- the measured value must be quoted in the draft,
 and the {{EXPERT_CLR}} placeholder must be gone.
+
+Note on scope: the "in text" checks confirm a value is PRESENT somewhere in the
+audited text. They cannot detect a value that is present but attached to the
+wrong claim, so they are a floor, not a substitute for reading the paper.
 """
 from __future__ import annotations
 
@@ -260,7 +270,12 @@ def main():
         print("%-30s %-34s %s" % (tag, val, art))
 
     # cross-check: does the draft still contain the numbers we just computed?
-    text = io.open(PAPER, encoding="utf-8").read()
+    # An explicit path lets the build audit the PDF-extracted text instead of
+    # the Markdown source; both go through exactly the same checks.
+    audited = sys.argv[1] if len(sys.argv) > 1 else PAPER
+    text = io.open(audited, encoding="utf-8").read()
+    print()
+    print("auditing: %s" % audited)
     checks = [
         ("46.50%", "E7 BC kill in text"),
         ("90.75%", "E7 SPC kill in text"),
