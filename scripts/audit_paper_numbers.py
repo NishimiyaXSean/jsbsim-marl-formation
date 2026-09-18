@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import os
 import sys
 
@@ -318,7 +319,16 @@ def main():
         checks.append(("%.2f" % a6_dev, "A6 maneuver deviation in text"))
     if os.path.exists(os.path.join(EV, a5_p_name)):
         checks.append(("99.94%", "A5 CLR (400 seeds) in text"))
-        checks.append(("discordant 0", "A5 vs SPC zero-discordance claim in text"))
+        # Deliberately NOT a phrase check here. The A5 claim reads "zero
+        # discordant seeds", and a phrase that long WILL straddle a column
+        # break in a two-column PDF: pdftotext then interleaves the other
+        # column between the words ("reports zero discordant" / <other column> /
+        # "seeds"), in both -layout and reading-order mode. Phrase integrity is
+        # therefore not reliably auditable from extracted PDF text, and a
+        # checker that pretends otherwise fails on correct papers. The evidence
+        # for this claim is numeric and is verified from the artifact above
+        # ("A5 vs SPC discordant", which must read 0); the text check would only
+        # re-assert the wording.
 
     # Both must-be-ABSENT traps are also *described* in the draft (Appendix D
     # and the section 9 notes), so a naive substring count reports a false
@@ -327,6 +337,13 @@ def main():
     TRAP_CONTEXT = ("bogus", "guard", "must be ABSENT", "must-be-absent",
                     "TRAP", "feeding tie counts", "placeholder")
     lines = text.splitlines()
+    # Second view of the same text with all whitespace runs collapsed. In a
+    # two-column PDF a phrase wraps at the column edge, so pdftotext yields
+    # "zero discordant\n  seeds" and a literal needle search reports MISSING for
+    # a phrase that is present and correct (hit on the first PDF build,
+    # 2026-09-19). Value checks use the flat view; the line-based context logic
+    # below still needs real lines.
+    flat = re.sub(r"\s+", " ", text)
 
     def count_in_claim_context(needle):
         hits = 0
@@ -340,7 +357,7 @@ def main():
     print("=" * 96)
     for needle, what in checks:
         hits = (count_in_claim_context(needle) if what.startswith("TRAP")
-                else text.count(needle))
+                else flat.count(needle))
         print("%-46s %s  (count=%d)" % (what, "FOUND" if hits else "MISSING", hits))
     print()
     print("Lines in draft:", len(text.splitlines()))

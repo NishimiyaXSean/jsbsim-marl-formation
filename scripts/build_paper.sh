@@ -88,8 +88,22 @@ fi
 
 echo
 echo "=== auditing the extracted PDF text (not the source) ==="
-pdftotext -layout "$PDF" "$BASE.txt"
-python "$REPO/scripts/audit_paper_numbers.py" "$BUILD_DIR/$BASE.txt"
+# Two extractions, for two different jobs.
+#   plain    : reading order, so a phrase or number that wraps at a column edge
+#              stays contiguous. This is what the audit needs.
+#   -layout  : keeps the visual grid, which -layout does by putting BOTH
+#              columns of a two-column page on the same text line. That is
+#              useful for eyeballing a table by hand and useless for auditing:
+#              "zero discordant" and "seeds" end up separated by the other
+#              column's text (found 2026-09-19).
+pdftotext "$PDF" "$BASE.txt"
+pdftotext -layout "$PDF" "$BASE.layout.txt"
+# The project interpreter, by absolute path: `python` is not on PATH in this
+# WSL shell, and a bare `python` silently skipped this whole check on
+# 2026-09-19 -- the one step whose entire purpose is to not be skipped.
+PY="/home/sean/miniconda3/envs/marl_env/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+"$PY" "$REPO/scripts/audit_paper_numbers.py" "$BUILD_DIR/$BASE.txt"
 
 echo
 echo "done. Figure/table files and logs are in $BUILD_DIR"
