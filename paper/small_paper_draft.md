@@ -70,6 +70,8 @@ Observation: CLR is anomalously low
    -> Can the policy be repaired? -> SPC                       => the correction can be internalised
 ```
 
+[[figure: framework_fig1.pdf | wide:0.82 | Framework. A hand-designed rule expert is imitated by behaviour cloning; the inherited launch behaviour is diagnosed with CLR; and the launch head is corrected by SPC with the maneuver held provably frozen. Annotated rates are the primary-protocol values (Table 2); the frozen-trajectory figure is the enumeration of Table 3.]]
+
 ---
 
 ## 2. Related Work (1 page)
@@ -110,7 +112,7 @@ Observation: CLR is anomalously low
 - **Step duration — state it explicitly, it is a units trap.** One environment step advances the simulation by **0.2 s** (`BaseEnv._acmi_time += 0.2`), i.e. the agent runs at **5 Hz**; 1500 steps ≈ 300 s. This is *not* the JSBSim internal frame rate. Every step→second conversion in this paper uses 0.2 s/step (`§4.3`: 67 steps = 13.4 s, 743.5 steps = 149 s). Any figure or table that appears to use 1/60 s per step is wrong by 12×.
 - **Evaluation protocol**: **deterministic masked argmax**, JSBSim physics, `difficulty_level` as noted per experiment.
 - **Three policies in play**:
-  - **Rule expert** — hand-designed, stateless: every label is a pure function of the current observation (`scripts/generate_shoot_rule_expert.py`). **Provenance, stated plainly: there is no external publication to cite.** It is this project's own rule controller, built from standard BFM heuristics (nose alignment, DLZ depth, closure sign) plus the launch-quality gate of §3.2, and trained against nothing. We do not claim it is a strong or a state-of-the-art expert; we claim only that it is *a* competent teacher (`wez_reach_rate = 1.00`, `hit_rate ≈ 0.997`, `lost_target_rate = 0`) whose behaviour carries a measurable conservative bias. Every headline claim in this paper is about *what imitation inherits from a given teacher*, holding the teacher fixed — so the paper does not depend on where the teacher came from, and inventing a citation for it would be worse than saying this.
+  - **Rule expert** — hand-designed, stateless: every label is a pure function of the current observation (`scripts/generate_shoot_rule_expert.py`), built from standard BFM heuristics (nose alignment, DLZ depth, closure sign) plus the launch-quality gate of §3.2. **It has no external publication to cite — it is this project's own controller** — and we claim only that it is *a* competent teacher (`wez_reach_rate = 1.00`, `hit_rate ≈ 0.997`, `lost_target_rate = 0`), not a strong or state-of-the-art one. Every headline claim concerns *what imitation inherits from a given teacher*, holding the teacher fixed, so the paper does not depend on where the teacher came from.
   - **BC round1** — MLP encoder (256-256-128) + 4 heads, trained on 200 expert episodes, masked cross-entropy.
   - **SPC** — BC with only the launch head re-trained (§3.3).
 
@@ -134,16 +136,7 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 | DLZ position | legality only | depth ∈ **[0.25, 0.75]** | refuses deep-in-DLZ (closer) and far-edge shots |
 | Output | — | `fire = allowed AND desired` | cooldown/inventory handled by mask |
 
-**Measured — the gate fully determines the expert's behaviour on legal steps.**
-
-| Quantity | Value | Basis |
-|---|---|---|
-| **Expert CLR (fresh env, 400 ep, seeds 20000–20399, U(0,60))** | **6.07%** (1131 / 18639) | `E3_paired_bc_vs_expert_d0_n400_s20000_v3_clr.json` |
-| Expert `fire_desired` on allowed steps | 560 / 9395 — **identical to `action[:,3]`** ⇒ nothing except the gate explains what the expert does when launch is legal | `data/expert/shoot_rule_expert.npz` |
-
-⇒ Under the evaluated protocol, **the observed restriction is explained by the designed gate** — not by the environment and not by BC's fitting error.
-
-Two further measurements corroborate the magnitude on a different basis — expert CLR 5.96% (560/9395) read directly off the demonstration dataset, against BC 7.37% (614/8327) from a 200-rollout diagnostic. They are quoted as corroboration only, and one caveat travels with them: the dataset predates the widening of the heading-bias range, so its 5.96% is an old-geometry measurement while the 7.37% beside it is not. They are never averaged, never presented as a matched pair, and the authoritative figure remains the re-measured 6.07%. Appendix E.2 gives the timestamps and the gate's behaviour on disallowed steps.
+**Measured — the gate fully determines the expert's behaviour on legal steps.** On steps where launch is legal, the expert's `fire_desired` is *identical* to its executed `action[:,3]` (560 / 9395 on the demonstration dataset), so nothing except the gate explains what it does when launch is permitted. Under the evaluated protocol, **the observed restriction is therefore explained by the designed gate** — not by the environment and not by BC's fitting error. The measured CLR itself is Table 2; two further measurements on a different basis, and the geometry caveat that travels with them, are in Appendix E.2.
 
 ### 3.3 C2 — Surgical Policy Correction (SPC)
 - **Input**: frozen BC θ_BC; BC rollouts collected over `R` episodes.
@@ -184,7 +177,7 @@ Two further measurements corroborate the magnitude on a different basis — expe
 | BC round1 | 7.26% (1223/16839) | 6.95% (1194/17169) | 16839 / 17169 |
 | SPC | 100.00% (1560/1560) | 99.11% (1563/1577) | 1560 / 1577 |
 
-Two caveats travel with this table. **(a)** SPC's 100.00% is true *by construction* — its training target is "fire on every legal step" and gate G3 tests exactly that; it is not a finding. **(b)** The CLR denominator is policy-dependent: firing starts a 30-step cooldown that *removes* legality, so a policy that fires collapses its own opportunity set (SPC ≈3.9 legal steps/episode, BC ≈42). Cross-policy CLR is therefore an ordering of tendencies, not a like-for-like exploitation fraction — which is why the causal claim rests on §4.3's frozen-trajectory enumeration, where the opportunity set is held constant by construction.
+Two caveats travel with this table. **(a)** SPC's 100.00% is true *by construction* — its training target is "fire on every legal step" and gate G3 tests exactly that; it is not a finding. **(b)** The CLR denominator is policy-dependent: firing starts a 30-step cooldown that *removes* legality, so a policy that fires collapses its own opportunity set (SPC ≈3.9 legal steps/episode, BC ≈42). Cross-policy CLR is therefore an ordering of tendencies, not a like-for-like exploitation fraction — which is why the causal claim rests on §4.3, where the opportunity set is held constant by construction.
 
 One cross-check on the instrument itself: adding CLR changed nothing measurable. The d=0 run that first reported CLR reproduces the kill side of the E3 pair bit-for-bit (expert 36.75%, BC 46.50%, paired +9.75 pp, W/L/T 63/24/313) and reproduces BC's CLR to the digit, and the d=0.3 run does the same (25.75%, 42.25%, +16.50 pp, 85/19/296). Expert and BC also agree closely on every basis measured — 6.07% vs 7.26%, 5.40% vs 6.95%, and 5.96% vs 7.37% on the older geometry-mixed diagnostics — so the restriction is a stable property rather than sampling noise, and BC is in no meaningful sense more restrictive than its teacher. Appendix E.3 states the scope limit on what CLR alone can establish.
 
@@ -194,19 +187,19 @@ One cross-check on the instrument itself: adding CLR changed nothing measurable.
 
 **Table 3 — frozen-trajectory enumeration (cell `dist2_3k`).** 60 seeds, geometry U(0,60), deterministic masked argmax, maneuver frozen per seed from the BC round-1 checkpoint (E1, regenerated 2026-09-17):
 
-| Fire policy | Kill rate (measured) | *docs, old geom U(30,60)* | Launches/ep | Reach-4-launch |
-|---|---|---|---|---|
-| **`asap` — fire whenever the launch mask permits** | **86.7%** | *73.3%* | 3.85 | 86.7% |
-| `delay_30` (first legal + 30) | 38.3% | *28.3%* | 3.25 | 38.3% |
-| `delay_60` | 10.0% | *10.0%* | 2.78 | 10.0% |
-| `dlz_mid` (depth 0.4–0.6) | 0.0% | *0.0%* | 1.27 | 0.0% |
-| `dlz_deep` (depth ≥ 0.6) | 0.0% | *3.3%* | 1.12 | 0.0% |
-| `interval_100` | 0.0% | *0.0%* | 1.95 | 0.0% |
-| **frozen BC (inherited)** | **15.0%** | *6.7%* | 2.37 | 15.0% |
+| Fire policy | Kill rate | Launches/ep | Reach-4-launch |
+|---|---|---|---|
+| **`asap` — fire whenever the launch mask permits** | **86.7%** | 3.85 | 86.7% |
+| `delay_30` (first legal + 30) | 38.3% | 3.25 | 38.3% |
+| `delay_60` | 10.0% | 2.78 | 10.0% |
+| `dlz_mid` (depth 0.4–0.6) | 0.0% | 1.27 | 0.0% |
+| `dlz_deep` (depth ≥ 0.6) | 0.0% | 1.12 | 0.0% |
+| `interval_100` | 0.0% | 1.95 | 0.0% |
+| **frozen BC (inherited)** | **15.0%** | 2.37 | 15.0% |
 
-> The italic column is the earlier 2026-08-06 audit, executed on the pre-widening geometry `U(30,60)`; the measured column is the current default `U(0,60)`. That two of the seven arms reproduce exactly (`delay_60` 10.0%, `dlz_mid` 0.0%) while `asap` moves from 73.3% to 86.7% indicates that the *script's* behaviour is unchanged and that the benchmark itself became easier by ≈ +4.5 pp (§4.5). Only the measured column is cited, always with its geometry attached.
+A 2026-08-06 audit of the same family on the pre-widening geometry, and what its agreement tells us about the script versus the benchmark, are in Appendix E.10.
 
-**Reachability audit (asap arm, measured):** median first-legal step **67** (13.4 s); **cumulative legal-window length ≈ 4 steps per episode** (median 4.0) — i.e. roughly one legal step per DLZ transit; median step-1 → step-4 launch **743.5** (149 s); 52/60 killed, 8 timeouts, **8 of which ended with the window still open** (`blockers = {episode_end_in_window: 8}`). The "≈4 legal steps per episode" figure is the load-bearing structural fact and it reproduces the 2026-08-06 audit.
+**Reachability audit (asap arm, measured):** median first-legal step **67** (13.4 s); **cumulative legal-window length ≈ 4 steps per episode** (median 4.0), i.e. roughly one legal step per DLZ transit; 52/60 killed. The "≈4 legal steps per episode" figure is the load-bearing structural fact: it is what makes window *usage* rather than window *availability* the binding constraint. Full numbers, including the 8 timeouts whose window was still open at episode end, are in Appendix E.10.
 
 **Reading:**
 - The scenario is **not infeasible** — the environment permits a 4-launch salvo in 86.7% of episodes, and `asap` realizes 86.7% kills.
@@ -237,14 +230,9 @@ Three things follow:
 
 ### 4.3b Figure 2 — the mechanism, made visible
 
-**Figure 2** (`results/shoot_eval/mechanism_seed20007_d00.png`) shows one matched episode (seed 20007, d=0) played by BC and by SPC, with everything else held identical.
+[[figure: mechanism_seed20007_d00.png | column:0.82 | Mechanism, on one illustrative episode (seed 20007, d=0). Panel A: range and angle-off, with the environment-legal launch windows shaded and both policies' launches marked. Panel B: the decisions themselves — launch mask, BC fire, SPC fire. The state trace is bit-identical between the two policies here (max deviation 0.0e+00 m), so the whole difference sits in Panel B. Single episode, chosen for legibility; the aggregate evidence is Tables 3 and 4.]]
 
-- **Panel A** plots the state the decision is taken on — range to target and angle-off (ATA) — with the environment-legal launch windows shaded, every legal step BC declines marked, and both policies' launches marked.
-- **Panel B** plots the decisions themselves as three rows: launch mask, BC fire command, SPC fire command.
-
-**What the figure is for.** It is an *attribution* device, not a trajectory showcase. BC uses **3 of 41** environment-legal steps on this seed (CLR 7.32%, close to the 7.26% aggregate) and times out after 1500 steps; SPC uses **4 of 4** and kills the target at step 842. The state trace is **bit-identical** over all 842 common steps (maximum position deviation **0.0e+00 m**) — the maneuver heads are frozen — so the figure contains a *single* state trajectory and the entire difference is confined to Panel B. That is the claim: same geometry, same maneuver, different launch decision.
-
-Two caveats the caption must carry: (i) this is a **single illustrative episode**, chosen to make the mechanism legible — the aggregate evidence is Table 3 (`§4.3`) and Table 4 (`§4.5b`); (ii) SPC's legal-step count (4) is smaller than BC's (41) because firing triggers the launch cooldown, which removes legality — the policy-dependent denominator documented in §4.2(b), not a defect of the figure.
+The figure is an *attribution* device, not a trajectory showcase: same engagement geometry, same maneuver, different launch decision. On this seed BC uses **3 of 41** legal steps (CLR 7.32%, against the 7.26% aggregate) and times out, while SPC uses **4 of 4** and kills the target at step 842.
 
 ### 4.4 C3(b) — SPC intervention result (primary endpoint, E7)
 
@@ -289,7 +277,7 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 
 > *(internal, delete before submission)* Both robustness subsections (4.5, 4.6) are secondary and carry no contribution weight — 2026-09-18 Sean: "NOT a second contribution", 这个判断现在落到版面结构上。
 
-Compressed to one subsection per scope decision: **this is a benchmark-change + retraining robustness check, NOT a second contribution.**
+**A benchmark-change check, not a contribution.** Widening the heading-bias range makes the benchmark easier by ≈ **+4.5 pp** at identical weights (87% → 91%, n=100), and retraining SPC under the new geometry adds a further paired **+3.25 pp** (19 vs 6 discordant pairs, robust across 4/4 bias bins) that is *not* significant unpaired.
 
 | Comparison (d=0, new geometry U(0,60)) | n | Kill rate | Paired diff | McNemar |
 |---|---|---|---|---|
@@ -297,10 +285,7 @@ Compressed to one subsection per scope decision: **this is a benchmark-change + 
 | SPC retrained under U(0,60) | 400 | 375/400 = **93.75%** (Wilson [0.909, 0.957]) | **+3.25 pp** | **p = 0.0146** |
 | same pair, unpaired Fisher | 400 | — | — | p = 0.1146 (n.s.) |
 
-- **Same weights, geometry-only change** (n=100, s42): 87% → 91% ⇒ widening the bias range makes the benchmark easier by ≈ **+4.5 pp**. This is a *benchmark* effect and must be reported as such.
-- The +3.25 pp retraining gain is real and paired-significant (19 vs 6 discordant pairs, 76% favouring the retrained arm), robust across 4/4 bias bins (+1/+5/+5/+2 pp).
-- **Caveats to state in the paper:** single seed family (seeds 42–441); d=0 only; Bonferroni α=0.0125 would put p=0.0146 just outside; JSBSim physics is not cross-machine reproducible.
-- **Framing rule:** never present 87→95 as the effect of the launch-head correction. The launch-head correction is §4.4.
+Caveats: a single seed family (42–441), d=0 only, and Bonferroni α=0.0125 would place p = 0.0146 just outside significance. The 87%→95% shift sometimes quoted from earlier drafts is *not* the launch-head effect; the launch-head correction is §4.4.
 
 ### 4.6 Robustness check 2 — target evasion (`difficulty_level = 0.3`)
 
@@ -331,6 +316,8 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 3. **Interpretation.** Evasion cost is ordered by how restrictive the launch policy is: expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**, all three legs on fresh-env evaluations over the same seeds. Evasion therefore *amplifies the cost of the restrictive launch preference* rather than penalising the correction. The per-seed flips say the same thing: the expert loses 73 seeds and gains 29, BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. This rests on a single seed family, so it is reported as a well-supported ordering rather than a law.
 
 Two secondary items are in Appendix E: the direct check that `difficulty=0.3` actually takes effect (368/400 episodes change length; 382/400 keep the same kill outcome, 18 flips split 9/9, so the identical 363 at both difficulties is a genuine near-cancellation rather than a no-op), and the observation that BC's paired margin over the expert itself widens under evasion (+9.75 → +16.50 pp).
+
+[[figure: robustness_fig3.pdf | column:0.90 | Difficulty robustness. Kill rate by policy at d=0 and d=0.3 (primary protocol, Wilson 95\% intervals). The paired SPC--BC gap widens from +44.25 to +48.50 pp; discordant counts are 177 and 194, all favouring the correction.]]
 
 > **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json`, `E5_paired_bc_vs_spc_d03_n400.json`, and the two CLR runs `E3_paired_bc_vs_expert_{d0_n400_s20000_v3,d03_n400_s20000_v2}_clr.json`. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 4 reports.
 
@@ -758,3 +745,17 @@ A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95
 Identities verified from `run_meta`: the oracle arm loaded `sha256 aad05b45…` (BC round1 — the *frozen maneuver* source, correct), SPC loaded `36d79bd9…`.
 
 **One limitation.** `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above follows from construction rather than from a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
+
+### E.10 The 2026-08-06 frozen-trajectory audit on the old geometry (moved from §4.3)
+
+| Fire policy | Kill rate (measured, U(0,60)) | *2026-08-06 audit, U(30,60)* |
+|---|---|---|
+| `asap` | **86.7%** | *73.3%* |
+| `delay_30` | 38.3% | *28.3%* |
+| `delay_60` | 10.0% | *10.0%* |
+| `dlz_mid` | 0.0% | *0.0%* |
+| `dlz_deep` | 0.0% | *3.3%* |
+| `interval_100` | 0.0% | *0.0%* |
+| frozen BC (inherited) | **15.0%** | *6.7%* |
+
+Two of the seven arms reproduce exactly (`delay_60`, `dlz_mid`) while `asap` moves from 73.3% to 86.7%. That pattern indicates the *script's* behaviour is unchanged and the benchmark itself became easier by ≈ +4.5 pp once the heading-bias range was widened (§4.5). Only the measured column is cited in the paper, always with its geometry attached; the paper's Table 3 carries no geometry-mixed column.

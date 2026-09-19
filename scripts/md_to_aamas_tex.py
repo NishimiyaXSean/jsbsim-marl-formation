@@ -104,6 +104,14 @@ UNICODE = [
 
 CITE_RE = re.compile(r"`([^`]+)`")
 
+# Figure directive, written in the Markdown where the figure belongs:
+#     [[figure: file.png | wide | caption text]]
+# "wide" spans both columns, anything else stays in one. The file is resolved
+# from results/shoot_eval/, which build_paper.sh stages next to the document.
+# A directive rather than an auto-detected file name because placement in a
+# float-heavy two-column page is an authorial decision, not a derivation.
+FIGURE_RE = re.compile(r"^\[\[figure:\s*(?P<file>[^|]+?)\s*\|\s*(?P<layout>[^|]+?)\s*\|\s*(?P<caption>.+?)\s*\]\]$")
+
 
 def escape(text: str) -> str:
     """Escape LaTeX specials for ordinary prose, leaving $...$ math alone."""
@@ -283,8 +291,14 @@ def table_to_latex(rows: list[list[str]], caption: str | None, label: str) -> st
         if i == 0:
             body.append(r"\midrule")
     cap = r"\caption{%s}" % inline(caption) if caption else ""
+    # Float placement: a double-column float (table*/figure*) accepts only t and
+    # p, while a single-column float accepts the full set. Offering LaTeX the
+    # widest legal set matters for the page budget: with [t] alone the first
+    # pages came out at 76-105 lines against 124-130 for a full page, i.e. the
+    # floats were leaving gaps that no amount of prose trimming would recover.
+    place = "[tp]" if env.endswith("*") else "[tbp]"
     return "\n".join([
-        r"\begin{%s}[t]" % env, r"\centering",
+        r"\begin{%s}%s" % (env, place), r"\centering",
         r"\small",
         # Tabular columns separated by 6pt on each side cost 12pt per column;
         # 4pt is what Sean suggested and buys back ~24pt on a 4-column table
@@ -464,6 +478,34 @@ def convert(md: str) -> tuple[str, str, list[str], list[str]]:
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 i += 1
+            i += 1
+            continue
+
+        # --- figures ---------------------------------------------------------
+        fm = FIGURE_RE.match(stripped)
+        if fm:
+            close_list()
+            counter[0] += 1
+            wide = fm.group("layout").strip().lower().startswith("wide")
+            env = "figure*" if wide else "figure"
+            place = "[tp]" if wide else "[tbp]"
+            # Optional width fraction: "wide" or "column", optionally ":0.85".
+            # Sizing is a page-budget lever as much as a legibility one, and the
+            # figure's own aspect ratio decides which way it cuts -- a 2.85:1
+            # banner costs 177pt of full-width space at 1.0 and 142pt at 0.8.
+            layout = fm.group("layout").strip().lower()
+            frac = "1.0"
+            if ":" in layout:
+                layout, frac = layout.split(":", 1)
+                frac = frac.strip() or "1.0"
+            sink.append(r"\begin{%s}%s" % (env, place))
+            sink.append(r"\centering")
+            sink.append(r"\includegraphics[width=%s\linewidth]{%s}"
+                        % (frac, fm.group("file").strip()))
+            sink.append(r"\caption{%s}" % inline(fm.group("caption")))
+            sink.append(r"\label{fig:auto%d}" % counter[0])
+            sink.append(r"\end{%s}" % env)
+            sink.append("")
             i += 1
             continue
 

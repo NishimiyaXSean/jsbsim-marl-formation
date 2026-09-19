@@ -57,12 +57,12 @@ follow the argument.
 
 \textbf{The mask.} The flat action mask is \texttt{[speed(3), heading(5), altitude(1), fire(2)]}. The launch branch is flat index \textbf{10}. \texttt{mask[10] = 1} requires \emph{all} of:
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto12}
+\label{tab:auto14}
 \begin{tabular}{lp{0.46\textwidth}p{0.47\textwidth}}
 \toprule
 \# & condition & constant (\texttt{src/\allowbreak{}environment/\allowbreak{}singlecombat\_\allowbreak{}shoot\_\allowbreak{}task.py}) \\
@@ -79,12 +79,12 @@ C5 & closure < 0 (closing on the target) & --- \\
 
 \textbf{The expert's gate.} The rule expert never fires merely because \texttt{mask[10] = 1}. It additionally requires its own \texttt{fire\_desired}, a pure function of the observation:
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto13}
+\label{tab:auto15}
 \begin{tabular}{lrp{0.46\textwidth}p{0.21\textwidth}}
 \toprule
 axis & environment permits & expert additionally requires & relation \\
@@ -111,12 +111,12 @@ So on every axis the expert's admissible set is a strict subset of the environme
 
 All seven arms are evaluated on the \emph{same frozen maneuver trajectory} per seed (the BC heading/speed actions), so only the launch decision varies (\texttt{scripts/\allowbreak{}fire\_\allowbreak{}oracle\_\allowbreak{}audit.py}):
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto14}
+\label{tab:auto16}
 \begin{tabular}{lp{0.83\textwidth}}
 \toprule
 arm & rule \\
@@ -169,12 +169,12 @@ Supporting evidence for claims made in the main text. The reasoning each item su
   \item \texttt{results/\allowbreak{}health\_\allowbreak{}check/\allowbreak{}fire\_\allowbreak{}hesitancy.json}, 200 rollouts, generated \textbf{2026-09-16}, i.e. after the change --- so the 7.37\% beside it is U(0,60). The two are \textbf{geometry-mixed} and are never averaged or presented as a matched pair.
 \end{itemize}
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto15}
+\label{tab:auto17}
 \begin{tabular}{p{0.22\textwidth}p{0.56\textwidth}p{0.18\textwidth}}
 \toprule
 Quantity & Value & Basis \\
@@ -207,12 +207,12 @@ Single RTX 3060 Laptop GPU (6 GB, cu126, driver 528.79). Closed-loop evaluation:
 
 \textbf{Identity measurements} --- the maneuver is untouched under SPC and demonstrably changed under A6:
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto16}
+\label{tab:auto18}
 \begin{tabular}{p{0.59\textwidth}rr}
 \toprule
 Identity measurement & SPC (fire head only) & A6 (full network) \\
@@ -227,12 +227,12 @@ validation allowed-window accuracy & $\geq$ 0.995 & 0.9967 \\
 
 \textbf{Kill rate and CLR at the primary protocol} (d=0, U(0,60), the same 400 seeds as Table 4):
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto17}
+\label{tab:auto19}
 \begin{tabular}{p{0.15\textwidth}rrp{0.38\textwidth}}
 \toprule
 Arm (400 seeds, d=0) & Kill rate & CLR & vs SPC (paired) \\
@@ -250,12 +250,12 @@ Full-network fine-tuning recovers most of the gap (46.50\% $\rightarrow$ 77.50\%
 
 The ablation script's own 60-seed evaluation (geometry U(0,60), deterministic masked argmax) runs the \texttt{id} and \texttt{dist2\_3k} cells side by side and adds the \textbf{mask-permissive rule oracle}, which the 400-seed runs do not:
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto18}
+\label{tab:auto20}
 \begin{tabular}{lrrr}
 \toprule
 Arm (60 seeds, same seed set) & \texttt{id} cell & \texttt{dist2\_3k} cell & window utilisation (\texttt{id}) \\
@@ -271,12 +271,12 @@ A6 also loses to a rule that simply fires whenever the mask permits (81.7\% vs 9
 
 \subsection{E.8 Ablation tracking table (project bookkeeping)}
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto19}
+\label{tab:auto21}
 \begin{tabular}{lp{0.23\textwidth}p{0.37\textwidth}p{0.31\textwidth}}
 \toprule
 \# & Ablation & Status & Purpose \\
@@ -297,12 +297,12 @@ A7 & CLR for other binary decisions & conceptual & generality of the metric (fut
 
 \texttt{eval\_asap\_baseline.py} had no \texttt{--start-seed}, so the oracle could only ever run seeds \texttt{0..N-1} and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set:
 
-\begin{table*}[t]
+\begin{table*}[tp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 
-\label{tab:auto20}
+\label{tab:auto22}
 \begin{tabular}{p{0.33\textwidth}rrrrp{0.17\textwidth}}
 \toprule
 Arm & Kill & Launches/ep & Hit & lost & Termination reasons \\
@@ -316,6 +316,31 @@ SPC & \textbf{363/400 = 90.75\%} & 3.90 & 1.0000 & 0 & \texttt{{target\_\allowbr
 Identities verified from \texttt{run\_meta}: the oracle arm loaded \texttt{sha256 aad05b45\textbackslash{}ldots{}} (BC round1 --- the \emph{frozen maneuver} source, correct), SPC loaded \texttt{36d79bd9\textbackslash{}ldots{}}.
 
 \textbf{One limitation.} \texttt{eval\_asap\_baseline.py} writes aggregates only, with no per-episode detail, so the identity above follows from construction rather than from a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
+
+\subsection{E.10 The 2026-08-06 frozen-trajectory audit on the old geometry (moved from \textbackslash{}S{}4.3)}
+
+\begin{table*}[tp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+
+\label{tab:auto23}
+\begin{tabular}{lrr}
+\toprule
+Fire policy & Kill rate (measured, U(0,60)) & \emph{2026-08-06 audit, U(30,60)} \\
+\midrule
+\texttt{asap} & \textbf{86.7\%} & \emph{73.3\%} \\
+\texttt{delay\_30} & 38.3\% & \emph{28.3\%} \\
+\texttt{delay\_60} & 10.0\% & \emph{10.0\%} \\
+\texttt{dlz\_mid} & 0.0\% & \emph{0.0\%} \\
+\texttt{dlz\_deep} & 0.0\% & \emph{3.3\%} \\
+\texttt{interval\_100} & 0.0\% & \emph{0.0\%} \\
+frozen BC (inherited) & \textbf{15.0\%} & \emph{6.7\%} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Two of the seven arms reproduce exactly (\texttt{delay\_60}, \texttt{dlz\_mid}) while \texttt{asap} moves from 73.3\% to 86.7\%. That pattern indicates the \emph{script's} behaviour is unchanged and the benchmark itself became easier by $\approx$ +4.5 pp once the heading-bias range was widened (\textbackslash{}S{}4.5). Only the measured column is cited in the paper, always with its geometry attached; the paper's Table 3 carries no geometry-mixed column.
 
 
 \section{Artifact provenance records}

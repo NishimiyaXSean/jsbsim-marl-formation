@@ -35,10 +35,12 @@ LIMIT = 8
 # Strings that must never appear in a submitted paper. These are not style
 # preferences: each one has actually leaked at least once, or is a standing
 # instruction to the authors rather than to the reader.
-FORBIDDEN = [
-    # Match the MARKER, not the English word: "the JSBSim internal frame rate"
-    # is legitimate prose, and a check that cannot tell the difference reports
-    # a failure on a correct paper (hit on the first run of this script).
+# Prose markers, checked against the extracted TEXT. Each pattern must match the
+# MARKER and not the English word: "the JSBSim internal frame rate" and "the
+# binding constraint." are legitimate prose, and a case-insensitive pattern for
+# "Constraint." reported the second as a failure (hit 2026-09-19). Patterns here
+# are therefore case-SENSITIVE unless the marker itself is capitalised ambiguously.
+FORBIDDEN_TEXT = [
     (r"\((?:internal|INTERNAL)\b", "author-facing marker"),
     (r"internal (?:note|status|check|comment)", "author-facing marker"),
     (r"delete before submission", "author-facing marker"),
@@ -47,9 +49,16 @@ FORBIDDEN = [
     (r"\[verify\]", "unresolved citation marker"),
     (r"\u26a0", "warning glyph"),
     (r"\bDONE\b", "status marker"),
-    (r"^\s*Appendix [A-E]\b", "appendix material in the main paper"),
     (r"Sean", "author name in the paper"),
     (r"措辞纪律|内部|待办", "Chinese working note"),
+]
+
+# Structural checks, run against the .tex: appendix material is unambiguous
+# there, whereas in extracted text a *reference* to the appendix can begin a line
+# and look like one (that false positive also hit on 2026-09-19).
+FORBIDDEN_TEX = [
+    (r"\\section\{Appendix", "appendix section in the main paper"),
+    (r"\\appendix\b", "appendix mode in the main paper"),
 ]
 
 
@@ -87,17 +96,27 @@ def main() -> int:
 
     text = io.open(main_txt, encoding="utf-8").read()
     lines = text.splitlines()
-    for pattern, why in FORBIDDEN:
+    for pattern, why in FORBIDDEN_TEXT:
         hits = [(i + 1, l.strip()) for i, l in enumerate(lines)
-                if re.search(pattern, l, re.I | re.M)]
+                if re.search(pattern, l)]
         if hits:
             problems += 1
             print("FAIL: %d x '%s' (%s) in the main paper:"
                   % (len(hits), pattern, why))
             for lineno, sample in hits[:5]:
                 print("        L%-5d %s" % (lineno, sample[:96]))
+
+    tex_path = os.path.join(MAIN, "aamas_paper.tex")
+    if os.path.exists(tex_path):
+        tex = io.open(tex_path, encoding="utf-8").read()
+        for pattern, why in FORBIDDEN_TEX:
+            n = len(re.findall(pattern, tex))
+            if n:
+                problems += 1
+                print("FAIL: %d x '%s' (%s)" % (n, pattern, why))
+
     if not problems:
-        print("OK  : no author-facing markers in the main paper")
+        print("OK  : no author-facing markers or appendix material in the paper")
 
     # Figures the paper asks for must exist, or LaTeX silently typesets a gap.
     missing = []
