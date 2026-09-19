@@ -153,14 +153,9 @@ Two further measurements corroborate the magnitude on a different basis — expe
   2. Filter to `m_fire,t = 1`.
   3. Train **only** `action_heads[3]` by cross-entropy toward `a_fire = 1`. Encoder, speed head, heading head, altitude head: `requires_grad_(False)`.
   4. Early stop when allowed-window fire accuracy ≥ 0.995.
-- **Verification gates** (all must PASS; implemented in `scripts/distill_fire_asap.py`):
-  - `G1` heading/speed logits vs θ_BC: `max diff < 1e-9`
-  - `G2` heading/speed **action sequences** 100% identical on fixed seeds
-  - `G3` **CLR ≥ 99.5%** over allowed windows (`P(a_fire=1 | m_fire=1) ≥ 0.995`) on held-out rollouts
-  - `G4` no new `lost_target` / `bad` launch introduced
+- **Verification gates** (all must PASS; implemented in `scripts/distill_fire_asap.py`): **G1** heading/speed logits vs θ_BC (`max diff < 1e-9`); **G2** heading/speed action sequences 100% identical on fixed seeds; **G3** CLR ≥ 99.5% over allowed windows (`P(a_fire=1 | m_fire=1) ≥ 0.995`) on held-out rollouts; **G4** no new `lost_target` / `bad` launch introduced.
 - **Interpretation**: G1–G2 are the causal-identification device — the maneuver policy is provably untouched, so any performance change is attributable to the launch decision alone.
-
-> **Naming/provenance note (internal):** in code and docs this pipeline is called "ASAP distillation" (`scripts/distill_fire_asap.py`, docs 中的 "P2A"). ASAP = "As Soon As allowable by Policy", i.e. the target policy of §3.3. Paper-facing name = **SPC**. Map explicitly in the README/paper appendix to avoid reviewer confusion.
+- **Naming, stated once:** this pipeline is called *ASAP distillation* in the code (`scripts/distill_fire_asap.py`) and *P2A* in older docs. ASAP = "As Soon As allowable by Policy", i.e. the target behaviour. The paper-facing name is **SPC**, and the mapping is recorded in Appendix A/B.
 
 ### 3.4 Why isolating the launch head is the right intervention (not arbitrary)
 - The launch decision is a **discrete binary commitment** with a one-step-wide opportunity in the close-range regime (§4.3), so its error is not smoothable by the rest of the policy.
@@ -280,26 +275,15 @@ Two caveats the caption must carry: (i) this is a **single illustrative episode*
 - `lost_target = 0` and `launch_quality.bad = 0` in both arms — the corrected policy does **not** buy kills with reckless launches: premium 921 / good 639 / bad 0, i.e. **every** SPC launch still scores "good-or-better" under the expert's own quality function.
 - Heading/speed behaviour is bit-identical to BC by construction (G1 `max diff < 1e-9`; G2 identical action sequences), so the entire gain is attributable to the launch head alone.
 
-**Report it bound to its conditions, never as a bare improvement.** Use: *"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the conservative launch decision with SPC raises the kill rate from 46.50% to 90.75% (+44.25 pp, exact McNemar p = 1.04e-53)."* Not: *"SPC improves performance by 44 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing — they are *why* the attribution is legitimate.
+> *(internal, delete before submission)* **Wording discipline.** Report it bound to its conditions, never as a bare improvement: *"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the restrictive launch decision with SPC raises the kill rate from 46.50% to 90.75% (+44.25 pp, exact McNemar p = 1.04e-53)."* Not: *"SPC improves performance by 44 pp."* The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing — they are *why* the attribution is legitimate. The paper-facing version of this rule is §5.4.
 
 > **Artifact status.** E7 is **verified against live artifacts** (`results/shoot_eval/E7_{bc_round1,spc}_d0_n400_s20000.json`, `E7_paired_bc_vs_spc_d0_n400.json`).
 >
 > *(internal, delete before submission)* **Superseded numbers.** The docs-attested Phase-1 pair **43.2% → 91.2% = +48.0 pp** (500 seeds, *old* geometry U(30,60)) is **replaced** by the measured **46.50% → 90.75% = +44.25 pp** (400 seeds, U(0,60)). The old pair was not self-consistent: its BC figure came from a different geometry generation than its CLR figure. E7 puts kill rate, CLR, and geometry on **one** seed set. Cite 46.50 / 90.75 / +44.25.
 >
-> **Both former docs-only numbers have now been replaced by fresh-env measurements.** The rule-expert ID kill rate is **36.75%** (E3 paired, fresh env, seeds 20000–20399) — *not* the docs' 35.8%, and *not* the reused-env 32.25%. The rule-oracle ID kill rate is **90.75%** (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (same policy by construction, §4.4). The originals (`paired_bc_vs_expert_500.json`, `asap_baseline.json`) remain lost — the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
+> *(internal, delete before submission)* **Both former docs-only numbers have now been replaced by fresh-env measurements.** The rule-expert ID kill rate is **36.75%** (E3 paired, fresh env, seeds 20000–20399) — *not* the docs' 35.8%, and *not* the reused-env 32.25%. The rule-oracle ID kill rate is **90.75%** (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (§4.4). The originals (`paired_bc_vs_expert_500.json`, `asap_baseline.json`) remain lost — the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
 
-**SPC vs the rule oracle on one seed set (E2, seeds 20000–20399, n=400).** Resolved: `eval_asap_baseline.py` had no `--start-seed`, so the oracle could only ever run seeds `0..N-1` and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set.
-
-| Arm | Kill | Launches/ep | Hit | lost | Termination reasons |
-|---|---|---|---|---|---|
-| Rule oracle (`asap`: frozen BC maneuver + fire on every legal step) | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
-| **SPC** | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
-
-**Identical on every reported metric.** Identities verified from `run_meta`: the oracle arm loaded `sha256 aad05b45…` (BC round1 — the *frozen maneuver* source, correct), SPC loaded `36d79bd9…`.
-
-> **This is a completeness check, not independent validation.** The two are the *same policy by construction*: the oracle is "frozen BC maneuver + fire on every legal step", and SPC is "bit-identical frozen maneuver heads + a launch head whose measured CLR is 100.00%", which also fires on every legal step. Their agreement is therefore expected rather than evidence that two independent methods concur. What it does establish is that SPC captures the **entire** oracle gap — 46.50% → 90.75%, i.e. 100% of it — rather than some fraction. The independent replication in this paper is §4.3(E6) against §4.4/§4.6, where the identification strategies differ in kind (off-policy enumeration versus within-policy intervention).
->
-> One limitation: `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above follows from construction rather than from a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.
+**SPC reaches the rule oracle's level on the same seed set (E2, seeds 20000–20399, n=400).** The oracle is "frozen BC maneuver + fire on every legal step", and SPC is "bit-identical frozen maneuver heads + a launch head whose measured CLR is 100.00%"; both therefore fire on every legal step, and their agreement is expected rather than evidence that two independent methods concur. What it does establish is that SPC captures the **entire** oracle gap — 46.50% → 90.75%, i.e. 100% of it — rather than some fraction. The independent replication in this paper is §4.3(E6) against §4.4/§4.6, where the identification strategies differ in kind (off-policy enumeration versus within-policy intervention). The per-arm identities and the aggregate-only limitation are in Appendix E.
 
 ### 4.5 Robustness check 1 — widened initial geometry (heading bias) — *a benchmark check, not a contribution*
 
@@ -341,12 +325,12 @@ Read against Table 2's CLR column, the table says three things at once — the t
 
 Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −42**. Both are loss-dominated, but the expert's net is −44 seeds against BC's −17 — the asymmetry, not just the mean, drives the ordering above.
 
-**Five findings:**
-1. **The correction is robust, and its benefit grows under evasion.** SPC's kill rate is *unchanged* (90.75% at both difficulties) while BC loses 4.25 pp, so the SPC−BC gap widens from +44.25 to **+48.50 pp**, and the discordant count rises from 177 to 194. **This widening is independently replicated by a different identification strategy**: in the frozen-trajectory oracle enumeration (§4.3, E6) the `asap`−inherited gap widens from **+40.0 to +50.0 pp** across the same difficulty change. One method re-trains the launch head with the maneuver frozen; the other freezes the maneuver and swaps in rule-based launch policies. Both say the same thing: evasion punishes the restrictive launch policy, not the permissive one.
-2. **The restrictive preference is structural, not scenario-specific — and measured on both policies.** BC's CLR barely moves (**7.26% → 6.95%**), and the expert's moves just as little (**6.07% → 5.40%**): the designed gate suppresses launches to the same degree whether or not the target manoeuvres. The teacher's restriction is therefore not caution that pays off when the target turns — it is a fixed property of the predicate, and the imitation inherits it as one too.
-3. **The identical aggregate is not an artefact — the difficulty change was verified to take effect.** 363 kills at both difficulties admits a trivial explanation, so it was tested directly: **368/400 episodes change length** (so `difficulty=0.3` is applied) and **382/400 seeds keep the same kill outcome, with 18 flips split 9 gained / 9 lost**. The match is a genuine near-cancellation rather than a no-op.
-4. **Evasion cost is ordered by how restrictive the launch policy is.** Expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**, all three legs on fresh-env evaluations over the same seeds. The per-seed flips indicate the mechanism: the expert loses 73 seeds and gains 29, while BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. The ordering rests on a single seed family, so it is reported as a well-supported ordering rather than a law.
-5. **The imitation gap itself widens under evasion.** BC's paired margin over the expert goes from **+9.75 pp** (d=0) to **+16.50 pp** (d=0.3), i.e. it more than doubles. This is a new observation and a useful one: the value of imitating-then-correcting this expert is *larger* in the harder regime, which is the opposite of the usual expectation that a stronger expert is needed as the problem gets harder.
+**Three findings:**
+1. **Performance.** SPC's kill rate is *unchanged* under evasion (90.75% at both difficulties) while BC falls from 46.50% to 42.25%, so the SPC−BC gap widens from +44.25 to **+48.50 pp** and the discordant count rises from 177 to 194. The same widening appears under the independent identification of §4.3 (+40.0 → +50.0 pp), so it is not an artefact of the retraining procedure: one method re-trains the launch head with the maneuver frozen, the other freezes the maneuver and swaps in rule-based launch policies.
+2. **The mechanism is preserved.** CLR barely moves on either policy — BC **7.26% → 6.95%**, expert **6.07% → 5.40%** — so the designed gate suppresses launches to the same degree whether or not the target manoeuvres. The restriction is a fixed property of the predicate, and the imitation inherits it as one.
+3. **Interpretation.** Evasion cost is ordered by how restrictive the launch policy is: expert **−11.00 pp**, BC **−4.25 pp**, SPC **0.00 pp**, all three legs on fresh-env evaluations over the same seeds. Evasion therefore *amplifies the cost of the restrictive launch preference* rather than penalising the correction. The per-seed flips say the same thing: the expert loses 73 seeds and gains 29, BC loses 42 and gains 25 — a suppressed launch window is unrecoverable once the target turns away. This rests on a single seed family, so it is reported as a well-supported ordering rather than a law.
+
+Two secondary items are in Appendix E: the direct check that `difficulty=0.3` actually takes effect (368/400 episodes change length; 382/400 keep the same kill outcome, 18 flips split 9/9, so the identical 363 at both difficulties is a genuine near-cancellation rather than a no-op), and the observation that BC's paired margin over the expert itself widens under evasion (+9.75 → +16.50 pp).
 
 > **Artifact status:** verified against live artifacts — `results/shoot_eval/E5_{bc_round1,spc}_d03_n400_s20000.json`, `E5_paired_bc_vs_spc_d03_n400.json`, and the two CLR runs `E3_paired_bc_vs_expert_{d0_n400_s20000_v3,d03_n400_s20000_v2}_clr.json`. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 4 reports.
 
@@ -354,63 +338,24 @@ Per-seed flips under evasion: expert **+29 gained / −73 lost**, BC **+25 / −
 
 > *(internal, delete before submission)* **2026-09-18 Sean：A5/A6 都留正文，但 A6 为主、A5 压缩** —— A6 回答的是"冻结是否只是工程便利"（C2 真正依赖它），A5 只回答"初始化是否有影响"。
 
-Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), ask whether the locality of the correction is doing real work or is an arbitrary design choice. The results indicate that **locality is the key factor enabling an attributable correction**:
+> *(internal, delete before submission)* 2026-09-19 Sean：正文只回答两个问题 —— A5「SPC 是否依赖初始化」、A6「locality 是否必要」；A5/A6 的训练细节、tracker、筛选表全部进附录 E。
+
+Two ablations decide whether the *locality* of the correction is doing the work, or whether any correction of the same objective would do. Both run at the paper's primary protocol — 400 seeds, d=0, the same seeds as Table 4 — so they are directly comparable with §4.4 rather than being screening runs.
+
+**Table 5 — ablations at the primary protocol** (fresh env, seeds 20000–20399, geometry U(0,60), deterministic masked argmax):
 
 | Intervention | Result (400 seeds, d=0) | What it tests |
 |---|---|---|
-| **A6 — full-network fine-tune** (everything trainable) | 77.50% kill, **−13.25 pp vs SPC** (exact McNemar **p = 1.33e-11**), maneuver logits move by **8.51** | is *freezing* merely an engineering convenience? → **no: it is the identification** |
-| **A5 — random-init launch head, encoder frozen** | 90.75% kill, **0 discordant seeds vs SPC**, maneuver deviation **exactly 0.00e+00** | does the correction depend on warm-starting from BC's launch head? → **no** |
+| SPC (launch head only) | **90.75%** (363/400), CLR 100.00% | reference |
+| **A5** — random-init launch head, encoder and maneuver heads frozen | **90.75%** (363/400), **0 discordant seeds vs SPC**, maneuver deviation **exactly 0.00e+00** | does the correction depend on warm-starting from BC's launch head? → **no** |
+| **A6** — full-network fine-tune, every parameter trainable | **77.50%** (310/400), **−13.25 pp** vs SPC, exact McNemar **p = 1.33e-11**, maneuver logits move by **8.51** | is *freezing* merely an engineering convenience? → **no** |
 
-| # | Ablation | Status | Purpose |
-|---|---|---|---|
-| — | *(internal status tracker, delete before submission: the paper reports A5/A6 in the text and A1–A4 in their own sections)* | | |
-| A1 | **Fire-policy oracle enumeration on frozen trajectory** (§4.3) | **DONE** (E1 regenerated, tracked) | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
-| A2 | **SPC (learned head) vs ASAP rule oracle** (§4.4) | **DONE** — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
-| A3 | **`difficulty_level = 0.3`** (§4.6) | **DONE** — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
-| A4 | **Heading-shift robustness** (§4.5) | done (n=400) | benchmark sensitivity |
-| A5 | **Fire head from random init, encoder frozen** | **DONE** 2026-09-18 (400-seed primary protocol) | does the correction depend on warm-starting from BC's launch head, or is the objective + mask sufficient? |
-| A6 | **Full-network fine-tune on the same objective** (unfreeze all) | **DONE** 2026-09-18 (400-seed primary protocol) | shows that *freezing* is what buys clean attribution, not the objective |
-| — | *A6b: 60-seed screening incl. the mask-permissive arm* | *done, secondary* | *third-arm comparison only; ±10 pp small-sample spread* |
+**A5 rules out a warm-start effect.** Random initialisation of the editable head produced behaviourally indistinguishable results under the evaluated metric, so SPC's benefit does not depend on having started near BC's launch head. The supportable statement is exactly that: A5 and SPC are *behaviourally indistinguishable under the evaluated metric*, which is not the same as being proven equivalent — no action-logit comparison is made, and a formal claim would need a pre-registered margin (§E.5).
 
-**A6 — full-network fine-tuning on the same objective.** Identical objective, data, loss and initialisation as SPC; the only change is that every parameter is trainable rather than the launch head alone, at a deliberately **more generous** budget (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), so that a negative result cannot be attributed to under-training.
+**A6 shows locality is necessary rather than convenient.** Unfreezing everything makes the correction **worse** (77.50% against SPC's 90.75%, p = 1.33e-11) *and* moves the maneuver by 8.51 logits, so the result is both less effective and no longer attributable. Full-network adaptation therefore reduces attribution and introduces maneuver changes, indicating that unrestricted updates are not equivalent to a localized intervention.
 
-**A6 result — the maneuver moves, and the correction is still worse than doing nothing clever.** Both pre-registered measurements came back on 2026-09-18.
+**What the pair establishes.** The observed benefit is attributable to **the choice of editable parameters** — which decision dimension is allowed to change — rather than to the amount of trainable parameters or the initialisation of the launch head. Protocol, budget, identity measurements, the 60-seed screening set and the A5 training log are in Appendix E.
 
-*(i) Maneuver deviation.* Identical objective, identical data, identical loss, identical initialisation; the only change is that every parameter is trainable rather than the launch head alone, at a **more generous** budget (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`) so the ablation cannot be dismissed as under-trained.
-
-| Identity measurement | SPC (fire head only) | A6 (full network) | Reading |
-|---|---|---|---|
-| heading/speed logit max-diff vs θ_BC | **< 1e-9** | **8.51** | the maneuver is provably untouched under SPC and provably *changed* under A6 |
-| heading/speed action sequences identical | **yes** | **no** | same conclusion, measured behaviourally rather than in logit space |
-| launch-mask agreement | yes | yes | both reach the target behaviour on the launch head |
-| validation allowed-window accuracy | ≥ 0.995 | 0.9967 | neither arm can be dismissed as under-trained |
-
-*(ii) Kill rate and CLR under the paper's primary protocol* — d=0, U(0,60), the same 400 seeds as Table 4, so this is directly comparable rather than a screening number:
-
-| Arm (400 seeds, d=0) | Kill rate | CLR | vs SPC (paired) |
-|---|---|---|---|
-| BC (inherited launch policy) | 46.50% | 7.26% | — |
-| **A6 — full-network fine-tune** | **77.50%** (310/400) | **99.67%** | **−13.25 pp**, discordant 67 (60 SPC / 7 A6), exact McNemar **p = 1.33e-11** |
-| **SPC — launch head only** | **90.75%** (363/400) | **100.00%** | — |
-
-**The reading is that freezing is doing real work, on both axes at once.** Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains **significantly worse than the localized intervention on identical seeds** (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), *and* it pays for that with an 8.51-logit change to the maneuver — it is less effective **and** no longer attributable. These results indicate that allowing unrestricted parameter updates weakens attribution and does not recover the performance achieved by the localized intervention.
-
-**A5 (the control).** Keep SPC's freeze pattern exactly — encoder and every maneuver head frozen at θ_BC — and rebuild *only* the fire head from `nn.Linear.reset_parameters()`, the constructor's own initialisation, so the sole difference from SPC is where the moving head starts. Trained on the same 300-episode rollout set, the random head reaches **100% allowed-window recall in its first epoch** and early-stops, with the identity gates reporting **exactly zero** maneuver deviation. At the primary protocol it scores **90.75% (363/400)**, and the paired test against SPC reports **zero discordant seeds**: both arms kill the same 363 seeds. Training detail and the 60-seed screening comparison are in Appendix E.
-
-**What zero discordance does and does not license.** It is *not* an equivalence test: McNemar with no discordant cells returns p = 1.0, the absence of a detected difference rather than a proof of equality, and no TOST is run here. The supportable statement is that A5 and SPC are **behaviourally indistinguishable under the evaluated metric** — on 400 seeds and this benchmark the per-seed kill vector is identical, the only trace of the different initialisation being one extra legal step (1561 vs 1560). We do not claim *identical* or *equivalent* policies; no action-logit comparison is made, and a stronger equivalence claim would require a pre-registered margin.
-
-**What the pair establishes.** Unfreezing everything *hurts* significantly and destroys the attribution; re-initialising the one head that is supposed to move makes no measurable difference at all. The observed benefit is therefore attributable to **the choice of editable parameters** — which decision dimension is allowed to change — rather than to the amount of trainable parameters or the initialisation of the launch head.
-
-**A6b — the screening set, kept because it carries a third arm.** The ablation script's own 60-seed evaluation (geometry U(0,60), deterministic masked argmax) runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed run above does not:
-
-| Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) |
-|---|---|---|---|
-| BC (inherited launch policy) | 40.0% | 15.0% | 7.2% |
-| A6 — full-network fine-tune | 81.7% | 66.7% | 98.3% |
-| mask-permissive rule oracle | **95.0%** | **86.7%** | 100% |
-
-A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95.0%). The screening set is **60 seeds** and therefore carries roughly ±10 pp of small-sample spread — the same seeds give BC 40.0% where n=400 gives 46.50% — so these figures are quoted only for the third arm and never alongside the 400-seed numbers as one comparison.
-| A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
 
 ---
 
@@ -752,3 +697,64 @@ Single RTX 3060 Laptop GPU (6 GB, cu126, driver 528.79). Closed-loop evaluation:
 - **Training.** 300 rollout episodes (392091 transitions, 11976 allowed steps; train/val split 9578/2398 allowed steps). The random fire head reaches fire-CE 0.0413 with train recall 100.00% and validation recall 100.00% **in its first epoch** (of 15) and triggers the ≥99.5% early stop. Identity gates: `hdg/spd logits diff = 0.00e+00` — *exactly* zero, not merely under tolerance — with identical action sequences and `VERDICT: PASS`.
 - **Primary protocol.** 90.75% (363/400) kills, CLR 99.94% (1560/1561) — the CLR denominator differs from SPC's by exactly one legal step (1561 vs 1560), the only trace of the different initialisation anywhere in the evaluation.
 - **60-seed screening** (same seed set as A6b; ±10 pp small-sample spread applies): A5 **95.0%** (`id`) / **86.7%** (`dist2_3k`) at 100% window utilisation, bit-for-bit equal to the mask-permissive rule oracle on the same seeds; BC 40.0% / 15.0%. The screening set is kept because it carries the third arm.
+
+### E.6 Ablation A6 — protocol, identity measurements and results (moved from §4.7)
+
+**Protocol.** Identical objective, data, loss and initialisation as SPC; the only change is that every parameter is trainable rather than the launch head alone, at a deliberately **more generous** budget (`--epochs 40 --lr 3e-4` versus `--epochs 15 --lr 1e-2`), so that a negative result cannot be attributed to under-training.
+
+**Identity measurements** — the maneuver is untouched under SPC and demonstrably changed under A6:
+
+| Identity measurement | SPC (fire head only) | A6 (full network) |
+|---|---|---|
+| heading/speed logit max-diff vs θ_BC | **< 1e-9** | **8.51** |
+| heading/speed action sequences identical | **yes** | **no** |
+| launch-mask agreement | yes | yes |
+| validation allowed-window accuracy | ≥ 0.995 | 0.9967 |
+
+**Kill rate and CLR at the primary protocol** (d=0, U(0,60), the same 400 seeds as Table 4):
+
+| Arm (400 seeds, d=0) | Kill rate | CLR | vs SPC (paired) |
+|---|---|---|---|
+| BC (inherited launch policy) | 46.50% | 7.26% | — |
+| **A6 — full-network fine-tune** | **77.50%** (310/400) | **99.67%** (1508/1513) | **−13.25 pp**, discordant 67 (60 SPC / 7 A6), exact McNemar **p = 1.33e-11** |
+| SPC — launch head only | 90.75% (363/400) | 100.00% | — |
+
+Full-network fine-tuning recovers most of the gap (46.50% → 77.50%) but remains significantly worse than the localized intervention on identical seeds, and pays for it with an 8.51-logit change to the maneuver.
+
+### E.7 Ablation screening set — the mask-permissive third arm (moved from §4.7)
+
+The ablation script's own 60-seed evaluation (geometry U(0,60), deterministic masked argmax) runs the `id` and `dist2_3k` cells side by side and adds the **mask-permissive rule oracle**, which the 400-seed runs do not:
+
+| Arm (60 seeds, same seed set) | `id` cell | `dist2_3k` cell | window utilisation (`id`) |
+|---|---|---|---|
+| BC (inherited launch policy) | 40.0% | 15.0% | 7.2% |
+| A6 — full-network fine-tune | 81.7% | 66.7% | 98.3% |
+| mask-permissive rule oracle | **95.0%** | **86.7%** | 100% |
+
+A6 also loses to a rule that simply fires whenever the mask permits (81.7% vs 95.0%). The set is **60 seeds** and carries roughly ±10 pp of small-sample spread — the same seeds give BC 40.0% where n=400 gives 46.50% — so these figures are quoted only for the third arm and never alongside the 400-seed numbers as one comparison.
+
+### E.8 Ablation tracking table (project bookkeeping)
+
+| # | Ablation | Status | Purpose |
+|---|---|---|---|
+| A1 | Fire-policy oracle enumeration on frozen trajectory (§4.3) | done (E1 regenerated, tracked) | establishes that the inherited launch policy is suboptimal, maneuver held fixed |
+| A2 | SPC (learned head) vs ASAP rule oracle (§4.4) | done — exact match on one seed set (90.75% both); completeness check, not independent validation | SPC captures 100% of the oracle gap |
+| A3 | `difficulty_level = 0.3` (§4.6) | done — +48.50 pp, 194:0, p=7.97e-59 | interactive/reacting opponent |
+| A4 | Heading-shift robustness (§4.5) | done (n=400) | benchmark sensitivity |
+| A5 | Fire head from random init, encoder frozen (§4.7, E.5) | done 2026-09-18 (400-seed primary protocol) | warm-start dependence |
+| A6 | Full-network fine-tune on the same objective (§4.7, E.6) | done 2026-09-18 (400-seed primary protocol) | is freezing merely engineering convenience? |
+| A6b | 60-seed screening incl. the mask-permissive arm (E.7) | done, secondary | third-arm comparison only |
+| A7 | CLR for other binary decisions | conceptual | generality of the metric (future work) |
+
+### E.9 The E2 rule-oracle comparison — identities and limitations (moved from §4.4)
+
+`eval_asap_baseline.py` had no `--start-seed`, so the oracle could only ever run seeds `0..N-1` and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set:
+
+| Arm | Kill | Launches/ep | Hit | lost | Termination reasons |
+|---|---|---|---|---|---|
+| Rule oracle (`asap`: frozen BC maneuver + fire on every legal step) | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
+| SPC | **363/400 = 90.75%** | 3.90 | 1.0000 | 0 | `{target_killed: 363, timeout: 37}` |
+
+Identities verified from `run_meta`: the oracle arm loaded `sha256 aad05b45…` (BC round1 — the *frozen maneuver* source, correct), SPC loaded `36d79bd9…`.
+
+**One limitation.** `eval_asap_baseline.py` writes aggregates only, with no per-episode detail, so the identity above follows from construction rather than from a seed-by-seed match. Emitting per-episode records would make it mechanically checkable.

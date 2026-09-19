@@ -559,7 +559,7 @@ follow the argument.
 
 {appendix}
 
-\\section{{Appendix E.6: Artifact provenance records}}
+\\section{{Artifact provenance records}}
 The records below were collected out of the main text, where they interrupted the
 argument. Each states which artifact backs which claim.
 

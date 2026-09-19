@@ -135,5 +135,9 @@ if [ ${#TEXTS[@]} -gt 1 ]; then
   echo
 fi
 
+# Layout audit: the built PDF is a separate artefact from the source, and a note
+# to the authors can survive the converter while no number check notices.
+"$PY" "$REPO/scripts/audit_layout.py" || status=1
+
 echo "done. PDFs and logs are under $BUILD_ROOT/"
 exit $status
