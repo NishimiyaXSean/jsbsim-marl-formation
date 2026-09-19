@@ -1,5 +1,7 @@
 ﻿# BC 模仿规则专家 — 修订实施计划 (2026-08-06)
 
+> **⚠ 本文档的数字已作废（2026-09-19）。** 文中 `BC 43.2% / ASAP 90.6–91.2% / +7.4 pp / +48.0 pp` 一类数值产生于**旧几何 `U(30,60)`**，其中 BC 与 CLR 两项还来自**不同几何代次**，不可混引。论文采用的权威测量为 **BC 46.50% → SPC 90.75%（+44.25 pp，400 seeds，几何 `U(0,60)`，deterministic masked argmax，exact McNemar p = 1.04e-53，discordant 177:0）**，见 `paper/small_paper_draft.md` §6 与 `paper/aamas_paper.tex`。本文档**只作历史记录保留**。
+
 ## 背景
 
 - 导弹系统最佳基线 = **v19**(发射 0.48/局、命中 100%、击杀 10%、lost_target 32%,d=0.0)。

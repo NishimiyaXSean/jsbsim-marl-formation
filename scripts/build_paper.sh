@@ -97,12 +97,12 @@ build_one() {
   if [[ "$BASE" == *supplement* ]]; then
     echo "  pages      : $PAGES  (supplementary material: no page limit)"
   else
-    echo "  pages      : $PAGES  (AAMAS main-track limit: $LIMIT, references excluded)"
-    if [ "$PAGES" -gt "$LIMIT" ]; then
-      echo "  OVER BUDGET by $((PAGES - LIMIT)) page(s)"
-    else
-      echo "  within budget"
-    fi
+    # Do NOT declare the budget verdict here. AAMAS excludes reference pages, so
+    # the PDF total is the wrong number: this line reported "OVER BUDGET by 1
+    # page" for a compliant paper whose body was 8 pages plus 2 of references.
+    # The verdict lives in audit_layout.py, which measures body pages, so the
+    # build output and the audit cannot contradict each other.
+    echo "  pages      : $PAGES total (budget verdict below, after body/reference split)"
   fi
 
   # Overfull boxes are the honest signal of what will look wrong in two columns.
