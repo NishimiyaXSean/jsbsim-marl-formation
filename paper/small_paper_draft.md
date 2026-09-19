@@ -54,19 +54,20 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 
 > *(internal, delete before submission)* 结构按 Sean 2026-09-17 定型。**第一贡献是诊断，不是性能提升**；叙事主线：*专家含有一个隐藏的、局部但灾难性的决策偏差；BC 忠实复制它；一个局部策略修正即可在不改变机动策略的前提下恢复性能。* 措辞纪律：不说 "expert 很差"，说 *the expert contains a restrictive launch preference that is not required by the environment constraints*（环境允许 ≠ 专家愿意 —— 这正是机制所在）。
 
-1. **C1 — Diagnosis: expert-induced decision bias, quantified.** 我们引入 **Conditional Launch Rate（CLR）**，`P(a_fire=1 | m_fire=1)` —— 一个无需 oracle、可迁移到任何「离散提交型决策」（发射 / 交接 / 急停 / 变道）的指标 —— 并发现规则专家在环境允许发射的步上只发射约 6%，BC 忠实复现该偏好（约 7%）。我们把原因定位到一个**设计出来的**发射质量门：它严格地比环境合法性掩码更严（§3.2）。这不是专家「能力不足」，而是专家携带了一个**环境并不要求的 restrictive launch preference**，其闭环代价就是本文所测的 decision bias。
-2. **C2 — Surgical Policy Correction: a localized *intervention* on the decision dimension the diagnosis identifies.** SPC modifies **only the single binary launch head** so that it fires whenever the environment permits, while **every other parameter — and therefore the entire maneuver policy — is provably preserved**（heading/speed logits 与动作序列双门逐比特验证，§3.3）。贡献不是「只训一个 head」这个实现细节，而是 *isolating the behavioural dimension responsible for the failure*：机动逐位不变，因此残余差异只能归因于发射决策。A5/A6（§4.7）进一步表明，收益来自**允许哪些参数动**，而不是能动多少、也不取决于该头从何处初始化。
+1. **C1 — Diagnosis: expert-induced decision bias, quantified.** We introduce the **Conditional Launch Rate (CLR)**, `P(a_fire=1 | m_fire=1)` — an oracle-free metric that transfers to any commit-or-not decision (launch, hand-off, emergency stop, lane change) — and find that the rule expert launches on only ~6% of the steps its environment permits, with BC reproducing that preference faithfully (~7%). We localise the cause to a **designed** launch-quality gate that is strictly stricter than the environment's legality mask (§3.2). This is not a case of the expert being incompetent: the expert carries a **restrictive launch preference the environment does not require**, and its closed-loop cost is the decision bias this paper measures.
+2. **C2 — Surgical Policy Correction: a localized *intervention* on the decision dimension the diagnosis identifies.** SPC modifies **only the single binary launch head** so that it fires whenever the environment permits, while **every other parameter — and therefore the entire maneuver policy — is provably preserved** (bit-identical heading/speed logits and action sequences, §3.3). The contribution is not the implementation detail of training one head; it is *isolating the behavioural dimension responsible for the failure*: the maneuver is bit-identical, so the residual difference can only be attributed to the launch decision. A5/A6 (§4.7) then show that the benefit comes from **which parameters are allowed to move** — not from how many, and not from where that head started.
    > *(internal, delete before submission)* 措辞纪律：说 **intervention**，不说 fine-tune/training。
-3. **C3 — Causal and locality validation: two interventions, one conclusion.** 两个互补的因果论证（§4.3, §4.4），加上 A5/A6 对「locality 才是关键」的验证（§4.7）。**注意两个干预的尺度不同，引用时必须各自绑定**：
-   - **Intervention A（cell-specific frozen-trajectory enumeration，`dist2_3k`，60 seeds）**：15.0% → 86.7% —— *the launch decision alone can explain the performance gap*；
-   - **Intervention B（primary 400-seed policy intervention，seeds 20000–20399）**：46.50% → 90.75%（配对，177:0，p≈1e-53）—— *the correction can be internalized into the policy*。
-   - 效果在规避目标下保持并扩大（+44.25 → +48.50 pp），且被一套独立的识别方法复现（§4.3 E6 matched 2×2：+40.0 → +50.0 pp）。
+3. **C3 — Causal and locality validation: two interventions, one conclusion.** Two complementary causal arguments (§4.3, §4.4), plus the A5/A6 validation that locality is the key factor (§4.7). **The two interventions live at different scales, and each must be cited with its own scope attached**:
+   - **Intervention A (cell-specific frozen-trajectory enumeration, `dist2_3k`, 60 seeds)**: 15.0% → 86.7% — *the launch decision alone can explain the performance gap*;
+   - **Intervention B (primary 400-seed policy intervention, seeds 20000–20399)**: 46.50% → 90.75% (paired, 177:0, p≈1e-53) — *the correction can be internalized into the policy*.
+   - The effect survives and grows under an evading target (+44.25 → +48.50 pp), and is replicated by an independent identification strategy (§4.3 E6 matched 2×2: +40.0 → +50.0 pp).
 
-**叙事结构**（正文按此展开，比普通 ablation 高一层）：
+**Structure of the argument** (the body follows this, one level above a conventional ablation report):
+
 ```
-Observation（CLR 异常低）
-   → Where is the failure? → 冻结轨迹干预 ⇒ 发射决策是因果因素
-   → Can the policy be repaired? → SPC ⇒ 修正可被内化进策略
+Observation: CLR is anomalously low
+   -> Where is the failure?     -> frozen-trajectory intervention => the launch decision is the causal factor
+   -> Can the policy be repaired? -> SPC                       => the correction can be internalised
 ```
 
 ---
@@ -97,7 +98,7 @@ Observation（CLR 异常低）
 
 > **Citation status (re-checked 2026-09-18 against the live record, not from memory).** Verified: Pomerleau (**NIPS'88**, pp. 305-313; presented 1988, MIT Press 1989 - the year is now confirmed, not inferred), Ross/Gordon/Bagnell (AISTATS 2011), Bojarski (arXiv:1604.07316), Brown et al. (ICML 2019 pp. 783-792), Huo/Wang/Xu (AAAI 2023 pp. 7953-7961), Beliaev/Pedarsani (arXiv:2402.01886), Li Z. et al. (NeurIPS 2023), Parisotto/Ba/Salakhutdinov (ICLR 2016, arXiv:1511.06342), McGrew et al. (JGCD 33(5):1641-1654), Pope et al. (ICUAS 2021 pp. 275-284), Yang et al. (IEEE Access 8:363-378), Li L. et al. (Neurocomputing 584:127591, 2024), Li S. et al. (ACM TAAS 21(1):6, 2026), **Rusu et al. (ICLR 2016 conference track, arXiv:1511.06295)**, **Hinton/Vinyals/Dean (NIPS 2014 Deep Learning Workshop, arXiv:1503.02531 - a workshop paper, so it has no page numbers and none are invented here)**, **LoRA (Hu et al., ICLR 2022, arXiv:2106.09685)**, **ROME (Meng, Bau, Andonian & Belinkov, NeurIPS 2022, Advances in NeurIPS 35, pp. 17359-17372)**. **Nothing on this list is now unconfirmed.**
 >
-> **Three citation errors were caught across the two passes.** (1) The earlier placeholder "Pang et al. 2024" does not exist; the work actually intended - BC + PPO for WVR 6-DOF air combat - is Li, Zhang, Qian, Zhao & Wang, Neurocomputing 584:127591 (2024). (2) "Actor-Learner Distillation" is a misnomer; the correct title is Actor-Mimic (Parisotto, Ba & Salakhutdinov, ICLR 2016). (3) ROME's author list was given as "Meng, Wang, Pfaff & Yang"; the paper is by **Meng, Bau, Andonian & Belinkov** - both the arXiv record and the NeurIPS 35 proceedings agree. A wrong author list on a cited method is the kind of error a reviewer notices, and it was found only by looking the citation up rather than recalling it.
+> *(internal, delete before submission)* **Three citation errors were caught across the two passes.** (1) The earlier placeholder "Pang et al. 2024" does not exist; the work actually intended - BC + PPO for WVR 6-DOF air combat - is Li, Zhang, Qian, Zhao & Wang, Neurocomputing 584:127591 (2024). (2) "Actor-Learner Distillation" is a misnomer; the correct title is Actor-Mimic (Parisotto, Ba & Salakhutdinov, ICLR 2016). (3) ROME's author list was given as "Meng, Wang, Pfaff & Yang"; the paper is by **Meng, Bau, Andonian & Belinkov** - both the arXiv record and the NeurIPS 35 proceedings agree. A wrong author list on a cited method is the kind of error a reviewer notices, and it was found only by looking the citation up rather than recalling it.
 ---
 
 ## 3. Method (1.5 pages)
@@ -123,7 +124,7 @@ CLR(π) = P(a_fire = 1 | m_fire = 1)
 ```
 
 - `m_fire` is the **environment's** legality mask (index 10 of the flat mask), which requires: missiles remaining > 0; launch cooldown (30 decision steps) elapsed; target alive; `ATA < 15°`; `MIN_ATTACK_DISTANCE (1500 m) ≤ range ≤ dynamic max range (3–8 km by aspect angle)`; closure < 0 (closing).
-- **Critical property: CLR is not a claim that 100% is optimal.** It is a descriptive quantity. The optimal value must be established separately — which is exactly what §4.3 does. (v1 的 "theoretical maximum of 100%" 措辞已删除。)
+- **Critical property: CLR is not a claim that 100% is optimal.** It is a descriptive quantity. The optimal value must be established separately — which is exactly what §4.3 does.
 
 **Why the expert's CLR is low — the designed gate.** The expert does not simply follow `m_fire`. It requires its own stricter quality predicate:
 
@@ -175,6 +176,7 @@ Two further measurements corroborate the magnitude on a different basis — expe
 - JSBSim F-16 physics; 1v1 within-visual-range missile engagement; **deterministic masked argmax**.
 - One seed protocol throughout: **seeds 20000–20399, fresh environment per episode, geometry U(0,60)**. Hardware, wall-clock and reproduction commands: Appendix D/E.
 - Three evaluation settings: **ID** (2–5 km tail-chase), **dist2_3k** (hard close-range cell), **target_evasive** (`difficulty_level = 0.3`).
+- **All reported numbers are verified against version-controlled artifacts**; the per-number provenance record is Appendix E.
 
 ### 4.2 Diagnosis: CLR reveals a restrictive launch preference
 
@@ -718,7 +720,7 @@ python scripts/audit_paper_numbers.py           # recompute every headline numbe
 
 ---
 
-## Appendix E. Reproducibility material
+## Appendix E. Reproducibility and artifact provenance
 
 Supporting evidence for claims made in the main text. The reasoning each item supports is stated in the main text; what follows is the raw material needed to re-run or re-check it.
 

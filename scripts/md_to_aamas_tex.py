@@ -1,4 +1,9 @@
-"""Convert paper/small_paper_draft.md into an AAMAS-2026/27 LaTeX paper.
+"""Convert paper/small_paper_draft.md into AAMAS LaTeX sources.
+
+Produces TWO documents, and the split is the point:
+
+    paper/aamas_paper.tex       main paper: sections 1-5, the causal chain only
+    paper/aamas_supplement.tex  appendices B-E plus the provenance records
 
 WHY A CONVERTER RATHER THAN A HAND-TRANSCRIPTION
 ------------------------------------------------
@@ -6,29 +11,35 @@ The Markdown draft is the single source of truth: audit_paper_numbers.py guards
 the numbers in *it*, and the prose is edited there. Hand-copying it into .tex
 would create a second copy that silently drifts -- which is the exact failure
 this project has already been bitten by twice (the 43.2/91.2 pair, and the two
-CLR "diagnostic" rows that were labelled with the wrong geometry). Generating
-the .tex keeps one source and makes every rebuild reproducible:
+CLR diagnostic rows labelled with the wrong geometry).
 
-    python scripts/md_to_aamas_tex.py            # writes paper/aamas_paper.tex
-    bash   scripts/build_paper.sh                # compiles + audits the PDF text
+WHAT GOES WHERE, AND WHY
+------------------------
+The first AAMAS build (2026-09-19) put internal audit material in the submitted
+PDF: artifact provenance blockquotes, the ablation status tracker, superseded-
+number notes. That material is what makes the work trustworthy, and it belongs in
+supplementary material, not in the paper the reviewers read. So the converter
+routes it rather than leaving it to discipline:
 
-WHAT IT DOES
-------------
-Only the paper is emitted. Draft-only material is dropped by rule, not by hand:
-sections titled 6./7./8./9. are bookkeeping, and any blockquote marked
-"(internal, delete before submission)" is a note to the authors.
+  main        sections 1-5, tables, figures, no appendix
+  supplement  appendix sections, plus every provenance record collected out of
+              the body, under one heading
+
+The main text keeps a single sentence pointing at the supplement, so a reader who
+wants to check a number knows where it lives.
 
 Markdown constructs handled: ATX headings, paragraphs, bullet and numbered
-lists, bold/italic/code spans, pipe tables (rendered as booktabs tabular),
-blockquotes, and the Unicode symbols actually used in this draft. Anything it
-cannot classify is passed through escaped, so a compile error points at the one
-line that needs a human.
+lists, bold/italic/code spans, pipe tables (booktabs), blockquotes, and the
+Unicode symbols actually used in this draft. It FAILS, listing all of them at
+once, on any character pdflatex cannot typeset -- otherwise a symbol is either
+dropped silently or surfaced one per compile cycle.
 
-WHAT IT DELIBERATELY DOES NOT DO
---------------------------------
-No citation processing: the draft cites inline ("Li et al. (2024)"), so the
-baseline PDF has no bibliography yet. Converting to \\cite{} plus a .bib is a
-separate step, and pretending otherwise here would hide the remaining work.
+NOT DONE HERE
+-------------
+No citation processing: the draft cites inline, so the baseline has no
+bibliography. Converting to \\cite{} plus a .bib is a separate step, and the
+order matters -- BibTeX changes reference length and page breaks, so it comes
+after the page flow is settled.
 """
 
 from __future__ import annotations
@@ -41,7 +52,8 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     os.pardir))
 SRC = os.path.join(ROOT, "paper", "small_paper_draft.md")
-OUT = os.path.join(ROOT, "paper", "aamas_paper.tex")
+OUT_MAIN = os.path.join(ROOT, "paper", "aamas_paper.tex")
+OUT_SUPP = os.path.join(ROOT, "paper", "aamas_supplement.tex")
 
 TITLE = ("Diagnosing and Surgically Correcting Conservative Decision Bias "
          "in Imitation-Learned Air Combat Policies")
@@ -49,16 +61,23 @@ TITLE = ("Diagnosing and Surgically Correcting Conservative Decision Bias "
 KEYWORDS = ("imitation learning, behaviour cloning, expert-induced bias, "
             "causal identification, policy intervention, air combat")
 
-# Top-level draft sections that are project bookkeeping, not paper content.
+# Top-level draft sections that never reach either document: project bookkeeping.
 SKIP_SECTIONS = (
     "## 6.", "## 7.", "## 8.", "## 9.",
     "## Title Candidates", "## Appendix A.",
 )
 
-# Unicode seen in this draft -> LaTeX. Longest first so multi-char forms win.
+# A blockquote opening with one of these is an audit/provenance record: it is
+# collected out of the body and re-emitted in the supplement. "Citation status"
+# is on the list because the verified venue/page record is exactly the material
+# a .bib needs, and a reader of the paper must see [1] Pomerleau -- not the
+# authors' account of having previously got the citation wrong.
+PROVENANCE_PREFIXES = ("Artifact status", "**Artifact status", "Provenance",
+                       "Citation status", "**Citation status")
+
+# Unicode seen in this draft -> LaTeX. Multi-character forms first, so that
+# "chi^2" written with a superscript is not split into two separate objects.
 UNICODE = [
-    # Multi-character forms first: "χ²" must not be split into $\chi$ then $^2$,
-    # which compiles but reads as two separate objects.
     ("χ²", r"$\chi^2$"), ("χ2", r"$\chi^2$"),
     ("≈", r"$\approx$"), ("≥", r"$\geq$"), ("≤", r"$\leq$"),
     ("±", r"$\pm$"), ("≪", r"$\ll$"), ("≫", r"$\gg$"), ("⩽", r"$\leq$"),
@@ -69,7 +88,7 @@ UNICODE = [
     ("↓", r"$\downarrow$"), ("×", r"$\times$"), ("÷", r"$\div$"),
     ("·", r"$\cdot$"), ("⋅", r"$\cdot$"), ("∘", r"$\circ$"), ("√", r"$\sqrt{}$"),
     ("∑", r"$\sum$"), ("∂", r"$\partial$"), ("∫", r"$\int$"),
-    ("∼", r"$\sim$"), ("≈", r"$\approx$"), ("≡", r"$\equiv$"), ("≠", r"$\neq$"),
+    ("∼", r"$\sim$"), ("≡", r"$\equiv$"), ("≠", r"$\neq$"),
     ("∝", r"$\propto$"), ("µ", r"$\mu$"), ("μ", r"$\mu$"),
     ("°", r"$^\circ$"), ("θ", r"$\theta$"), ("Δ", r"$\Delta$"),
     ("α", r"$\alpha$"), ("ε", r"$\epsilon$"), ("λ", r"$\lambda$"),
@@ -111,9 +130,9 @@ def escape(text: str) -> str:
 
 def inline(text: str) -> str:
     """Inline markdown -> LaTeX, escaping everything not explicitly marked."""
-    # Unicode FIRST, before any span is stashed: a symbol sitting inside a code
-    # span (``hit_rate ≈ 0.997``) would otherwise be preserved verbatim inside
-    # \texttt{} and pdflatex would reject it as "Unicode character ≈ (U+2248)".
+    # Unicode FIRST, before any span is stashed: a symbol inside a code span
+    # would otherwise reach pdflatex verbatim inside \texttt{} and be rejected
+    # as "Unicode character ... is not set up for use with LaTeX".
     for src, dst in UNICODE:
         text = text.replace(src, dst)
 
@@ -124,29 +143,25 @@ def inline(text: str) -> str:
         return "\x00%d\x00" % (len(slots) - 1)
 
     text = CITE_RE.sub(lambda m: stash(r"\texttt{%s}" % escape(m.group(1))), text)
-    # Bold before italic so ** is not eaten by *.
-    text = re.sub(r"\*\*(.+?)\*\*", lambda m: stash(r"\textbf{%s}" % escape(m.group(1))), text)
+    text = re.sub(r"\*\*(.+?)\*\*",
+                  lambda m: stash(r"\textbf{%s}" % escape(m.group(1))), text)
     text = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)",
                   lambda m: stash(r"\emph{%s}" % escape(m.group(1))), text)
 
     text = escape(text)
-    text = text.replace(r"\$", "$")          # math delimiters we introduced
-    # Resolve to a fixed point, not in one pass: a bold span containing a code
-    # span stores the inner placeholder inside the outer slot's payload, so a
-    # single re.sub leaves the inner one unresolved and a raw NUL reaches the
-    # .tex -- which pdflatex reports as "Text line contains an invalid
-    # character" at the line of the enclosing phrase, with no hint that a
-    # converter placeholder is at fault.
+    text = text.replace(r"\$", "$")
+    # Fixed point, not one pass: a bold span containing a code span stores the
+    # inner placeholder inside the outer slot, so a single re.sub leaves a raw
+    # NUL in the .tex -- reported by pdflatex only as "invalid character" on the
+    # enclosing phrase's line.
     for _ in range(10):
         if not re.search(r"\x00\d+\x00", text):
             break
         text = re.sub(r"\x00(\d+)\x00", lambda m: slots[int(m.group(1))], text)
     if "\x00" in text:
-        # Never emit a control character silently.
         print("WARNING: unresolved inline placeholder in: %r" % text[:120])
         text = text.replace("\x00", "")
-    text = re.sub(r"\s{2,}", " ", text)
-    return text.strip()
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def split_row(line: str) -> list[str]:
@@ -160,15 +175,12 @@ def is_sep_row(line: str) -> bool:
 def table_to_latex(rows: list[list[str]], caption: str | None, label: str) -> str:
     ncols = max(len(r) for r in rows)
     spec = "l" + "r" * (ncols - 1) if ncols > 1 else "l"
-    # Wide tables must span both columns. A 4+ column table inside one column of
-    # a two-column layout overflows by hundreds of points and -- worse than ugly
-    # -- pdftotext shows the cell contents breaking mid-token, so "3.79e-11"
-    # extracts as "3.79" on one line and "e-11" on another. That is a number
-    # corrupted by typesetting, which is precisely what the PDF text audit
-    # exists to catch (found on the first build, 2026-09-19).
+    # Wide tables span both columns. A 4+ column table inside one column
+    # overflows by hundreds of points and -- worse -- pdftotext shows cells
+    # breaking mid-token, so "3.79e-11" extracts as "3.79" then "e-11". A number
+    # corrupted by typesetting is exactly what the PDF text audit is for.
     wide = ncols >= 4
     env = "table*" if wide else "table"
-    size = r"\footnotesize" if wide else r"\small"
     body = []
     for i, row in enumerate(rows):
         cells = [inline(c) for c in row] + [""] * (ncols - len(row))
@@ -177,70 +189,67 @@ def table_to_latex(rows: list[list[str]], caption: str | None, label: str) -> st
             body.append(r"\midrule")
     cap = r"\caption{%s}" % inline(caption) if caption else ""
     return "\n".join([
-        r"\begin{%s}[t]" % env,
-        r"\centering",
-        size,
-        cap,
-        r"\label{%s}" % label,
-        r"\begin{tabular}{%s}" % spec,
-        r"\toprule",
-        *body,
-        r"\bottomrule",
-        r"\end{tabular}",
-        r"\end{%s}" % env,
+        r"\begin{%s}[t]" % env, r"\centering",
+        r"\footnotesize" if wide else r"\small",
+        cap, r"\label{%s}" % label,
+        r"\begin{tabular}{%s}" % spec, r"\toprule",
+        *body, r"\bottomrule", r"\end{tabular}", r"\end{%s}" % env,
     ])
 
 
-def flush_table(rows: list[list[str]], out: list[str], caption: str | None,
-                counter: list[int]) -> None:
-    if not rows:
-        return
-    counter[0] += 1
-    out.append(table_to_latex(rows, caption, "tab:auto%d" % counter[0]))
-    out.append("")
-
-
-def convert(md: str) -> tuple[str, list[str]]:
+def convert(md: str) -> tuple[str, str, list[str], list[str]]:
+    """Return (body_tex, appendix_tex, provenance_records, notes)."""
     lines = md.splitlines()
-    out: list[str] = []
+    sinks = {"body": [], "appendix": []}
+    sink = sinks["body"]
     notes: list[str] = []
+    provenance: list[str] = []
     i = 0
     in_skip = False
+    in_appendix = False
     pending_caption: str | None = None
     table_rows: list[list[str]] = []
+    drop_table = False
     counter = [0]
     list_mode: str | None = None
 
     def close_list() -> None:
         nonlocal list_mode
         if list_mode:
-            out.append(r"\end{%s}" % list_mode)
-            out.append("")
+            sink.append(r"\end{%s}" % list_mode)
+            sink.append("")
             list_mode = None
 
+    def emit_table() -> None:
+        nonlocal table_rows, pending_caption, drop_table
+        if table_rows and not drop_table:
+            counter[0] += 1
+            sink.append(table_to_latex(table_rows, pending_caption,
+                                       "tab:auto%d" % counter[0]))
+            sink.append("")
+        table_rows, pending_caption, drop_table = [], None, False
+
     while i < len(lines):
-        raw = lines[i]
-        line = raw.rstrip()
+        line = lines[i].rstrip()
         stripped = line.strip()
 
-        # --- section gating -------------------------------------------------
+        # --- section gating and sink switching ------------------------------
         if stripped.startswith("## "):
             close_list()
-            flush_table(table_rows, out, pending_caption, counter)
-            table_rows, pending_caption = [], None
+            emit_table()
             in_skip = any(stripped.startswith(s) for s in SKIP_SECTIONS)
+            if stripped.startswith("## Appendix") and not in_skip:
+                in_appendix = True
+                sink = sinks["appendix"]
             if in_skip:
                 notes.append("skipped section: %s" % stripped)
             else:
-                # Emit the section. Numbering is stripped because LaTeX numbers
-                # it; appendix letters are KEPT in the title because the prose
-                # cross-references them by letter ("Appendix E.2"), and letting
-                # \appendix renumber them would silently invalidate every such
-                # reference.
-                title = stripped[3:].strip()
-                title = re.sub(r"^\d+\.\s*", "", title)
-                out.append(r"\section{%s}" % inline(title))
-                out.append("")
+                title = re.sub(r"^\d+\.\s*", "", stripped[3:].strip())
+                # Appendix letters stay in the title: the prose cross-references
+                # them by letter ("Appendix E.2"), so renumbering would silently
+                # invalidate every such reference.
+                sink.append(r"\section{%s}" % inline(title))
+                sink.append("")
             i += 1
             continue
 
@@ -248,151 +257,164 @@ def convert(md: str) -> tuple[str, list[str]]:
             i += 1
             continue
 
-        # --- internal notes are dropped by rule -----------------------------
-        if stripped.startswith(">") and "internal" in stripped.lower():
-            notes.append("dropped internal note at source line %d" % (i + 1))
+        # --- internal notes and provenance records --------------------------
+        if stripped.startswith(">"):
+            # A contiguous run of ">" lines can hold MORE THAN ONE paragraph,
+            # and they can have different fates: the citation-verification record
+            # is worth keeping (it is the raw material for the .bib) while the
+            # revision log one line below it must be dropped. Treating the run as
+            # a single block discarded both as soon as any line mentioned
+            # "internal" -- caught 2026-09-19, when the Citation status record
+            # vanished from both output documents.
+            block: list[str] = []
             while i < len(lines) and lines[i].strip().startswith(">"):
+                block.append(lines[i].strip().lstrip("> ").strip())
                 i += 1
+            paragraph: list[str] = []
+            for piece in block + [""]:
+                if piece:
+                    paragraph.append(piece)
+                    continue
+                if not paragraph:
+                    continue
+                joined = " ".join(paragraph)
+                paragraph = []
+                if "internal" in joined.lower():
+                    notes.append("dropped an internal note")
+                elif in_appendix:
+                    sink.append(inline(joined))
+                    sink.append("")
+                elif joined.lstrip("*").startswith(PROVENANCE_PREFIXES):
+                    provenance.append(joined)
+                    notes.append("routed a provenance record to the supplement")
+                else:
+                    sink.append(inline(joined))
+                    sink.append("")
             continue
 
-        # --- abstract and headings -----------------------------------------
         if stripped.startswith("# Small Paper Draft") or stripped == "---":
             i += 1
             continue
         if stripped.startswith("### "):
             close_list()
-            flush_table(table_rows, out, pending_caption, counter)
-            table_rows, pending_caption = [], None
             sub = re.sub(r"^\d+(\.\d+)?\s*", "", stripped[4:].strip())
-            out.append(r"\subsection{%s}" % inline(sub))
-            out.append("")
-            i += 1
-            continue
-        if stripped.startswith("## "):
+            sink.append(r"\subsection{%s}" % inline(sub))
+            sink.append("")
             i += 1
             continue
 
-        # --- tables ---------------------------------------------------------
+        # --- tables ----------------------------------------------------------
         if stripped.startswith("|"):
             if is_sep_row(stripped):
                 i += 1
                 continue
-            table_rows.append(split_row(stripped))
-            # A caption is the last non-empty prose line before the table.
-            j = len(out) - 1
-            while j >= 0 and out[j] == "":
+            row = split_row(stripped)
+            if any("internal" in c.lower() for c in row):
+                # An internal tracker row means the whole table is bookkeeping.
+                drop_table = True
+                notes.append("dropped an internal status table")
+            else:
+                table_rows.append(row)
+            j = len(sink) - 1
+            while j >= 0 and sink[j] == "":
                 j -= 1
-            if pending_caption is None and j >= 0:
-                cand = out[j]
-                if cand.startswith(("**Table", "**Measured", "**Same", "*(", "**Pair")):
+            if pending_caption is None and not drop_table and j >= 0:
+                cand = sink[j]
+                if cand.startswith(("**Table", "**Measured", "**Same", "*(",
+                                    "**Pair")):
                     pending_caption = cand
-                    out[j] = ""
+                    sink[j] = ""
             i += 1
             continue
-        flush_table(table_rows, out, pending_caption, counter)
-        table_rows, pending_caption = [], None
+        emit_table()
 
-        # --- lists ----------------------------------------------------------
+        # --- lists -----------------------------------------------------------
         if re.match(r"^[-*] ", stripped):
             if list_mode != "itemize":
                 close_list()
-                out.append(r"\begin{itemize}")
+                sink.append(r"\begin{itemize}")
                 list_mode = "itemize"
-            out.append(r"  \item %s" % inline(stripped[2:]))
+            sink.append(r"  \item %s" % inline(stripped[2:]))
             i += 1
             continue
         if re.match(r"^\d+\. ", stripped):
             if list_mode != "enumerate":
                 close_list()
-                out.append(r"\begin{enumerate}")
+                sink.append(r"\begin{enumerate}")
                 list_mode = "enumerate"
-            out.append(r"  \item %s" % inline(re.sub(r"^\d+\. ", "", stripped)))
+            sink.append(r"  \item %s" % inline(re.sub(r"^\d+\. ", "", stripped)))
             i += 1
             continue
-        if re.match(r"^\s+[-*] ", raw) and list_mode:
-            out.append(r"  \begin{itemize}")
-            out.append(r"    \item %s" % inline(stripped[2:]))
+        if re.match(r"^\s+[-*] ", line) and list_mode:
+            sink.append(r"  \begin{itemize}")
+            sink.append(r"    \item %s" % inline(stripped[2:]))
             i += 1
             continue
 
         if stripped == "":
             close_list()
-            if out and out[-1] != "":
-                out.append("")
+            if sink and sink[-1] != "":
+                sink.append("")
             i += 1
             continue
 
-        # --- ordinary paragraph --------------------------------------------
-        close_list()
-        if stripped.startswith(">"):
-            body = stripped.lstrip("> ").strip()
-            if body:
-                out.append(inline(body))
-                out.append("")
-            i += 1
-            continue
         if stripped.startswith("```"):
             i += 1
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 i += 1
             i += 1
             continue
-        out.append(inline(stripped))
-        out.append("")
+
+        close_list()
+        sink.append(inline(stripped))
+        sink.append("")
         i += 1
 
     close_list()
-    flush_table(table_rows, out, pending_caption, counter)
-    return "\n".join(out), notes
+    emit_table()
+    return ("\n".join(sinks["body"]), "\n".join(sinks["appendix"]),
+            provenance, notes)
 
 
-def main() -> int:
-    md = io.open(SRC, encoding="utf-8").read()
-
-    # The abstract is its own draft section; take it verbatim.
-    m = re.search(r"## Abstract[^\n]*\n\n(.*?)\n\n>", md, re.S)
-    abstract = inline(m.group(1)) if m else "ABSTRACT NOT FOUND"
-
-    # Body = everything from the Introduction on.
-    start = md.index("## 1. Introduction")
-    body_md = md[start:]
-    body_tex, notes = convert(body_md)
-
-    tex = f"""%% Generated by scripts/md_to_aamas_tex.py -- edit paper/small_paper_draft.md
-%% and regenerate. Do not edit this file by hand; the Markdown is the source of
+PREAMBLE = r"""%% Generated by scripts/md_to_aamas_tex.py -- edit paper/small_paper_draft.md
+%% and regenerate. Do not edit this file by hand: the Markdown is the source of
 %% truth that audit_paper_numbers.py guards.
-\\documentclass[sigconf,anonymous]{{aamas}}
+\documentclass[sigconf,anonymous]{{aamas}}
 
-\\usepackage{{balance}}
-\\usepackage{{booktabs}}
-\\usepackage{{graphicx}}
-\\usepackage{{amsmath}}
-%% aamas.cls (like acmart) already defines \\Bbbk; amssymb redefines it and
-%% aborts the build. \\let\\Bbbk\\relax is the workaround the official AAMAS
-%% template uses, so keep it between the two packages.
-\\let\\Bbbk\\relax
-\\usepackage{{amssymb}}
-\\usepackage{{stfloats}}
-\\usepackage{{url}}
+\usepackage{{balance}}
+\usepackage{{booktabs}}
+\usepackage{{graphicx}}
+\usepackage{{amsmath}}
+%% aamas.cls (like acmart) already defines \Bbbk; amssymb redefines it and
+%% aborts the build. \let\Bbbk\relax is the workaround the official template
+%% uses, so keep it between the two packages.
+\let\Bbbk\relax
+\usepackage{{amssymb}}
+\usepackage{{stfloats}}
+\usepackage{{url}}
 
-\\setcopyright{{ifaamas}}
-\\acmConference[AAMAS '27]{{Proc.\\@ of the 26th International Conference on
+\setcopyright{{ifaamas}}
+\acmConference[AAMAS '27]{{Proc.\@ of the 26th International Conference on
   Autonomous Agents and Multiagent Systems (AAMAS 2027)}}{{May 2027}}{{}}{{ }}
-\\copyrightyear{{2027}}
-\\acmYear{{2027}}
-\\acmDOI{{}}
-\\acmPrice{{}}
-\\acmISBN{{}}
-\\acmSubmissionID{{000}}
+\copyrightyear{{2027}}
+\acmYear{{2027}}
+\acmDOI{{}}
+\acmPrice{{}}
+\acmISBN{{}}
+\acmSubmissionID{{000}}
 
-\\begin{{document}}
+\begin{{document}}
 
-\\title[{TITLE}]{TITLE}
+\title[{title}]{{{title}}}
 
-\\author{{Anonymous}}
-\\affiliation{{\\institution{{Anonymous submission}}\\city{{}}\\country{{}}}}
-\\email{{anon@example.com}}
+\author{{Anonymous}}
+\affiliation{{\institution{{Anonymous submission}}\city{{}}\country{{}}}}
+\email{{anon@example.com}}
+"""
 
+
+def build_main(abstract: str, body: str) -> str:
+    return PREAMBLE.format(title=TITLE) + f"""
 \\begin{{abstract}}
 {abstract}
 \\end{{abstract}}
@@ -401,23 +423,62 @@ def main() -> int:
 
 \\maketitle
 
-{body_tex}
+{body}
 
 \\balance
 \\end{{document}}
 """
 
-    io.open(OUT, "w", encoding="utf-8").write(tex)
-    print("wrote %s (%d lines, %d chars)" % (OUT, tex.count("\n") + 1, len(tex)))
+
+def build_supplement(appendix: str, provenance: list[str]) -> str:
+    supp_title = "Supplementary Material: " + TITLE
+    records = "\n\n".join(inline(p) for p in provenance) if provenance else \
+        "No provenance records were collected from the body."
+    return PREAMBLE.format(title=supp_title) + f"""
+\\begin{{abstract}}
+Supplementary material for the paper above. Section E records the provenance of
+every number quoted in the main text; nothing here is required in order to
+follow the argument.
+\\end{{abstract}}
+
+\\keywords{{reproducibility, provenance}}
+
+\\maketitle
+
+{appendix}
+
+\\section{{Appendix E.6: Artifact provenance records}}
+The records below were collected out of the main text, where they interrupted the
+argument. Each states which artifact backs which claim.
+
+{records}
+
+\\balance
+\\end{{document}}
+"""
+
+
+def main() -> int:
+    md = io.open(SRC, encoding="utf-8").read()
+
+    m = re.search(r"## Abstract[^\n]*\n\n(.*?)\n\n>", md, re.S)
+    abstract = inline(m.group(1)) if m else "ABSTRACT NOT FOUND"
+
+    body, appendix, provenance, notes = convert(md[md.index("## 1. Introduction"):])
+    main_tex = build_main(abstract, body)
+    supp_tex = build_supplement(appendix, provenance)
+
+    io.open(OUT_MAIN, "w", encoding="utf-8").write(main_tex)
+    io.open(OUT_SUPP, "w", encoding="utf-8").write(supp_tex)
+    print("wrote %s (%d lines)" % (OUT_MAIN, main_tex.count("\n") + 1))
+    print("wrote %s (%d lines)" % (OUT_SUPP, supp_tex.count("\n") + 1))
     for n in notes:
         print("  " + n)
 
-    # Fail loudly on any character pdflatex cannot typeset, and list ALL of them
-    # at once. Without this the build surfaces one symbol per compile, which
-    # turns a two-minute fix into a dozen compile cycles -- and worse, a symbol
-    # could be silently dropped and reach the PDF as a gap nobody notices.
+    # Fail loudly on any character pdflatex cannot typeset, listing ALL of them:
+    # otherwise a symbol is dropped silently, or surfaced one per compile cycle.
     leftover: dict[str, int] = {}
-    for ch in tex:
+    for ch in main_tex + supp_tex:
         if ord(ch) > 127:
             leftover[ch] = leftover.get(ch, 0) + 1
     if leftover:
