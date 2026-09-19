@@ -51,6 +51,11 @@ FORBIDDEN_TEXT = [
     (r"\bDONE\b", "status marker"),
     (r"Sean", "author name in the paper"),
     (r"措辞纪律|内部|待办", "Chinese working note"),
+    # A bibliography entry whose title could not be verified carries this
+    # placeholder rather than an invented title, and BibTeX renders the field
+    # literally -- so the marker reaching the PDF is exactly what this check is
+    # for, not an inconvenience to be suppressed.
+    (r"TITLE-TO-VERIFY", "unverified bibliography entry"),
 ]
 
 # Structural checks, run against the .tex: appendix material is unambiguous
@@ -68,6 +73,27 @@ def pages(pdf: str) -> int:
     return int(m.group(1)) if m else -1
 
 
+def body_pages(txt_path: str, pdf_pages: int) -> int:
+    """Pages before the reference list, which AAMAS excludes from the limit.
+
+    AAMAS allows "at most 8 pages, with any number of additional pages containing
+    bibliographic references", so the PDF total is the wrong number to test. On
+    2026-09-19 the total became 9 the moment a bibliography was added while the
+    body stayed at 8 -- a compliant paper reported as a failure. The boundary is
+    found from the reference numbering itself, since "References" as a heading is
+    indistinguishable from a citation to a section of that name.
+    """
+    if not os.path.exists(txt_path):
+        return pdf_pages
+    pages = [p for p in io.open(txt_path, encoding="utf-8").read().split("\f")
+             if p.strip()]
+    ref_re = re.compile(r"^\s*\[\d+\]\s+\S")
+    for n, page in enumerate(pages, 1):
+        if any(ref_re.match(l) for l in page.splitlines()):
+            return n          # the reference list shares this page with the body
+    return pdf_pages
+
+
 def main() -> int:
     problems = 0
 
@@ -79,15 +105,17 @@ def main() -> int:
         print("FAIL: no main PDF at %s" % main_pdf)
         return 1
 
-    n = pages(main_pdf)
+    n_total = pages(main_pdf)
+    n = body_pages(main_txt, n_total)
     if n < 0:
         print("FAIL: could not read the page count")
         problems += 1
     elif n > LIMIT:
-        print("FAIL: main paper is %d pages, limit is %d" % (n, LIMIT))
+        print("FAIL: body is %d pages, limit is %d" % (n, LIMIT))
         problems += 1
     else:
-        print("OK  : main paper %d pages (limit %d)" % (n, LIMIT))
+        print("OK  : body %d page(s) + %d page(s) of references, limit %d"
+              % (n, max(0, n_total - n + 1), LIMIT))
 
     if os.path.exists(supp_pdf):
         print("OK  : supplement present and separate (%d pages)" % pages(supp_pdf))

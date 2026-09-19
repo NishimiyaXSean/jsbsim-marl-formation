@@ -99,25 +99,25 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 \subsection{Imitation learning and expert demonstration}
 
 \begin{itemize}
-  \item \textbf{BC and its standard pathology.} Cloning a demonstrated policy by supervised learning goes back to ALVINN (Pomerleau, NIPS 1:305-313, 1989 [verify year]) and was scaled to end-to-end driving by Bojarski et al. (arXiv:1604.07316, 2016). The canonical account of its failure mode is DAgger (Ross, Gordon \& Bagnell, AISTATS 2011), which attributes the failure to \textbf{distribution shift / compounding error} between the learner's and the expert's state visitation.
+  \item \textbf{BC and its standard pathology.} Cloning a demonstrated policy by supervised learning goes back to ALVINN \cite{pomerleau1989alvinn} and was scaled to end-to-end driving by Bojarski et al. \cite{bojarski2016end}. The canonical account of its failure mode is DAgger \cite{ross2011dagger}, which attributes the failure to \textbf{distribution shift / compounding error} between the learner's and the expert's state visitation.
   \item \textbf{Core sentence.} \emph{Existing IL methods usually assume the demonstrations are informative and near-optimal; the learner's objective is fidelity to the expert.}
-  \item \textbf{The literature that does relax optimality relaxes it as a scalar.} T-REX learns a reward from ranked suboptimal demonstrations (Brown, Goo, Nagarajan \& Niekum, ICML 2019, pp. 783-792); LERP models suboptimality as reward noise (Huo, Wang \& Xu, AAAI 2023, pp. 7953-7961); IRLEED models a demonstrator's suboptimality as \emph{reward bias plus action variance} (Beliaev \& Pedarsani, arXiv:2402.01886, 2024); IL-from-imperfection reweights supplementary suboptimal data (Li, Xu, Qin, Yu \& Luo, NeurIPS 2023). In every case suboptimality is a \textbf{scalar quality} to be estimated, ranked, or down-weighted.
+  \item \textbf{The literature that does relax optimality relaxes it as a scalar.} T-REX learns a reward from ranked suboptimal demonstrations \cite{brown2019trex}; LERP models suboptimality as reward noise \cite{huo2023lerp}; IRLEED models a demonstrator's suboptimality as \emph{reward bias plus action variance} \cite{beliaev2025irleed}; IL-from-imperfection reweights supplementary suboptimal data \cite{li2023imperfect}. In every case suboptimality is a \textbf{scalar quality} to be estimated, ranked, or down-weighted.
   \item \textbf{Our gap.} \emph{What if the expert's suboptimality is not scalar but structural - a single, nameable decision gate that the environment does not require?} A scalar quality cannot recover it: the defect is invisible in task-level success statistics (\textbackslash{}S{}4.2) and costly only in closed loop. We do not down-weight the expert; we \textbf{localize} the gate and correct exactly it.
 \end{itemize}
 
 \subsection{Policy distillation and model editing}
 
 \begin{itemize}
-  \item Knowledge distillation into a student (Hinton, Vinyals \& Dean, NIPS 2014 Deep Learning Workshop, arXiv:1503.02531), policy distillation (Rusu, Gomez Colmenarejo, Gulcehre et al., ICLR 2016, arXiv:1511.06295), and Actor-Mimic (Parisotto, Ba \& Salakhutdinov, ICLR 2016, arXiv:1511.06342) all \textbf{transfer or compress a policy globally}, with fidelity to the teacher as the objective.
-  \item Parameter-efficient adaptation (LoRA; Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang \& Chen, ICLR 2022, arXiv:2106.09685) and model editing (ROME; Meng, Bau, Andonian \& Belinkov, NeurIPS 2022, arXiv:2202.05262, pp. 17359-17372) do modify a small subspace while freezing the remainder - but they edit \textbf{learned knowledge} and evaluate by task success, not by attributing a residual to one behavioural dimension.
+  \item Knowledge distillation into a student \cite{hinton2014distilling}, policy distillation \cite{rusu2016policy}, and Actor-Mimic \cite{parisotto2016actormimic} all \textbf{transfer or compress a policy globally}, with fidelity to the teacher as the objective.
+  \item Parameter-efficient adaptation (LoRA \cite{hu2022lora}) and model editing (ROME \cite{meng2022rome}) do modify a small subspace while freezing the remainder - but they edit \textbf{learned knowledge} and evaluate by task success, not by attributing a residual to one behavioural dimension.
   \item \textbf{Core sentence.} \emph{Existing approaches transfer or modify policies globally; we study localized correction of a single decision dimension, and we use the freezing itself as a causal identification device.} The distinction from distillation is precise: SPC's objective is \textbf{not} to approach the teacher but to \textbf{selectively depart} from it on one head. Freezing is not an engineering convenience here - it is the identification strategy (\textbackslash{}S{}4.4).
 \end{itemize}
 
 \subsection{Autonomous air combat decision-making}
 
 \begin{itemize}
-  \item \textbf{Closest neighbours, stated plainly.} Li et al. (Neurocomputing 584:127591, 2024) learn a within-visual-range 6-DOF combat policy whose top layer decides autopilot commands \textbf{and missile launch}, with BC and PPO cross-coordinated. Li et al. (ACM TAAS 21(1):6:1-6:20, 2026) learn a "pursuit-lock-launch" policy with TD3 + BC and an adaptive imitation weight in Harfang3D. Both clone a launch decision from demonstrations in a WVR missile-engagement setting.
-  \item \textbf{Where we differ - two ways, both load-bearing.} (i) They treat the expert as a \textbf{bootstrap to be surpassed}; we treat it as an \textbf{object of diagnosis}, and we keep the maneuver provably frozen so the residual is attributed to the launch head rather than to aggregate learning. (ii) Their success criterion is aggregate task success; we add a \textbf{conditional} criterion (CLR) that exposes failures aggregate success hides. Notably, Li et al. (2026) present selective firing as a virtue - their policy "fires only when a hit was highly probable rather than spamming launches" - the \textbf{opposite prior} to the one this paper tests, and in our regime the measurement goes the other way (\textbackslash{}S{}4.3).
+  \item \textbf{Closest neighbours, stated plainly.} Li et al. \cite{li2024cross} learn a within-visual-range 6-DOF combat policy whose top layer decides autopilot commands \textbf{and missile launch}, with BC and PPO cross-coordinated. Li et al. \cite{li2026imitative} learn a "pursuit-lock-launch" policy with TD3 + BC and an adaptive imitation weight in Harfang3D. Both clone a launch decision from demonstrations in a WVR missile-engagement setting.
+  \item \textbf{Where we differ - two ways, both load-bearing.} (i) They treat the expert as a \textbf{bootstrap to be surpassed}; we treat it as an \textbf{object of diagnosis}, and we keep the maneuver provably frozen so the residual is attributed to the launch head rather than to aggregate learning. (ii) Their success criterion is aggregate task success; we add a \textbf{conditional} criterion (CLR) that exposes failures aggregate success hides. Notably, Li et al. \cite{li2026imitative} present selective firing as a virtue - their policy "fires only when a hit was highly probable rather than spamming launches" - the \textbf{opposite prior} to the one this paper tests, and in our regime the measurement goes the other way (\textbackslash{}S{}4.3).
 \end{itemize}
 
 \section{Method (1.5 pages)}
@@ -524,6 +524,11 @@ SPC (launch head only) & \textbf{90.75\%} (363/400), CLR 100.00\% & reference \\
 
 We do \textbf{not} claim that the mask-permissive policy is optimal in general. We claim that \textbf{a behaviorally isolated intervention reveals the inherited launch policy to be suboptimal in the studied regime}: with the maneuver policy provably frozen (\texttt{max logit diff < 1e-9}, identical action sequences), correcting the launch head alone raises the kill rate from 46.50\% to 90.75\% on 400 paired seeds (+44.25 pp, exact McNemar p = 1.04e-53, with all 177 discordant seeds favouring the correction and none favouring the original), and off-policy enumeration on a fixed maneuver trajectory shows the inherited launch policy to be dominated by the mask-permissive policy within the enumerated fire-policy family.
 
+
+%% ACM-Reference-Format is the bibliography style the aamas class ships with;
+%% references are excluded from the 8-page limit, so the list may run past it.
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{references}
 
 \balance
 \end{document}

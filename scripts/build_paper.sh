@@ -57,6 +57,8 @@ build_one() {
   cp -f "$REPO"/results/shoot_eval/framework_fig1.pdf   "$BUILD_DIR/" 2>/dev/null || true
   cp -f "$REPO"/results/shoot_eval/robustness_fig3.pdf   "$BUILD_DIR/" 2>/dev/null || true
   cp -f "$REPO"/results/shoot_eval/mechanism_seed20007_d00.png "$BUILD_DIR/" 2>/dev/null || true
+  # The bibliography, for the same reason.
+  cp -f "$REPO"/paper/references.bib "$BUILD_DIR/" 2>/dev/null || true
 
   cp -f "$TEX" "$BUILD_DIR/$BASE.tex"
   cd "$BUILD_DIR"
@@ -67,12 +69,20 @@ build_one() {
     latexmk -pdf -interaction=nonstopmode -halt-on-error "$BASE.tex" > latexmk.log 2>&1 || {
       echo "  BUILD FAILED. Errors:"; grep -nE '^!|^l\.[0-9]+' latexmk.log | head -n 25; return 1; }
   else
-    echo "  driver: pdflatex x3 (latexmk not installed)"
+    echo "  driver: pdflatex x3 + bibtex (latexmk not installed)"
+    # bibtex belongs between passes: pass 1 writes the .aux with the citation
+    # keys, bibtex turns those into .bbl, and passes 2-3 resolve the resulting
+    # labels. Skipping it leaves every \cite{} as "[?]".
     for pass in 1 2 3; do
       if ! pdflatex -interaction=nonstopmode -halt-on-error "$BASE.tex" > "pass$pass.log" 2>&1; then
         echo "  BUILD FAILED on pass $pass. Errors:"
         grep -nE '^!|^l\.[0-9]+' "pass$pass.log" | head -n 25
         return 1
+      fi
+      if [ "$pass" = "1" ] && [ -f "$BASE.aux" ]; then
+        bibtex "$BASE" > bibtex.log 2>&1 || {
+          echo "  BIBTEX reported problems (citations may render as [?]):"
+          grep -nE 'error|warning|I couldn' bibtex.log | head -n 15; }
       fi
     done
   fi

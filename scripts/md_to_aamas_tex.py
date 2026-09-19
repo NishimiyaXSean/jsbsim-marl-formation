@@ -104,6 +104,13 @@ UNICODE = [
 
 CITE_RE = re.compile(r"`([^`]+)`")
 
+# Citation marker: [@key] or [@key1,key2] in the Markdown becomes \cite{...}.
+# A marker rather than auto-detecting "Author (Venue, Year)" strings, because the
+# same paper is cited in several prose forms ("Li et al. (2024)",
+# "Li et al. (2026) present ...") and only an explicit key mapping keeps them on
+# one bibliography entry.
+BIBKEY_RE = re.compile(r"\[@([A-Za-z0-9_,]+)\]")
+
 # Figure directive, written in the Markdown where the figure belongs:
 #     [[figure: file.png | wide | caption text]]
 # "wide" spans both columns, anything else stays in one. The file is resolved
@@ -167,6 +174,8 @@ def inline(text: str) -> str:
             body = body.replace("-", r"-\allowbreak{}")
         return r"\texttt{%s}" % body
 
+    # Citations first, so their braces are never touched by the escaping below.
+    text = BIBKEY_RE.sub(lambda m: stash(r"\cite{%s}" % m.group(1)), text)
     text = CITE_RE.sub(lambda m: stash(corpus(m.group(1))), text)
     text = re.sub(r"\*\*(.+?)\*\*",
                   lambda m: stash(r"\textbf{%s}" % escape(m.group(1))), text)
@@ -578,6 +587,11 @@ def build_main(abstract: str, body: str) -> str:
 \\maketitle
 
 {body}
+
+%% ACM-Reference-Format is the bibliography style the aamas class ships with;
+%% references are excluded from the 8-page limit, so the list may run past it.
+\\bibliographystyle{{ACM-Reference-Format}}
+\\bibliography{{references}}
 
 \\balance
 \\end{{document}}
