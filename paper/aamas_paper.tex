@@ -111,8 +111,6 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 \begin{itemize}
   \item \textbf{Closest neighbours, stated plainly.} Li et al. (Neurocomputing 584:127591, 2024) learn a within-visual-range 6-DOF combat policy whose top layer decides autopilot commands \textbf{and missile launch}, with BC and PPO cross-coordinated. Li et al. (ACM TAAS 21(1):6:1-6:20, 2026) learn a "pursuit-lock-launch" policy with TD3 + BC and an adaptive imitation weight in Harfang3D. Both clone a launch decision from demonstrations in a WVR missile-engagement setting.
   \item \textbf{Where we differ - two ways, both load-bearing.} (i) They treat the expert as a \textbf{bootstrap to be surpassed}; we treat it as an \textbf{object of diagnosis}, and we keep the maneuver provably frozen so the residual is attributed to the launch head rather than to aggregate learning. (ii) Their success criterion is aggregate task success; we add a \textbf{conditional} criterion (CLR) that exposes failures aggregate success hides. Notably, Li et al. (2026) present selective firing as a virtue - their policy "fires only when a hit was highly probable rather than spamming launches" - the \textbf{opposite prior} to the one this paper tests, and in our regime the measurement goes the other way (\textbackslash{}S{}4.3).
-  \item Background only, kept short: approximate dynamic programming for air combat (McGrew, How, Williams \& Roy, JGCD 33(5):1641-1654, 2010); hierarchical maximum-entropy RL for an F-16 in within-visual-range combat (Pope et al., ICUAS 2021, pp. 275-284, arXiv:2105.00990); short-range UAV maneuver decisions via deep RL (Yang, Zhang, Shi, Hu \& Wu, IEEE Access 8:363-378, 2020). JSBSim is the open-source flight-dynamics model underneath all of these.
-  \item \textbf{Constraint.} This subsection stays under half a page. It is scene-setting, not contribution positioning: a reviewer should enter this paper through \textbackslash{}S{}2.1/\textbackslash{}S{}2.2, not file it as another air-combat RL paper.
 \end{itemize}
 
 \section{Method (1.5 pages)}
@@ -325,7 +323,7 @@ Three things follow:
   \item \textbf{Cell and difficulty were separated, not conflated.} An earlier reading of this run compared it against the \texttt{dist2\_3k} table in \textbackslash{}S{}4.3 and would have attributed part of the difference to evasion when it was actually the 2--3 km range restriction. The matched pair above removes that confound.
 \end{enumerate}
 
-\subsection{b Figure 2 --- the mechanism, made visible}
+\subsection{Figure 2 --- the mechanism, made visible}
 
 \textbf{Figure 2} (\texttt{results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}mechanism\_\allowbreak{}seed20007\_\allowbreak{}d00.png}) shows one matched episode (seed 20007, d=0) played by BC and by SPC, with everything else held identical.
 

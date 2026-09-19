@@ -396,7 +396,10 @@ def convert(md: str) -> tuple[str, str, list[str], list[str]]:
             continue
         if stripped.startswith("### "):
             close_list()
-            sub = re.sub(r"^\d+(\.\d+)?\s*", "", stripped[4:].strip())
+            # Strip "3.1", "4.3b" and similar draft numbering: LaTeX numbers the
+            # heading itself, and leaving the draft's own label in produces
+            # "b Figure 2 --- the mechanism" in the PDF.
+            sub = re.sub(r"^\d+(\.\d+)*[a-z]?\s*", "", stripped[4:].strip())
             sink.append(r"\subsection{%s}" % inline(sub))
             sink.append("")
             i += 1
