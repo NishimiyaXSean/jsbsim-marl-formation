@@ -142,7 +142,24 @@ def inline(text: str) -> str:
         slots.append(payload)
         return "\x00%d\x00" % (len(slots) - 1)
 
-    text = CITE_RE.sub(lambda m: stash(r"\texttt{%s}" % escape(m.group(1))), text)
+    def corpus(payload: str) -> str:
+        """Render a code span, inserting break opportunities in long tokens.
+
+        TeX will not break inside \\texttt by default, and the escaped
+        underscore (\\_) is not a break point either, so an artifact path such as
+        results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json overflows its column
+        by 20-40pt. \\allowbreak after each separator gives TeX legal places to
+        break without changing what the reader sees. Only applied to long spans:
+        a short \\texttt{a\\_fire} should never be split.
+        """
+        body = escape(payload)
+        if len(payload) > 24:
+            body = body.replace(r"\_", r"\_\allowbreak{}")
+            body = body.replace("/", r"/\allowbreak{}")
+            body = body.replace("-", r"-\allowbreak{}")
+        return r"\texttt{%s}" % body
+
+    text = CITE_RE.sub(lambda m: stash(corpus(m.group(1))), text)
     text = re.sub(r"\*\*(.+?)\*\*",
                   lambda m: stash(r"\textbf{%s}" % escape(m.group(1))), text)
     text = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)",
@@ -172,14 +189,92 @@ def is_sep_row(line: str) -> bool:
     return bool(re.fullmatch(r"\|[\s:|-]+\|", line.strip()))
 
 
+# Approximate AAMAS/acmart widths in points: one column, and the full text
+# block. Used to decide whether a table fits in a column or must span both.
+COL_PT = 239.0
+TEXT_PT = 505.0
+# Mean glyph advance. Measured against the first working build rather than
+# assumed for \footnotesize: these tables are set in \small, which is wider.
+CHAR_PT = 4.9
+# A fixed (l/r) column never wraps, so it costs its longest cell; headers are
+# short in practice, and capping stops a single long header from starving the
+# wrapping columns.
+FIXED_CAP_CHARS = 26
+
+
+def col_spec(rows: list[list[str]]) -> tuple[bool, str]:
+    """Decide the float width and the column types for one table.
+
+    Returns (wide, spec), where wide means "span both columns".
+
+    Two guesses were tried and both overflowed. Plain "l" columns never wrap, so
+    a three-column table whose first cell holds a sentence overflowed by 581pt.
+    Computing p{} fractions by hand then asked for 1.38x the available width,
+    and the "fix" silently rescaled the fractions back to the share it had
+    computed -- so the clamp meant nothing and a five-column table got 0.70 of
+    the text width for its first column. tabularx was worse still: an X column
+    cannot shrink below the width of its widest unbreakable word, so it reports
+    the whole table overfull (74 of them).
+
+    So the width is now treated as a constraint rather than a guess: estimate
+    the natural width, promote the table to full width if it needs it, and wrap
+    only the columns that are long, sizing them so the columns add up to what is
+    actually available.
+    """
+    ncols = max(len(r) for r in rows)
+    if ncols == 1:
+        return False, "l"
+    widths = [max((len(r[c]) if c < len(r) else 0) for r in rows)
+              for c in range(ncols)]
+
+    pad = 8.0 * ncols                      # \tabcolsep 4pt on both sides
+    natural = sum(w * CHAR_PT for w in widths) + pad
+    # A compact table stays a plain tabular -- but the test has to be the TOTAL
+    # width, not the longest cell. Testing only the longest cell sent the CLR
+    # table (four columns summing to ~264pt in a 239pt column) and the E6 table
+    # into single-column tabulars, where they overflowed by 34pt and 86pt.
+    if natural <= 0.95 * COL_PT:
+        return False, "l" + "r" * (ncols - 1)
+
+    wide = natural > COL_PT
+    unit = TEXT_PT if wide else COL_PT
+    fixed = [c for c in range(ncols) if widths[c] <= 30]
+    wrap = [c for c in range(ncols) if widths[c] > 30]
+    # Nothing needs to wrap yet: the table fits once it has the full width.
+    if not wrap:
+        return wide, "l" + "r" * (ncols - 1)
+
+    fixed_pt = sum(min(widths[c], FIXED_CAP_CHARS) * CHAR_PT for c in fixed) + pad
+    avail = unit - fixed_pt
+    if avail < 90 and not wide:
+        # Nothing left for the wrapping columns: give the table the full width.
+        wide = True
+        unit = TEXT_PT
+        avail = unit - fixed_pt
+    if avail < 90:
+        avail = max(90.0, unit - pad)      # last resort; overfull is reported
+        fixed = [c for c in range(ncols)]  # treat nothing as fixed
+
+    total = float(sum(widths[c] for c in wrap)) or 1.0
+    fracs = {c: avail * widths[c] / total for c in wrap}
+
+    spec = []
+    for c in range(ncols):
+        if c in fracs:
+            share = max(0.12, fracs[c] / unit)
+            spec.append("p{%.2f%s}" % (share, r"\textwidth" if wide
+                                       else r"\linewidth"))
+        else:
+            spec.append("l" if c == 0 else "r")
+    return wide, "".join(spec)
+
+
 def table_to_latex(rows: list[list[str]], caption: str | None, label: str) -> str:
     ncols = max(len(r) for r in rows)
-    spec = "l" + "r" * (ncols - 1) if ncols > 1 else "l"
-    # Wide tables span both columns. A 4+ column table inside one column
-    # overflows by hundreds of points and -- worse -- pdftotext shows cells
-    # breaking mid-token, so "3.79e-11" extracts as "3.79" then "e-11". A number
-    # corrupted by typesetting is exactly what the PDF text audit is for.
-    wide = ncols >= 4
+    # Wide tables span both columns. pdftotext shows an over-wide cell breaking
+    # mid-token, so "3.79e-11" extracts as "3.79" then "e-11" -- a number
+    # corrupted by typesetting, which is what the PDF text audit is for.
+    wide, spec = col_spec(rows)
     env = "table*" if wide else "table"
     body = []
     for i, row in enumerate(rows):
@@ -190,7 +285,11 @@ def table_to_latex(rows: list[list[str]], caption: str | None, label: str) -> st
     cap = r"\caption{%s}" % inline(caption) if caption else ""
     return "\n".join([
         r"\begin{%s}[t]" % env, r"\centering",
-        r"\footnotesize" if wide else r"\small",
+        r"\small",
+        # Tabular columns separated by 6pt on each side cost 12pt per column;
+        # 4pt is what Sean suggested and buys back ~24pt on a 4-column table
+        # without looking cramped.
+        r"\setlength{\tabcolsep}{4pt}",
         cap, r"\label{%s}" % label,
         r"\begin{tabular}{%s}" % spec, r"\toprule",
         *body, r"\bottomrule", r"\end{tabular}", r"\end{%s}" % env,
@@ -383,6 +482,10 @@ PREAMBLE = r"""%% Generated by scripts/md_to_aamas_tex.py -- edit paper/small_pa
 
 \usepackage{{balance}}
 \usepackage{{booktabs}}
+%% tabularx gives one column type X and lets LaTeX split whatever space the
+%% fixed columns leave. Two hand-rolled attempts to compute column widths from
+%% character counts overflowed; this removes the guessing entirely.
+\usepackage{{tabularx}}
 \usepackage{{graphicx}}
 \usepackage{{amsmath}}
 %% aamas.cls (like acmart) already defines \Bbbk; amssymb redefines it and
@@ -392,6 +495,12 @@ PREAMBLE = r"""%% Generated by scripts/md_to_aamas_tex.py -- edit paper/small_pa
 \usepackage{{amssymb}}
 \usepackage{{stfloats}}
 \usepackage{{url}}
+%% artifact paths, checkpoint hashes and CLI flags are typeset in \texttt, and
+%% TeX will not break a line inside \texttt by default: a single
+%% "results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json" then overflows its
+%% column by 30-210pt. [htt] lets those tokens hyphenate, which fixes the whole
+%% class of overfull boxes at once instead of shortening each path by hand.
+\usepackage[htt]{{hyphenat}}
 
 \setcopyright{{ifaamas}}
 \acmConference[AAMAS '27]{{Proc.\@ of the 26th International Conference on

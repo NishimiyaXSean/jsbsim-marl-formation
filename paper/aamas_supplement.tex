@@ -5,6 +5,10 @@
 
 \usepackage{balance}
 \usepackage{booktabs}
+%% tabularx gives one column type X and lets LaTeX split whatever space the
+%% fixed columns leave. Two hand-rolled attempts to compute column widths from
+%% character counts overflowed; this removes the guessing entirely.
+\usepackage{tabularx}
 \usepackage{graphicx}
 \usepackage{amsmath}
 %% aamas.cls (like acmart) already defines \Bbbk; amssymb redefines it and
@@ -14,6 +18,12 @@
 \usepackage{amssymb}
 \usepackage{stfloats}
 \usepackage{url}
+%% artifact paths, checkpoint hashes and CLI flags are typeset in \texttt, and
+%% TeX will not break a line inside \texttt by default: a single
+%% "results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json" then overflows its
+%% column by 30-210pt. [htt] lets those tokens hyphenate, which fixes the whole
+%% class of overfull boxes at once instead of shortening each path by hand.
+\usepackage[htt]{hyphenat}
 
 \setcopyright{ifaamas}
 \acmConference[AAMAS '27]{Proc.\@ of the 26th International Conference on
@@ -47,48 +57,50 @@ follow the argument.
 
 \textbf{The mask.} The flat action mask is \texttt{[speed(3), heading(5), altitude(1), fire(2)]}. The launch branch is flat index \textbf{10}. \texttt{mask[10] = 1} requires \emph{all} of:
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto17}
-\begin{tabular}{lrr}
+\begin{tabular}{lp{0.46\textwidth}p{0.47\textwidth}}
 \toprule
-\# & condition & constant (\texttt{src/environment/singlecombat\_shoot\_task.py}) \\
+\# & condition & constant (\texttt{src/\allowbreak{}environment/\allowbreak{}singlecombat\_\allowbreak{}shoot\_\allowbreak{}task.py}) \\
 \midrule
 C1 & missiles remaining > 0 & \texttt{NUM\_MISSILES = 4} \\
 C1b & steps since last launch $\geq$ \texttt{MIN\_ATTACK\_INTERVAL} & \texttt{30} steps = \textbf{6 s at 5 Hz} \\
 C2 & target alive & --- \\
 C3 & ATA < \texttt{MAX\_ATTACK\_ANGLE} & \texttt{15.0} deg \\
-C4 & \texttt{MIN\_ATTACK\_DISTANCE} $\leq$ range $\leq$ \texttt{3000 + 5000$\cdot$(AA/180)} & \texttt{1500.0} m \\
+C4 & \texttt{MIN\_ATTACK\_DISTANCE} $\leq$ range $\leq$ \texttt{3000 + 5000$\cdot$(AA/\allowbreak{}180)} & \texttt{1500.0} m \\
 C5 & closure < 0 (closing on the target) & --- \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \textbf{The expert's gate.} The rule expert never fires merely because \texttt{mask[10] = 1}. It additionally requires its own \texttt{fire\_desired}, a pure function of the observation:
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto18}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrp{0.46\textwidth}p{0.21\textwidth}}
 \toprule
 axis & environment permits & expert additionally requires & relation \\
 \midrule
 ATA & < 15.0 deg & < \texttt{ATA\_STRICT} = \textbf{10.0} deg & strictly tighter \\
 closure & < 0 m/s & < \texttt{-CLOSURE\_MIN} = \textbf{-5.0} m/s & strictly tighter \\
-range & 1500 m \textbackslash{}ldots{} \texttt{r\_max(AA)} & DLZ depth in \texttt{[0.25, 0.75]}, where depth = \texttt{(range - 1500)/(r\_max - 1500)} & strictly tighter \textbf{and two-sided} \\
+range & 1500 m \textbackslash{}ldots{} \texttt{r\_max(AA)} & DLZ depth in \texttt{[0.25, 0.75]}, where depth = \texttt{(range -\allowbreak{} 1500)/\allowbreak{}(r\_\allowbreak{}max -\allowbreak{} 1500)} & strictly tighter \textbf{and two-sided} \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\textbf{Why "strict subset" is exact, not rhetorical.} With \texttt{r\_max(AA) = 3000 + 5000$\cdot$(AA/180)}:
+\textbf{Why "strict subset" is exact, not rhetorical.} With \texttt{r\_\allowbreak{}max(AA) = 3000 + 5000$\cdot$(AA/\allowbreak{}180)}:
 
 \begin{itemize}
-  \item lower bound: \texttt{1500 + 0.25$\cdot$(r\_max - 1500) > 1500} whenever \texttt{r\_max > 1500}, i.e. for every \texttt{AA > 0};
-  \item upper bound: \texttt{1500 + 0.75$\cdot$(r\_max - 1500) = 0.75$\cdot$r\_max + 375 < r\_max} whenever \texttt{r\_max > 1500}.
+  \item lower bound: \texttt{1500 + 0.25$\cdot$(r\_\allowbreak{}max -\allowbreak{} 1500) > 1500} whenever \texttt{r\_max > 1500}, i.e. for every \texttt{AA > 0};
+  \item upper bound: \texttt{1500 + 0.75$\cdot$(r\_\allowbreak{}max -\allowbreak{} 1500) = 0.75$\cdot$r\_\allowbreak{}max + 375 < r\_\allowbreak{}max} whenever \texttt{r\_max > 1500}.
 \end{itemize}
 
 So on every axis the expert's admissible set is a strict subset of the environment's. This is the mechanical content of the paper's central claim that \emph{the expert carries a conservative engagement preference that the environment does not require} --- not a claim about the expert's competence.
@@ -97,14 +109,15 @@ So on every axis the expert's admissible set is a strict subset of the environme
 
 \section{Appendix C. The enumerated fire-policy family}
 
-All seven arms are evaluated on the \emph{same frozen maneuver trajectory} per seed (the BC heading/speed actions), so only the launch decision varies (\texttt{scripts/fire\_oracle\_audit.py}):
+All seven arms are evaluated on the \emph{same frozen maneuver trajectory} per seed (the BC heading/speed actions), so only the launch decision varies (\texttt{scripts/\allowbreak{}fire\_\allowbreak{}oracle\_\allowbreak{}audit.py}):
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto19}
-\begin{tabular}{lr}
+\begin{tabular}{lp{0.83\textwidth}}
 \toprule
 arm & rule \\
 \midrule
@@ -117,13 +130,13 @@ arm & rule \\
 \texttt{bc} & the inherited BC launch head (the reference arm) \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \texttt{dlz\_mid} and \texttt{dlz\_deep} deliberately bracket the expert's own band \texttt{[0.25, 0.75]}, so the family contains a faithful approximation of the expert's gate as well as the mask-permissive extreme.
 
 \section{Appendix D. Reproduction commands}
 
-All commands are for the \textbf{WSL Ubuntu shell}, from the repository root, using the project interpreter \texttt{/home/sean/miniconda3/envs/marl\_env/bin/python}. Trace JSONs, logs and \texttt{.pth} checkpoints are excluded from version control, except the \texttt{E*\_*.json} and \texttt{mechanism\_*} artifacts, which are tracked.
+All commands are for the \textbf{WSL Ubuntu shell}, from the repository root, using the project interpreter \texttt{/\allowbreak{}home/\allowbreak{}sean/\allowbreak{}miniconda3/\allowbreak{}envs/\allowbreak{}marl\_\allowbreak{}env/\allowbreak{}bin/\allowbreak{}python}. Trace JSONs, logs and \texttt{.pth} checkpoints are excluded from version control, except the \texttt{E*\_*.json} and \texttt{mechanism\_*} artifacts, which are tracked.
 
 Primary endpoints (\texttt{\textbackslash{}S{}4.4}, \texttt{\textbackslash{}S{}4.5b}, Table 4):
 
@@ -131,7 +144,7 @@ Frozen-trajectory enumeration (\texttt{\textbackslash{}S{}4.3}, Table 3):
 
 Matched BC-versus-expert pair (\texttt{\textbackslash{}S{}4.4}, fresh env per episode --- note this path also computes CLR as of 2026-09-17):
 
-The $\epsilon$-difficulty arms are the same two commands with \texttt{--difficulty 0.3}. The CLR measurement is the same command again with \texttt{--model-id paired\_bc\_vs\_expert\_d0\_clr} and \texttt{--out results/shoot\_eval/E3\_paired\_bc\_vs\_expert\_d0\_n400\_s20000\_v3\_clr.json}.
+The $\epsilon$-difficulty arms are the same two commands with \texttt{--difficulty 0.3}. The CLR measurement is the same command again with \texttt{-\allowbreak{}-\allowbreak{}model-\allowbreak{}id paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert\_\allowbreak{}d0\_\allowbreak{}clr} and \texttt{-\allowbreak{}-\allowbreak{}out results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}E3\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert\_\allowbreak{}d0\_\allowbreak{}n400\_\allowbreak{}s20000\_\allowbreak{}v3\_\allowbreak{}clr.json}.
 
 Figures 1--3 and the auto-generated matrix:
 
@@ -145,30 +158,31 @@ Supporting evidence for claims made in the main text. The reasoning each item su
 
 \subsection{E.1 The environment-lifecycle confound --- affected scripts and artifacts}
 
-\textbackslash{}S{}4.4 states the confound and why the reused-env numbers are excluded. The specifics: both paths import the same rule functions (\texttt{hdg\_label} / \texttt{spd\_label} / \texttt{fire\_desired}) at \texttt{CMD\_SPEED = 280}, and \texttt{BaseEnv.\_\_init\_\_} already installs \texttt{SafetyInterceptor(PIDFlightController())}, so neither the rule nor the controller explains the disagreement. The reused-env path is \texttt{generate\_shoot\_rule\_expert.py --validate}, which builds \textbf{one} \texttt{BaseEnv} and reuses it for every episode; the fresh-env path is used by \texttt{eval\_paired\_bc\_vs\_expert.py}, \texttt{eval\_bc\_1v1.py}, \texttt{fire\_oracle\_audit.py} and \texttt{eval\_asap\_baseline.py}, each of which builds a new environment per episode. Affected artifacts are renamed \texttt{EXCLUDED\_reused\_env\_expert\_*.json}, and \texttt{collect\_matrix.py} skips anything marked \texttt{EXCLUDED\_}. Gate: \texttt{tests/check\_expert\_path\_consistency.sh}.
+\textbackslash{}S{}4.4 states the confound and why the reused-env numbers are excluded. The specifics: both paths import the same rule functions (\texttt{hdg\_label} / \texttt{spd\_label} / \texttt{fire\_desired}) at \texttt{CMD\_SPEED = 280}, and \texttt{BaseEnv.\_\_init\_\_} already installs \texttt{SafetyInterceptor(PIDFlightController())}, so neither the rule nor the controller explains the disagreement. The reused-env path is \texttt{generate\_\allowbreak{}shoot\_\allowbreak{}rule\_\allowbreak{}expert.py -\allowbreak{}-\allowbreak{}validate}, which builds \textbf{one} \texttt{BaseEnv} and reuses it for every episode; the fresh-env path is used by \texttt{eval\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert.py}, \texttt{eval\_bc\_1v1.py}, \texttt{fire\_oracle\_audit.py} and \texttt{eval\_asap\_baseline.py}, each of which builds a new environment per episode. Affected artifacts are renamed \texttt{EXCLUDED\_\allowbreak{}reused\_\allowbreak{}env\_\allowbreak{}expert\_\allowbreak{}*.json}, and \texttt{collect\_matrix.py} skips anything marked \texttt{EXCLUDED\_}. Gate: \texttt{tests/\allowbreak{}check\_\allowbreak{}expert\_\allowbreak{}path\_\allowbreak{}consistency.sh}.
 
 \subsection{E.2 Corroborating CLR: timestamps and the gate on disallowed steps}
 
 \textbackslash{}S{}3.2 quotes the two corroborating values (expert 5.96\%, BC 7.37\%) and their geometry caveat; the exact provenance is:
 
 \begin{itemize}
-  \item \texttt{data/expert/shoot\_rule\_expert.npz}, 200 episodes, \textbf{mtime 2026-09-13 20:22} --- this \emph{predates} commit \texttt{fb48155} (2026-09-14 09:06), which changed the heading-bias range from \texttt{U(30,60)} to \texttt{U(0,60)}. Its 5.96\% is therefore an \textbf{old-geometry} measurement.
-  \item \texttt{results/health\_check/fire\_hesitancy.json}, 200 rollouts, generated \textbf{2026-09-16}, i.e. after the change --- so the 7.37\% beside it is U(0,60). The two are \textbf{geometry-mixed} and are never averaged or presented as a matched pair.
+  \item \texttt{data/\allowbreak{}expert/\allowbreak{}shoot\_\allowbreak{}rule\_\allowbreak{}expert.npz}, 200 episodes, \textbf{mtime 2026-09-13 20:22} --- this \emph{predates} commit \texttt{fb48155} (2026-09-14 09:06), which changed the heading-bias range from \texttt{U(30,60)} to \texttt{U(0,60)}. Its 5.96\% is therefore an \textbf{old-geometry} measurement.
+  \item \texttt{results/\allowbreak{}health\_\allowbreak{}check/\allowbreak{}fire\_\allowbreak{}hesitancy.json}, 200 rollouts, generated \textbf{2026-09-16}, i.e. after the change --- so the 7.37\% beside it is U(0,60). The two are \textbf{geometry-mixed} and are never averaged or presented as a matched pair.
 \end{itemize}
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto20}
-\begin{tabular}{lrr}
+\begin{tabular}{p{0.22\textwidth}p{0.56\textwidth}p{0.18\textwidth}}
 \toprule
 Quantity & Value & Basis \\
 \midrule
-Expert \texttt{fire\_desired} on \emph{disallowed} steps & 4.03\% (10336 / 256357) --- the gate would fire outside the window too; the mask (mostly cooldown) holds it back & \texttt{data/expert/shoot\_rule\_expert.npz} \\
+Expert \texttt{fire\_desired} on \emph{disallowed} steps & 4.03\% (10336 / 256357) --- the gate would fire outside the window too; the mask (mostly cooldown) holds it back & \texttt{data/\allowbreak{}expert/\allowbreak{}shoot\_\allowbreak{}rule\_\allowbreak{}expert.npz} \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{E.3 Scope reading for the CLR claim}
 
@@ -176,13 +190,13 @@ Neither CLR figure alone proves suboptimality: a low CLR diagnoses restriction o
 
 \subsection{E.4 Compute environment (moved from \textbackslash{}S{}4.1)}
 
-Single RTX 3060 Laptop GPU (6 GB, cu126, driver 528.79). Closed-loop evaluation: BC $\approx$6.7--13.0 s/episode, SPC $\approx$10 s/episode, so one n=400 arm pair is $\approx$1.7 h; rule-expert rollout $\approx$6.3 s/episode. All runs execute in WSL2 Ubuntu 22.04 with the project interpreter (\texttt{/home/sean/miniconda3/envs/marl\_env/bin/python}); reproduction commands are in Appendix D.
+Single RTX 3060 Laptop GPU (6 GB, cu126, driver 528.79). Closed-loop evaluation: BC $\approx$6.7--13.0 s/episode, SPC $\approx$10 s/episode, so one n=400 arm pair is $\approx$1.7 h; rule-expert rollout $\approx$6.3 s/episode. All runs execute in WSL2 Ubuntu 22.04 with the project interpreter (\texttt{/\allowbreak{}home/\allowbreak{}sean/\allowbreak{}miniconda3/\allowbreak{}envs/\allowbreak{}marl\_\allowbreak{}env/\allowbreak{}bin/\allowbreak{}python}); reproduction commands are in Appendix D.
 
 \subsection{E.5 Ablation A5 --- full training and screening detail (moved from \textbackslash{}S{}4.7)}
 
 \begin{itemize}
-  \item \textbf{Implementation.} \texttt{scripts/distill\_fire\_asap.py --random-fire-head}: SPC's freeze pattern is kept exactly (encoder and every maneuver head frozen at $\theta$\_BC) and only the fire head is discarded and rebuilt from \texttt{nn.Linear.reset\_parameters()} --- the constructor's own initialisation, so it is a genuine random init (weight std 0.049, bias std 0.044) rather than a hand-rolled approximation of one. Mutually exclusive with \texttt{--full-network} (A5 and A6 are different ablations).
-  \item \textbf{Training.} 300 rollout episodes (392091 transitions, 11976 allowed steps; train/val split 9578/2398 allowed steps). The random fire head reaches fire-CE 0.0413 with train recall 100.00\% and validation recall 100.00\% \textbf{in its first epoch} (of 15) and triggers the $\geq$99.5\% early stop. Identity gates: \texttt{hdg/spd logits diff = 0.00e+00} --- \emph{exactly} zero, not merely under tolerance --- with identical action sequences and \texttt{VERDICT: PASS}.
+  \item \textbf{Implementation.} \texttt{scripts/\allowbreak{}distill\_\allowbreak{}fire\_\allowbreak{}asap.py -\allowbreak{}-\allowbreak{}random-\allowbreak{}fire-\allowbreak{}head}: SPC's freeze pattern is kept exactly (encoder and every maneuver head frozen at $\theta$\_BC) and only the fire head is discarded and rebuilt from \texttt{nn.Linear.reset\_\allowbreak{}parameters()} --- the constructor's own initialisation, so it is a genuine random init (weight std 0.049, bias std 0.044) rather than a hand-rolled approximation of one. Mutually exclusive with \texttt{--full-network} (A5 and A6 are different ablations).
+  \item \textbf{Training.} 300 rollout episodes (392091 transitions, 11976 allowed steps; train/val split 9578/2398 allowed steps). The random fire head reaches fire-CE 0.0413 with train recall 100.00\% and validation recall 100.00\% \textbf{in its first epoch} (of 15) and triggers the $\geq$99.5\% early stop. Identity gates: \texttt{hdg/\allowbreak{}spd logits diff = 0.00e+00} --- \emph{exactly} zero, not merely under tolerance --- with identical action sequences and \texttt{VERDICT: PASS}.
   \item \textbf{Primary protocol.} 90.75\% (363/400) kills, CLR 99.94\% (1560/1561) --- the CLR denominator differs from SPC's by exactly one legal step (1561 vs 1560), the only trace of the different initialisation anywhere in the evaluation.
   \item \textbf{60-seed screening} (same seed set as A6b; $\pm$10 pp small-sample spread applies): A5 \textbf{95.0\%} (\texttt{id}) / \textbf{86.7\%} (\texttt{dist2\_3k}) at 100\% window utilisation, bit-for-bit equal to the mask-permissive rule oracle on the same seeds; BC 40.0\% / 15.0\%. The screening set is kept because it carries the third arm.
 \end{itemize}
@@ -194,11 +208,11 @@ argument. Each states which artifact backs which claim.
 
 \textbf{Citation status (re-checked 2026-09-18 against the live record, not from memory).} Verified: Pomerleau (\textbf{NIPS'88}, pp. 305-313; presented 1988, MIT Press 1989 - the year is now confirmed, not inferred), Ross/Gordon/Bagnell (AISTATS 2011), Bojarski (arXiv:1604.07316), Brown et al. (ICML 2019 pp. 783-792), Huo/Wang/Xu (AAAI 2023 pp. 7953-7961), Beliaev/Pedarsani (arXiv:2402.01886), Li Z. et al. (NeurIPS 2023), Parisotto/Ba/Salakhutdinov (ICLR 2016, arXiv:1511.06342), McGrew et al. (JGCD 33(5):1641-1654), Pope et al. (ICUAS 2021 pp. 275-284), Yang et al. (IEEE Access 8:363-378), Li L. et al. (Neurocomputing 584:127591, 2024), Li S. et al. (ACM TAAS 21(1):6, 2026), \textbf{Rusu et al. (ICLR 2016 conference track, arXiv:1511.06295)}, \textbf{Hinton/Vinyals/Dean (NIPS 2014 Deep Learning Workshop, arXiv:1503.02531 - a workshop paper, so it has no page numbers and none are invented here)}, \textbf{LoRA (Hu et al., ICLR 2022, arXiv:2106.09685)}, \textbf{ROME (Meng, Bau, Andonian \& Belinkov, NeurIPS 2022, Advances in NeurIPS 35, pp. 17359-17372)}. \textbf{Nothing on this list is now unconfirmed.}
 
-\textbf{Provenance.} The measured column comes from \texttt{results/shoot\_eval/E1\_fire\_oracle\_dist2\_3k\_s60.json}, which is version-controlled and carries \texttt{run\_meta} with the cell configuration, geometry, difficulty, seed range and the frozen checkpoint's SHA-256. The 2026-08-06 artifact no longer exists; the italic column is all that survived of it, which is why the regenerated file is tracked rather than regenerated on demand.
+\textbf{Provenance.} The measured column comes from \texttt{results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}E1\_\allowbreak{}fire\_\allowbreak{}oracle\_\allowbreak{}dist2\_\allowbreak{}3k\_\allowbreak{}s60.json}, which is version-controlled and carries \texttt{run\_meta} with the cell configuration, geometry, difficulty, seed range and the frozen checkpoint's SHA-256. The 2026-08-06 artifact no longer exists; the italic column is all that survived of it, which is why the regenerated file is tracked rather than regenerated on demand.
 
-\textbf{Artifact status.} E7 is \textbf{verified against live artifacts} (\texttt{results/shoot\_eval/E7\_{bc\_round1,spc}\_d0\_n400\_s20000.json}, \texttt{E7\_paired\_bc\_vs\_spc\_d0\_n400.json}).
+\textbf{Artifact status.} E7 is \textbf{verified against live artifacts} (\texttt{results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}E7\_\allowbreak{}{bc\_\allowbreak{}round1,spc}\_\allowbreak{}d0\_\allowbreak{}n400\_\allowbreak{}s20000.json}, \texttt{E7\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}spc\_\allowbreak{}d0\_\allowbreak{}n400.json}).
 
-\textbf{Artifact status:} verified against live artifacts --- \texttt{results/shoot\_eval/E5\_{bc\_round1,spc}\_d03\_n400\_s20000.json}, \texttt{E5\_paired\_bc\_vs\_spc\_d03\_n400.json}, and the two CLR runs \texttt{E3\_paired\_bc\_vs\_expert\_{d0\_n400\_s20000\_v3,d03\_n400\_s20000\_v2}\_clr.json}. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 4 reports.
+\textbf{Artifact status:} verified against live artifacts --- \texttt{results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}E5\_\allowbreak{}{bc\_\allowbreak{}round1,spc}\_\allowbreak{}d03\_\allowbreak{}n400\_\allowbreak{}s20000.json}, \texttt{E5\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}spc\_\allowbreak{}d03\_\allowbreak{}n400.json}, and the two CLR runs \texttt{E3\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert\_\allowbreak{}{d0\_\allowbreak{}n400\_\allowbreak{}s20000\_\allowbreak{}v3,d03\_\allowbreak{}n400\_\allowbreak{}s20000\_\allowbreak{}v2}\_\allowbreak{}clr.json}. The expert arm is no longer "running": it is the fresh-env paired arm of E3 at both difficulties, and it is what Table 4 reports.
 
 \balance
 \end{document}

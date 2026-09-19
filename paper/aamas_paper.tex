@@ -5,6 +5,10 @@
 
 \usepackage{balance}
 \usepackage{booktabs}
+%% tabularx gives one column type X and lets LaTeX split whatever space the
+%% fixed columns leave. Two hand-rolled attempts to compute column widths from
+%% character counts overflowed; this removes the guessing entirely.
+\usepackage{tabularx}
 \usepackage{graphicx}
 \usepackage{amsmath}
 %% aamas.cls (like acmart) already defines \Bbbk; amssymb redefines it and
@@ -14,6 +18,12 @@
 \usepackage{amssymb}
 \usepackage{stfloats}
 \usepackage{url}
+%% artifact paths, checkpoint hashes and CLI flags are typeset in \texttt, and
+%% TeX will not break a line inside \texttt by default: a single
+%% "results/shoot_eval/E1_fire_oracle_dist2_3k_s60.json" then overflows its
+%% column by 30-210pt. [htt] lets those tokens hyphenate, which fixes the whole
+%% class of overfull boxes at once instead of shortening each path by hand.
+\usepackage[htt]{hyphenat}
 
 \setcopyright{ifaamas}
 \acmConference[AAMAS '27]{Proc.\@ of the 26th International Conference on
@@ -114,10 +124,10 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
   \item \textbf{Observation}: 41-dim flattened = 30-dim state features + 11-dim action-mask bits. The BC encoder consumes the 30-dim state block; the mask block is applied as a separate masked-argmax step, not fed to the network.
   \item \textbf{Action space}: \texttt{MultiDiscrete([3, 5, 1, 2])} = (speed $\Delta$, heading $\Delta$, altitude, fire).
   \item \textbf{Episode}: max 1500 steps; termination = target killed / low altitude / fled altitude / target lost / ammo exhausted / timeout.
-  \item \textbf{Step duration --- state it explicitly, it is a units trap.} One environment step advances the simulation by \textbf{0.2 s} (\texttt{BaseEnv.\_acmi\_time += 0.2}), i.e. the agent runs at \textbf{5 Hz}; 1500 steps $\approx$ 300 s. This is \emph{not} the JSBSim internal frame rate. Every step$\rightarrow$second conversion in this paper uses 0.2 s/step (\texttt{\textbackslash{}S{}4.3}: 67 steps = 13.4 s, 743.5 steps = 149 s). Any figure or table that appears to use 1/60 s per step is wrong by 12$\times$.
+  \item \textbf{Step duration --- state it explicitly, it is a units trap.} One environment step advances the simulation by \textbf{0.2 s} (\texttt{BaseEnv.\_\allowbreak{}acmi\_\allowbreak{}time += 0.2}), i.e. the agent runs at \textbf{5 Hz}; 1500 steps $\approx$ 300 s. This is \emph{not} the JSBSim internal frame rate. Every step$\rightarrow$second conversion in this paper uses 0.2 s/step (\texttt{\textbackslash{}S{}4.3}: 67 steps = 13.4 s, 743.5 steps = 149 s). Any figure or table that appears to use 1/60 s per step is wrong by 12$\times$.
   \item \textbf{Evaluation protocol}: \textbf{deterministic masked argmax}, JSBSim physics, \texttt{difficulty\_level} as noted per experiment.
   \item \textbf{Three policies in play}:
-  \item \textbf{Rule expert} --- hand-designed, stateless: every label is a pure function of the current observation (\texttt{scripts/generate\_shoot\_rule\_expert.py}). \textbf{Provenance, stated plainly: there is no external publication to cite.} It is this project's own rule controller, built from standard BFM heuristics (nose alignment, DLZ depth, closure sign) plus the launch-quality gate of \textbackslash{}S{}3.2, and trained against nothing. We do not claim it is a strong or a state-of-the-art expert; we claim only that it is \emph{a} competent teacher (\texttt{wez\_reach\_rate = 1.00}, \texttt{hit\_rate $\approx$ 0.997}, \texttt{lost\_target\_rate = 0}) whose behaviour carries a measurable conservative bias. Every headline claim in this paper is about \emph{what imitation inherits from a given teacher}, holding the teacher fixed --- so the paper does not depend on where the teacher came from, and inventing a citation for it would be worse than saying this.
+  \item \textbf{Rule expert} --- hand-designed, stateless: every label is a pure function of the current observation (\texttt{scripts/\allowbreak{}generate\_\allowbreak{}shoot\_\allowbreak{}rule\_\allowbreak{}expert.py}). \textbf{Provenance, stated plainly: there is no external publication to cite.} It is this project's own rule controller, built from standard BFM heuristics (nose alignment, DLZ depth, closure sign) plus the launch-quality gate of \textbackslash{}S{}3.2, and trained against nothing. We do not claim it is a strong or a state-of-the-art expert; we claim only that it is \emph{a} competent teacher (\texttt{wez\_reach\_rate = 1.00}, \texttt{hit\_rate $\approx$ 0.997}, \texttt{lost\_target\_rate = 0}) whose behaviour carries a measurable conservative bias. Every headline claim in this paper is about \emph{what imitation inherits from a given teacher}, holding the teacher fixed --- so the paper does not depend on where the teacher came from, and inventing a citation for it would be worse than saying this.
   \item \textbf{BC round1} --- MLP encoder (256-256-128) + 4 heads, trained on 200 expert episodes, masked cross-entropy.
   \item \textbf{SPC} --- BC with only the launch head re-trained (\textbackslash{}S{}3.3).
 \end{itemize}
@@ -127,7 +137,7 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 \textbf{Conditional Launch Rate (CLR)}:
 
 \begin{itemize}
-  \item \texttt{m\_fire} is the \textbf{environment's} legality mask (index 10 of the flat mask), which requires: missiles remaining > 0; launch cooldown (30 decision steps) elapsed; target alive; \texttt{ATA < 15$^\circ$}; \texttt{MIN\_ATTACK\_DISTANCE (1500 m) $\leq$ range $\leq$ dynamic max range (3--8 km by aspect angle)}; closure < 0 (closing).
+  \item \texttt{m\_fire} is the \textbf{environment's} legality mask (index 10 of the flat mask), which requires: missiles remaining > 0; launch cooldown (30 decision steps) elapsed; target alive; \texttt{ATA < 15$^\circ$}; \texttt{MIN\_\allowbreak{}ATTACK\_\allowbreak{}DISTANCE (1500 m) $\leq$ range $\leq$ dynamic max range (3-\allowbreak{}-\allowbreak{}8 km by aspect angle)}; closure < 0 (closing).
   \item \textbf{Critical property: CLR is not a claim that 100\% is optimal.} It is a descriptive quantity. The optimal value must be established separately --- which is exactly what \textbackslash{}S{}4.3 does.
 \end{itemize}
 
@@ -135,10 +145,11 @@ Behaviour cloning (BC) from rule-based experts is a standard bootstrap for air-c
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto1}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrp{0.39\textwidth}}
 \toprule
 Condition & Environment mask & Expert \texttt{fire\_desired} & Effect \\
 \midrule
@@ -152,20 +163,21 @@ Output & --- & \texttt{fire = allowed AND desired} & cooldown/inventory handled 
 
 \textbf{Measured --- the gate fully determines the expert's behaviour on legal steps.}
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto2}
-\begin{tabular}{lrr}
+\begin{tabular}{p{0.25\textwidth}p{0.49\textwidth}p{0.21\textwidth}}
 \toprule
 Quantity & Value & Basis \\
 \midrule
-\textbf{Expert CLR (fresh env, 400 ep, seeds 20000--20399, U(0,60))} & \textbf{6.07\%} (1131 / 18639) & \texttt{E3\_paired\_bc\_vs\_expert\_d0\_n400\_s20000\_v3\_clr.json} \\
-Expert \texttt{fire\_desired} on allowed steps & 560 / 9395 --- \textbf{identical to \texttt{action[:,3]}} $\Rightarrow$ nothing except the gate explains what the expert does when launch is legal & \texttt{data/expert/shoot\_rule\_expert.npz} \\
+\textbf{Expert CLR (fresh env, 400 ep, seeds 20000--20399, U(0,60))} & \textbf{6.07\%} (1131 / 18639) & \texttt{E3\_\allowbreak{}paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert\_\allowbreak{}d0\_\allowbreak{}n400\_\allowbreak{}s20000\_\allowbreak{}v3\_\allowbreak{}clr.json} \\
+Expert \texttt{fire\_desired} on allowed steps & 560 / 9395 --- \textbf{identical to \texttt{action[:,3]}} $\Rightarrow$ nothing except the gate explains what the expert does when launch is legal & \texttt{data/\allowbreak{}expert/\allowbreak{}shoot\_\allowbreak{}rule\_\allowbreak{}expert.npz} \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 $\Rightarrow$ Under the evaluated protocol, \textbf{the observed restriction is explained by the designed gate} --- not by the environment and not by BC's fitting error.
 
@@ -187,10 +199,10 @@ Two further measurements corroborate the magnitude on a different basis --- expe
 \end{enumerate}
 
 \begin{itemize}
-  \item \textbf{Verification gates} (all must PASS; implemented in \texttt{scripts/distill\_fire\_asap.py}):
+  \item \textbf{Verification gates} (all must PASS; implemented in \texttt{scripts/\allowbreak{}distill\_\allowbreak{}fire\_\allowbreak{}asap.py}):
   \item \texttt{G1} heading/speed logits vs $\theta$\_BC: \texttt{max diff < 1e-9}
   \item \texttt{G2} heading/speed \textbf{action sequences} 100\% identical on fixed seeds
-  \item \texttt{G3} \textbf{CLR $\geq$ 99.5\%} over allowed windows (\texttt{P(a\_fire=1 | m\_fire=1) $\geq$ 0.995}) on held-out rollouts
+  \item \texttt{G3} \textbf{CLR $\geq$ 99.5\%} over allowed windows (\texttt{P(a\_\allowbreak{}fire=1 | m\_\allowbreak{}fire=1) $\geq$ 0.995}) on held-out rollouts
   \item \texttt{G4} no new \texttt{lost\_target} / \texttt{bad} launch introduced
   \item \textbf{Interpretation}: G1--G2 are the causal-identification device --- the maneuver policy is provably untouched, so any performance change is attributable to the launch decision alone.
 \end{itemize}
@@ -199,7 +211,7 @@ Two further measurements corroborate the magnitude on a different basis --- expe
 
 \begin{itemize}
   \item The launch decision is a \textbf{discrete binary commitment} with a one-step-wide opportunity in the close-range regime (\textbackslash{}S{}4.3), so its error is not smoothable by the rest of the policy.
-  \item The maneuver heads are demonstrably near-ceiling: \texttt{wez\_reach\_rate = 1.0}, \texttt{hit\_rate $\approx$ 0.997--1.000}, \texttt{lost\_target\_rate = 0} across all evaluated suites. Re-training them would buy little and destroy the clean attribution.
+  \item The maneuver heads are demonstrably near-ceiling: \texttt{wez\_reach\_rate = 1.0}, \texttt{hit\_\allowbreak{}rate $\approx$ 0.997-\allowbreak{}-\allowbreak{}1.000}, \texttt{lost\_target\_rate = 0} across all evaluated suites. Re-training them would buy little and destroy the clean attribution.
   \item Contrast with end-to-end PPO fine-tuning: the project's own record (\texttt{docs/summary\_phase1.md} \textbackslash{}S{}4.5) shows that once SPC reproduces the legality policy, the current reward/environment admits no launch-timing trade-off, so PPO adds no increment and carries regression risk. $\rightarrow$ report as a \emph{documented negative result}, not as a claim about PPO in general.
 \end{itemize}
 
@@ -222,7 +234,8 @@ Two further measurements corroborate the magnitude on a different basis --- expe
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto3}
 \begin{tabular}{lrrr}
@@ -248,10 +261,11 @@ One cross-check on the instrument itself: adding CLR changed nothing measurable.
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto4}
-\begin{tabular}{lrrrr}
+\begin{tabular}{p{0.24\textwidth}rrrr}
 \toprule
 Fire policy & Kill rate (measured) & \emph{docs, old geom U(30,60)} & Launches/ep & Reach-4-launch \\
 \midrule
@@ -268,7 +282,7 @@ Fire policy & Kill rate (measured) & \emph{docs, old geom U(30,60)} & Launches/e
 
 The italic column is the earlier 2026-08-06 audit, executed on the pre-widening geometry \texttt{U(30,60)}; the measured column is the current default \texttt{U(0,60)}. That two of the seven arms reproduce exactly (\texttt{delay\_60} 10.0\%, \texttt{dlz\_mid} 0.0\%) while \texttt{asap} moves from 73.3\% to 86.7\% indicates that the \emph{script's} behaviour is unchanged and that the benchmark itself became easier by $\approx$ +4.5 pp (\textbackslash{}S{}4.5). Only the measured column is cited, always with its geometry attached.
 
-\textbf{Reachability audit (asap arm, measured):} median first-legal step \textbf{67} (13.4 s); \textbf{cumulative legal-window length $\approx$ 4 steps per episode} (median 4.0) --- i.e. roughly one legal step per DLZ transit; median step-1 $\rightarrow$ step-4 launch \textbf{743.5} (149 s); 52/60 killed, 8 timeouts, \textbf{8 of which ended with the window still open} (\texttt{blockers = {episode\_end\_in\_window: 8}}). The "$\approx$4 legal steps per episode" figure is the load-bearing structural fact and it reproduces the 2026-08-06 audit.
+\textbf{Reachability audit (asap arm, measured):} median first-legal step \textbf{67} (13.4 s); \textbf{cumulative legal-window length $\approx$ 4 steps per episode} (median 4.0) --- i.e. roughly one legal step per DLZ transit; median step-1 $\rightarrow$ step-4 launch \textbf{743.5} (149 s); 52/60 killed, 8 timeouts, \textbf{8 of which ended with the window still open} (\texttt{blockers = {episode\_\allowbreak{}end\_\allowbreak{}in\_\allowbreak{}window: 8}}). The "$\approx$4 legal steps per episode" figure is the load-bearing structural fact and it reproduces the 2026-08-06 audit.
 
 \textbf{Reading:}
 
@@ -286,7 +300,8 @@ The italic column is the earlier 2026-08-06 audit, executed on the pre-widening 
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto5}
 \begin{tabular}{lrrrr}
@@ -312,7 +327,7 @@ Three things follow:
 
 \subsection{b Figure 2 --- the mechanism, made visible}
 
-\textbf{Figure 2} (\texttt{results/shoot\_eval/mechanism\_seed20007\_d00.png}) shows one matched episode (seed 20007, d=0) played by BC and by SPC, with everything else held identical.
+\textbf{Figure 2} (\texttt{results/\allowbreak{}shoot\_\allowbreak{}eval/\allowbreak{}mechanism\_\allowbreak{}seed20007\_\allowbreak{}d00.png}) shows one matched episode (seed 20007, d=0) played by BC and by SPC, with everything else held identical.
 
 \begin{itemize}
   \item \textbf{Panel A} plots the state the decision is taken on --- range to target and angle-off (ATA) --- with the environment-legal launch windows shaded, every legal step BC declines marked, and both policies' launches marked.
@@ -329,10 +344,11 @@ Two caveats the caption must carry: (i) this is a \textbf{single illustrative ep
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto6}
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{p{0.29\textwidth}rrrrrr}
 \toprule
 Arm & Kill rate & Wilson 95\% & Launches/ep & CLR & lost & hit \\
 \midrule
@@ -345,13 +361,14 @@ Rule expert (fresh-env path, E3) & 147/400 = \textbf{36.75\%} & [32.17, 41.58] &
 
 \textbf{Paired BC vs expert on the same 400 seeds:} $\Delta$kill \textbf{+9.75 pp}, win/lose/tie \textbf{63 / 24 / 313}, exact McNemar \textbf{p = 3.48e-05} ($\chi^2$cc p = 4.62e-05); 72\% of the 87 discordant seeds favour BC. $\Delta$lost = 0.00, $\Delta$launches = +0.23. This is the first \emph{significance test} attached to the BC-beats-expert claim --- the sealed Phase-1 record had only a bootstrap CI ([+3.8, +11.0] pp, 500 seeds, old geometry).
 
-\textbf{Expert numbers in this paper are fresh-env measurements.} A second evaluation path that reuses one environment across all episodes disagrees with it on identical seeds --- 32.25\% versus 36.75\% at d=0, and a 20-seed screen shows different per-seed kill vectors rather than noise. Both paths import the same rule functions at the same commanded speed, so neither the rule nor the flight controller explains the gap; the cause is environment lifecycle, since the reused-env path builds a \emph{single} \texttt{BaseEnv} while every other script evaluated here builds a fresh one per episode. The reused-env figures (32.25\%, 25.25\% at d=0.3) are therefore excluded rather than wrong: they are measured under a different episode-construction protocol, and their artifacts are renamed \texttt{EXCLUDED\_reused\_env\_expert\_*} so no table can pick them up by accident. The consistency gate is \texttt{tests/check\_expert\_path\_consistency.sh}; Appendix E.1 lists the affected scripts and artifacts.
+\textbf{Expert numbers in this paper are fresh-env measurements.} A second evaluation path that reuses one environment across all episodes disagrees with it on identical seeds --- 32.25\% versus 36.75\% at d=0, and a 20-seed screen shows different per-seed kill vectors rather than noise. Both paths import the same rule functions at the same commanded speed, so neither the rule nor the flight controller explains the gap; the cause is environment lifecycle, since the reused-env path builds a \emph{single} \texttt{BaseEnv} while every other script evaluated here builds a fresh one per episode. The reused-env figures (32.25\%, 25.25\% at d=0.3) are therefore excluded rather than wrong: they are measured under a different episode-construction protocol, and their artifacts are renamed \texttt{EXCLUDED\_\allowbreak{}reused\_\allowbreak{}env\_\allowbreak{}expert\_\allowbreak{}*} so no table can pick them up by accident. The consistency gate is \texttt{tests/\allowbreak{}check\_\allowbreak{}expert\_\allowbreak{}path\_\allowbreak{}consistency.sh}; Appendix E.1 lists the affected scripts and artifacts.
 
-\textbf{Paired contingency and test} (\texttt{scripts/paired\_mcnemar.py}, exact McNemar, no scipy):
+\textbf{Paired contingency and test} (\texttt{scripts/\allowbreak{}paired\_\allowbreak{}mcnemar.py}, exact McNemar, no scipy):
 
 \begin{table}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto7}
 \begin{tabular}{lr}
@@ -376,21 +393,22 @@ discordant total & 177 \\
 
 \textbf{Report it bound to its conditions, never as a bare improvement.} Use: \emph{"Under a matched d=0, deterministic-argmax evaluation on 400 paired seeds, replacing the conservative launch decision with SPC raises the kill rate from 46.50\% to 90.75\% (+44.25 pp, exact McNemar p = 1.04e-53)."} Not: \emph{"SPC improves performance by 44 pp."} The four qualifiers (matched setting, d=0, deterministic argmax, isolated intervention) are load-bearing --- they are \emph{why} the attribution is legitimate.
 
-\textbf{Both former docs-only numbers have now been replaced by fresh-env measurements.} The rule-expert ID kill rate is \textbf{36.75\%} (E3 paired, fresh env, seeds 20000--20399) --- \emph{not} the docs' 35.8\%, and \emph{not} the reused-env 32.25\%. The rule-oracle ID kill rate is \textbf{90.75\%} (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (same policy by construction, \textbackslash{}S{}4.4). The originals (\texttt{paired\_bc\_vs\_expert\_500.json}, \texttt{asap\_baseline.json}) remain lost --- the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
+\textbf{Both former docs-only numbers have now been replaced by fresh-env measurements.} The rule-expert ID kill rate is \textbf{36.75\%} (E3 paired, fresh env, seeds 20000--20399) --- \emph{not} the docs' 35.8\%, and \emph{not} the reused-env 32.25\%. The rule-oracle ID kill rate is \textbf{90.75\%} (E2), measured on the same seed set as SPC and exactly equal to it; that equality is a completeness check, not independent validation (same policy by construction, \textbackslash{}S{}4.4). The originals (\texttt{paired\_\allowbreak{}bc\_\allowbreak{}vs\_\allowbreak{}expert\_\allowbreak{}500.json}, \texttt{asap\_baseline.json}) remain lost --- the replacements are new measurements, not recoveries, and were taken under U(0,60) rather than the docs' U(30,60).
 
 \textbf{SPC vs the rule oracle on one seed set (E2, seeds 20000--20399, n=400).} Resolved: \texttt{eval\_asap\_baseline.py} had no \texttt{--start-seed}, so the oracle could only ever run seeds \texttt{0..N-1} and could not be matched to a trained policy's evaluation. Patched, then run on the same seed set.
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto8}
-\begin{tabular}{lrrrrr}
+\begin{tabular}{p{0.33\textwidth}rrrrp{0.17\textwidth}}
 \toprule
 Arm & Kill & Launches/ep & Hit & lost & Termination reasons \\
 \midrule
-Rule oracle (\texttt{asap}: frozen BC maneuver + fire on every legal step) & \textbf{363/400 = 90.75\%} & 3.90 & 1.0000 & 0 & \texttt{{target\_killed: 363, timeout: 37}} \\
-\textbf{SPC} & \textbf{363/400 = 90.75\%} & 3.90 & 1.0000 & 0 & \texttt{{target\_killed: 363, timeout: 37}} \\
+Rule oracle (\texttt{asap}: frozen BC maneuver + fire on every legal step) & \textbf{363/400 = 90.75\%} & 3.90 & 1.0000 & 0 & \texttt{{target\_\allowbreak{}killed: 363, timeout: 37}} \\
+\textbf{SPC} & \textbf{363/400 = 90.75\%} & 3.90 & 1.0000 & 0 & \texttt{{target\_\allowbreak{}killed: 363, timeout: 37}} \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -407,10 +425,11 @@ Compressed to one subsection per scope decision: \textbf{this is a benchmark-cha
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto9}
-\begin{tabular}{lrrrr}
+\begin{tabular}{p{0.28\textwidth}rp{0.33\textwidth}rr}
 \toprule
 Comparison (d=0, new geometry U(0,60)) & n & Kill rate & Paired diff & McNemar \\
 \midrule
@@ -432,14 +451,15 @@ same pair, unpaired Fisher & 400 & --- & --- & p = 0.1146 (n.s.) \\
 
 Target adds S-turn \texttt{$\pm$30$^\circ$$\cdot$d$\cdot$sin(0.3t)} plus a missile-threat break-turn and a dive to \texttt{-800$\cdot$d} m (floor 2000 m). Identical protocol to \textbackslash{}S{}4.4 --- d=0 vs d=0.3 differ \textbf{only} in \texttt{--difficulty}, same seeds 20000--20399, same code path, identity recorded in each file's \texttt{run\_meta}.
 
-\textbf{Table 4 --- main results: kill rate and paired tests.} Fresh env per episode, seeds 20000--20399, geometry U(0,60), deterministic masked argmax; \texttt{difficulty} is the only variable between the two columns' groups. CLR values live in Table 2 (\textbackslash{}S{}4.2) and are not repeated here. Every row is generated by \texttt{scripts/collect\_matrix.py} from each artifact's own \texttt{run\_meta} --- not assembled by hand.
+\textbf{Table 4 --- main results: kill rate and paired tests.} Fresh env per episode, seeds 20000--20399, geometry U(0,60), deterministic masked argmax; \texttt{difficulty} is the only variable between the two columns' groups. CLR values live in Table 2 (\textbackslash{}S{}4.2) and are not repeated here. Every row is generated by \texttt{scripts/\allowbreak{}collect\_\allowbreak{}matrix.py} from each artifact's own \texttt{run\_meta} --- not assembled by hand.
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto10}
-\begin{tabular}{lrrr}
+\begin{tabular}{p{0.39\textwidth}rrr}
 \toprule
 Policy & d=0 kill & d=0.3 kill & $\Delta$ (evasion cost) \\
 \midrule
@@ -456,10 +476,11 @@ Read against Table 2's CLR column, the table says three things at once --- the t
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto11}
-\begin{tabular}{lrrr}
+\begin{tabular}{lp{0.28\textwidth}p{0.29\textwidth}p{0.20\textwidth}}
 \toprule
 Paired comparison & d=0 & d=0.3 & Test \\
 \midrule
@@ -485,12 +506,13 @@ Per-seed flips under evasion: expert \textbf{+29 gained / -73 lost}, BC \textbf{
 
 Two ablations, both at the paper's primary protocol (400 seeds, d=0, Table 4), ask whether the locality of the correction is doing real work or is an arbitrary design choice. The results indicate that \textbf{locality is the key factor enabling an attributable correction}:
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto12}
-\begin{tabular}{lrr}
+\begin{tabular}{p{0.22\textwidth}p{0.40\textwidth}p{0.33\textwidth}}
 \toprule
 Intervention & Result (400 seeds, d=0) & What it tests \\
 \midrule
@@ -498,7 +520,7 @@ Intervention & Result (400 seeds, d=0) & What it tests \\
 \textbf{A5 --- random-init launch head, encoder frozen} & 90.75\% kill, \textbf{0 discordant seeds vs SPC}, maneuver deviation \textbf{exactly 0.00e+00} & does the correction depend on warm-starting from BC's launch head? $\rightarrow$ \textbf{no} \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \textbf{A6 --- full-network fine-tuning on the same objective.} Identical objective, data, loss and initialisation as SPC; the only change is that every parameter is trainable rather than the launch head alone, at a deliberately \textbf{more generous} budget (\texttt{--epochs 40 --lr 3e-4} versus \texttt{--epochs 15 --lr 1e-2}), so that a negative result cannot be attributed to under-training.
 
@@ -508,10 +530,11 @@ Intervention & Result (400 seeds, d=0) & What it tests \\
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto13}
-\begin{tabular}{lrrr}
+\begin{tabular}{p{0.20\textwidth}rrp{0.38\textwidth}}
 \toprule
 Identity measurement & SPC (fire head only) & A6 (full network) & Reading \\
 \midrule
@@ -527,10 +550,11 @@ validation allowed-window accuracy & $\geq$ 0.995 & 0.9967 & neither arm can be 
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto14}
-\begin{tabular}{lrrr}
+\begin{tabular}{p{0.18\textwidth}rrp{0.45\textwidth}}
 \toprule
 Arm (400 seeds, d=0) & Kill rate & CLR & vs SPC (paired) \\
 \midrule
@@ -543,7 +567,7 @@ BC (inherited launch policy) & 46.50\% & 7.26\% & --- \\
 
 \textbf{The reading is that freezing is doing real work, on both axes at once.} Full-network fine-tuning recovers most of the gap (46.50\% $\rightarrow$ 77.50\%) but remains \textbf{significantly worse than the localized intervention on identical seeds} (+13.25 pp in SPC's favour, p = 1.33e-11, 60 of 67 discordant seeds favouring SPC), \emph{and} it pays for that with an 8.51-logit change to the maneuver --- it is less effective \textbf{and} no longer attributable. These results indicate that allowing unrestricted parameter updates weakens attribution and does not recover the performance achieved by the localized intervention.
 
-\textbf{A5 (the control).} Keep SPC's freeze pattern exactly --- encoder and every maneuver head frozen at $\theta$\_BC --- and rebuild \emph{only} the fire head from \texttt{nn.Linear.reset\_parameters()}, the constructor's own initialisation, so the sole difference from SPC is where the moving head starts. Trained on the same 300-episode rollout set, the random head reaches \textbf{100\% allowed-window recall in its first epoch} and early-stops, with the identity gates reporting \textbf{exactly zero} maneuver deviation. At the primary protocol it scores \textbf{90.75\% (363/400)}, and the paired test against SPC reports \textbf{zero discordant seeds}: both arms kill the same 363 seeds. Training detail and the 60-seed screening comparison are in Appendix E.
+\textbf{A5 (the control).} Keep SPC's freeze pattern exactly --- encoder and every maneuver head frozen at $\theta$\_BC --- and rebuild \emph{only} the fire head from \texttt{nn.Linear.reset\_\allowbreak{}parameters()}, the constructor's own initialisation, so the sole difference from SPC is where the moving head starts. Trained on the same 300-episode rollout set, the random head reaches \textbf{100\% allowed-window recall in its first epoch} and early-stops, with the identity gates reporting \textbf{exactly zero} maneuver deviation. At the primary protocol it scores \textbf{90.75\% (363/400)}, and the paired test against SPC reports \textbf{zero discordant seeds}: both arms kill the same 363 seeds. Training detail and the 60-seed screening comparison are in Appendix E.
 
 \textbf{What zero discordance does and does not license.} It is \emph{not} an equivalence test: McNemar with no discordant cells returns p = 1.0, the absence of a detected difference rather than a proof of equality, and no TOST is run here. The supportable statement is that A5 and SPC are \textbf{behaviourally indistinguishable under the evaluated metric} --- on 400 seeds and this benchmark the per-seed kill vector is identical, the only trace of the different initialisation being one extra legal step (1561 vs 1560). We do not claim \emph{identical} or \emph{equivalent} policies; no action-logit comparison is made, and a stronger equivalence claim would require a pre-registered margin.
 
@@ -553,7 +577,8 @@ BC (inherited launch policy) & 46.50\% & 7.26\% & --- \\
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto15}
 \begin{tabular}{lrrr}
@@ -571,10 +596,11 @@ A6 also loses to a rule that simply fires whenever the mask permits (81.7\% vs 9
 
 \begin{table*}[t]
 \centering
-\footnotesize
+\small
+\setlength{\tabcolsep}{4pt}
 
 \label{tab:auto16}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrp{0.57\textwidth}}
 \toprule
 A7 & CLR for other binary decisions & conceptual & generality of the metric (future work) \\
 \midrule
